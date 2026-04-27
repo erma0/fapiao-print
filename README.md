@@ -1,51 +1,92 @@
 # 📄 电子发票批量打印工具
 
-一个基于 Tauri 2.x 的桌面应用，专为批量打印电子发票设计。支持 PDF / JPG / PNG 等常见发票格式，提供排版、拼版、批量打印等功能。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
+[![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
+
+一个轻量级的桌面应用，专为批量打印电子发票设计。单文件 exe，无需安装，即开即用。
 
 ## ✨ 功能特性
 
+### 📥 文件管理
 - **多格式支持**：PDF、JPG、PNG、BMP、WebP、TIFF
 - **批量添加**：拖放文件或点击选择，一次添加多张发票
-- **排版设置**：纸张规格、方向、边距、间距全面可调
-- **拼版打印**：1×1 / 1×2 / 2×2 布局，一张纸打印多张发票
+- **文件排序**：拖拽排序，调整打印顺序
+- **单张设置**：双击发票可单独设置份数和旋转角度
+
+### 📐 排版设置
+- **纸张规格**：A4 / A5 / B5 / Letter / Legal / 自定义尺寸
+- **版面布局**：1×1（横向）、1×2（纵向）、2×2（横向），一键切换
+- **边距控制**：上下左右边距独立可调，预设 0/5/10mm 快捷按钮
+- **间距调整**：列间距、行间距滑块微调
 - **缩放模式**：自适应 / 拉伸填充 / 原始大小 / 自定义百分比
-- **辅助选项**：裁切线、编号、边框、裁剪白边
-- **水印功能**：自定义文字、透明度、颜色、角度、字号
-- **打印设置**：份数、逐份/逐页、双面打印、颜色模式
-- **PDF 导出**：保存为 PDF，支持自动打开和自定义保存目录
+- **旋转控制**：全局旋转（0°/90°/180°/270°/自动适配）+ 单张旋转
+
+### ✂ 辅助功能
+- **裁切线**：多页拼版时显示虚线裁切标记
+- **编号标记**：每个发票位标注序号
+- **边框显示**：为每个发票位添加边框
+- **裁剪白边**：自动检测并裁除发票周围的白边
+- **水印**：自定义文字、透明度、颜色、角度、字号
+
+### 🖨 打印与导出
+- **打印模式**：弹出预览（在 PDF 阅读器中确认打印）或直接打印
+- **份数设置**：全局份数 + 单张份数，支持逐份/逐页打印
+- **双面打印**：选项切换
+- **颜色模式**：彩色 / 灰度 / 黑白
+- **页面顺序**：正向 / 反向
+- **PDF 导出**：保存为 PDF，自动打开或自定义保存目录
+
+### 🎨 界面
 - **深色模式**：完整的深色主题支持
-- **键盘快捷键**：Ctrl+O 添加、Ctrl+P 打印、方向键翻页
+- **实时预览**：主区域实时预览打印效果，支持缩放和翻页
+- **键盘快捷键**：`Ctrl+O` 添加 | `Ctrl+P` 打印 | `←→` 翻页
+
+## 📸 界面预览
+
+<table>
+  <tr>
+    <td align="center">☀️ 浅色模式</td>
+    <td align="center">🌙 深色模式</td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/light.png" alt="浅色模式" width="480"/></td>
+    <td><img src="screenshots/dark.png" alt="深色模式" width="480"/></td>
+  </tr>
+</table>
 
 ## 🛠 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 前端 | 原生 HTML / CSS / JS（无框架） |
-| PDF 渲染 | PDF.js（本地 + CDN 回退） |
-| 后端 | Tauri 2.x (Rust) |
-| PDF 生成 | printpdf |
-| 打印 | Windows ShellExecuteW |
-| 图像处理 | image (Rust) |
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| 前端 | 原生 HTML / CSS / JS | 单文件应用，无框架依赖 |
+| PDF 渲染 | PDF.js | 本地优先，CDN 回退 |
+| 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
+| PDF 生成 | printpdf | Rust 原生 PDF 生成 |
+| 打印 | Windows ShellExecuteW | 系统级打印，无弹窗 |
+| 图像处理 | image (Rust) | 高性能图像解码 |
 
 ## 📦 项目结构
 
 ```
 fapiao-print/
-├── src/                    # 前端文件
-│   ├── index.html          # 主页面（单文件应用）
-│   ├── pdf.min.js          # PDF.js 本地副本
-│   └── pdf.worker.min.js   # PDF.js Worker
-├── src-tauri/              # Tauri / Rust 后端
+├── src/                        # 前端文件
+│   ├── index.html              # 主页面（单文件应用）
+│   ├── pdf.min.js              # PDF.js 本地副本
+│   └── pdf.worker.min.js       # PDF.js Worker
+├── src-tauri/                  # Tauri / Rust 后端
 │   ├── src/
-│   │   ├── lib.rs          # 应用入口、命令定义、拖放处理
-│   │   └── pdf_engine.rs   # PDF 生成、文件读取、打印机列表
+│   │   ├── main.rs             # 入口（隐藏控制台窗口）
+│   │   ├── lib.rs              # 命令定义、拖放处理
+│   │   └── pdf_engine.rs       # PDF 生成、文件读取、打印机列表
 │   ├── capabilities/
-│   │   └── default.json    # Tauri 权限配置
-│   ├── icons/              # 应用图标
-│   ├── Cargo.toml          # Rust 依赖
-│   ├── build.rs            # Tauri 构建脚本
-│   └── tauri.conf.json     # Tauri 配置
-├── package.json            # Node.js 依赖（Tauri CLI）
+│   │   └── default.json        # Tauri 权限配置
+│   ├── icons/                  # 应用图标
+│   ├── Cargo.toml              # Rust 依赖
+│   ├── build.rs                # Tauri 构建脚本
+│   └── tauri.conf.json         # Tauri 配置
+├── package.json                # Node.js 依赖（Tauri CLI）
+├── LICENSE                     # MIT 许可证
 └── .gitignore
 ```
 
@@ -79,7 +120,7 @@ npm run build
 
 ## 📋 使用说明
 
-1. **添加发票**：点击「➕ 添加」按钮或拖放文件到窗口
+1. **添加发票**：点击「➕ 添加」按钮或直接拖放文件到窗口
 2. **排版设置**：在左侧「⚙ 排版」面板调整纸张、布局、边距等
 3. **预览检查**：主区域实时预览打印效果，支持缩放和翻页
 4. **打印**：点击「🖨 打印」按钮，选择打印模式
@@ -89,13 +130,33 @@ npm run build
 
 | 模式 | 行为 |
 |------|------|
-| 弹出打印对话框 | 生成 PDF 并打开预览，用户在阅读器中确认打印 |
+| 弹出打印对话框 | 生成 PDF 并用系统默认阅读器打开，用户确认后打印 |
 | 直接打印 | 生成 PDF 并直接发送到默认打印机 |
 
 ### 保存目录
 
-首次保存 PDF 时会弹出目录选择对话框，选择后自动记住目录，后续保存直接使用，无需重复选择。可在「🔧 设置」面板中修改或清除。
+首次保存 PDF 时会弹出目录选择对话框，选择后自动记住，后续保存无需重复选择。可在「🔧 设置」面板中修改或清除。
+
+## 📥 下载与运行
+
+从 [Releases](../../releases) 下载 `fapiao-print.exe`，双击即可运行。
+
+**运行依赖**：
+- Windows 11：✅ 直接运行（自带 WebView2）
+- Windows 10（较新版本）：✅ 大部分已预装 WebView2
+- Windows 10（老版本）/ Windows Server：⚠️ 可能需要安装 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
+
+## 🤖 关于此项目
+
+本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **30+ 轮** 调试迭代。主要攻克的技术难点包括：
+
+- Tauri 2.x 文件对话框死锁问题（主线程同步调用导致）
+- WebView2 拖放文件事件失效（`dataTransfer.files` 为空）
+- Tauri 注入脚本与前端 `const` 变量冲突
+- 缩放按钮在非均匀步进选项下的跳转逻辑
+- Windows 子进程隐藏命令行窗口
+- CSP 安全策略与 PDF.js CDN 回退的兼容
 
 ## 📄 许可证
 
-MIT License
+[MIT License](LICENSE)
