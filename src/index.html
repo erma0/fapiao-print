@@ -255,7 +255,7 @@
 
 
 
-<!-- File input — primary upload method, works in both browser and Tauri WebView2 -->
+<!-- File input — browser fallback only -->
 <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff" multiple style="display:none" onchange="handleFileInput(this.files)">
 
 <div class="main-layout">
@@ -452,7 +452,7 @@
       <div id="stPages">0 页</div>
       <div id="stLayout">1×1</div>
       <div id="stPaper">A4</div>
-      <div style="margin-left:auto">v3.4</div>
+      <div style="margin-left:auto">v1.0.0</div>
     </div>
   </main>
 </div>
@@ -469,7 +469,7 @@
 // =====================================================
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v3.4 | isTauri:', isTauri);
+console.log('发票批量打印 v1.0.0 | isTauri:', isTauri);
 
 // =====================================================
 // State
@@ -554,7 +554,7 @@ async function processFileDataList(fileDataList) {
   let added = 0;
   for (const fd of fileDataList) {
     try {
-      const r = await loadFileFromDataUrl(fd.name, fd.dataUrl, fd.size, fd.ext);
+      const r = await loadFileFromDataUrl(fd.name, fd.dataUrl, fd.size, fd.ext, fd.path);
       if (r) {
         if (Array.isArray(r)) { S.files.push(...r); added += r.length; }
         else { S.files.push(r); added++; }
@@ -599,7 +599,7 @@ function loadFile(file) {
         resolve(null); return;
       }
       const url = URL.createObjectURL(file);
-      pdfjsLib.getDocument(url).promise.then(async pdf => {
+      pdfjsLib.getDocument({ url, cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true, standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/', disableFontFace: true, useSystemFonts: false }).promise.then(async pdf => {
         const results = [];
         for (let p = 1; p <= pdf.numPages; p++) {
           const page = await pdf.getPage(p);
@@ -649,43 +649,47 @@ function loadFile(file) {
 }
 
 // Load file from base64 data URL (returned by Rust backend)
-function loadFileFromDataUrl(name, dataUrl, size, ext) {
+function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
   return new Promise(resolve => {
     const id = 'f' + Date.now() + Math.random().toString(36).slice(2);
 
-    // PDF — render with PDF.js
+    // PDF — try Windows native rendering first, fallback to PDF.js
     if (ext === 'pdf') {
-      if (!window.pdfjsLib) {
-        toast('PDF.js 尚未加载，请稍后重试');
-        resolve(null); return;
+      // If we have a file path and are in Tauri, try WinRT rendering
+      if (isTauri && invoke && filePath) {
+        console.log('[PDF] Trying WinRT native rendering for:', filePath);
+        invoke('render_pdf_pages', { pdfPath: filePath, dpi: 200 }).then(async pages => {
+          if (pages && pages.length > 0) {
+            console.log('[PDF] WinRT rendering succeeded, pages:', pages.length);
+            const results = [];
+            for (var p = 0; p < pages.length; p++) {
+              var pg = pages[p];
+              var img = new Image(); img.src = pg.imageDataUrl;
+              await new Promise(r => { img.onload = r; });
+              results.push({
+                id: id+'_p'+(p+1),
+                name: pages.length>1 ? name.replace(/\.pdf$/i,'')+'_第'+(p+1)+'页.pdf' : name,
+                size: size, type:'pdf', checked:true, previewUrl: pg.imageDataUrl,
+                copies:1, rotation:0, note:'', img,
+                ow:img.naturalWidth, oh:img.naturalHeight
+              });
+            }
+            resolve(results.length === 1 ? results[0] : results);
+            return;
+          }
+          // Fallback to PDF.js
+          console.warn('[PDF] WinRT returned empty, falling back to PDF.js');
+          loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
+        }).catch(err => {
+          // WinRT failed, fallback to PDF.js
+          console.error('[PDF] WinRT rendering failed, falling back to PDF.js:', err);
+          loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
+        });
+        return;
       }
-      // Convert data URL to Uint8Array for PDF.js
-      const raw = dataUrlToUint8Array(dataUrl);
-      pdfjsLib.getDocument({ data: raw }).promise.then(async pdf => {
-        const results = [];
-        for (let p = 1; p <= pdf.numPages; p++) {
-          const page = await pdf.getPage(p);
-          const vp = page.getViewport({ scale: 2.0 });
-          const canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-          const previewUrl = canvas.toDataURL('image/jpeg', 0.92);
-          const img = new Image(); img.src = previewUrl;
-          await new Promise(r => { img.onload = r; });
-          results.push({
-            id: id+'_p'+p,
-            name: pdf.numPages>1 ? name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : name,
-            size, type:'pdf', checked:true, previewUrl,
-            copies:1, rotation:0, note:'', img,
-            ow:img.naturalWidth, oh:img.naturalHeight
-          });
-        }
-        resolve(results);
-      }).catch(err => {
-        console.error('PDF load error:', err);
-        toast('PDF 加载失败: ' + name);
-        resolve(null);
-      });
+      // No file path or not in Tauri, use PDF.js
+      console.log('[PDF] Using PDF.js (no filePath or not in Tauri)');
+      loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
     }
     // Image files
     else {
@@ -697,6 +701,40 @@ function loadFileFromDataUrl(name, dataUrl, size, ext) {
       });
       img.onerror = () => { toast('图片加载失败: ' + name); resolve(null); };
     }
+  });
+}
+
+// PDF.js fallback for loading PDF from data URL
+function loadPdfFromDataUrl(name, dataUrl, size, id, resolve) {
+  if (!window.pdfjsLib) {
+    toast('PDF.js 尚未加载，请稍后重试');
+    resolve(null); return;
+  }
+  var raw = dataUrlToUint8Array(dataUrl);
+  pdfjsLib.getDocument({ data: raw, cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true, standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/', disableFontFace: true, useSystemFonts: false }).promise.then(async pdf => {
+    var results = [];
+    for (var p = 1; p <= pdf.numPages; p++) {
+      var page = await pdf.getPage(p);
+      var vp = page.getViewport({ scale: 2.0 });
+      var canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      var previewUrl = canvas.toDataURL('image/jpeg', 0.92);
+      var img = new Image(); img.src = previewUrl;
+      await new Promise(r => { img.onload = r; });
+      results.push({
+        id: id+'_p'+p,
+        name: pdf.numPages>1 ? name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : name,
+        size: size, type:'pdf', checked:true, previewUrl,
+        copies:1, rotation:0, note:'', img,
+        ow:img.naturalWidth, oh:img.naturalHeight
+      });
+    }
+    resolve(results.length === 1 ? results[0] : results);
+  }).catch(err => {
+    console.error('PDF load error:', err);
+    toast('PDF 加载失败: ' + name);
+    resolve(null);
   });
 }
 
@@ -1199,7 +1237,8 @@ async function savePdf() {
   var savedDir = getSaveDir();
   if (isTauri && invoke) {
     try {
-      var ts = new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'');
+      var now = new Date();
+      var ts = now.getFullYear() + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + '_' + String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0') + String(now.getSeconds()).padStart(2,'0');
       var defaultName = '发票打印_' + ts + '.pdf';
       if (savedDir) {
         // 已有保存目录，直接拼接路径，不弹窗

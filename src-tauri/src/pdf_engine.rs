@@ -43,6 +43,116 @@ pub struct FileData {
     pub size: u64,
     /// Base64-encoded file content (data URL format)
     pub data_url: String,
+    /// Original file path (for WinRT PDF rendering)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// Rendered PDF page image
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedPage {
+    pub index: u32,
+    /// Base64-encoded PNG data URL
+    pub image_data_url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+// =====================================================
+// Windows PDF Rendering (WinRT)
+// =====================================================
+
+// Note: previously used IBufferByteAccess COM interface, but buffer.cast::<IBufferByteAccess>()
+// fails with E_NOINTERFACE (0x80004002). Switched to DataReader which works reliably.
+
+/// Render PDF pages to PNG images using Windows.Data.Pdf API
+/// This handles PDFs with system font references that PDF.js cannot render
+#[cfg(target_os = "windows")]
+pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedPage>, String> {
+    use windows::core::HSTRING;
+    use windows::Data::Pdf::{PdfDocument, PdfPageRenderOptions};
+    use windows::Storage::StorageFile;
+    use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use base64::Engine;
+
+    // Initialize COM for this thread
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+
+    let path_h = HSTRING::from(pdf_path);
+
+    // Load file and document
+    let file = StorageFile::GetFileFromPathAsync(&path_h)
+        .map_err(|e| format!("创建异步操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("加载文件失败: {}", e))?;
+
+    let doc = PdfDocument::LoadFromFileAsync(&file)
+        .map_err(|e| format!("创建异步操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("加载PDF失败: {}（文件可能受密码保护）", e))?;
+
+    let page_count = doc.PageCount().map_err(|e| format!("获取页数失败: {}", e))?;
+    log::info!("WinRT PDF rendering: {} pages, dpi={}", page_count, dpi);
+
+    let mut results = Vec::new();
+
+    for i in 0..page_count {
+        let page = doc.GetPage(i).map_err(|e| format!("获取第{}页失败: {}", i + 1, e))?;
+
+        // Get page size via Size() which returns Foundation::Size { Width, Height }
+        let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", i + 1, e))?;
+        let scale = dpi as f32 / 96.0;
+        let dest_w = (size.Width * scale) as u32;
+        let dest_h = (size.Height * scale) as u32;
+
+        // Set up render options
+        let options = PdfPageRenderOptions::new().map_err(|e| format!("创建渲染选项失败: {}", e))?;
+        options.SetDestinationWidth(dest_w).map_err(|e| format!("设置宽度失败: {}", e))?;
+        options.SetDestinationHeight(dest_h).map_err(|e| format!("设置高度失败: {}", e))?;
+
+        // Render to stream
+        let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败: {}", e))?;
+        page.RenderWithOptionsToStreamAsync(&stream, &options)
+            .map_err(|e| format!("创建渲染操作失败: {}", e))?
+            .get()
+            .map_err(|e| format!("渲染第{}页失败: {}", i + 1, e))?;
+
+        // Read stream data using DataReader (IBufferByteAccess cast fails with E_NOINTERFACE)
+        let stream_size = stream.Size().map_err(|e| format!("获取流大小失败: {}", e))? as u32;
+        stream.Seek(0).map_err(|e| format!("Seek失败: {}", e))?;
+
+        let reader = DataReader::CreateDataReader(&stream)
+            .map_err(|e| format!("创建DataReader失败: {}", e))?;
+
+        reader.LoadAsync(stream_size)
+            .map_err(|e| format!("创建LoadAsync操作失败: {}", e))?
+            .get()
+            .map_err(|e| format!("加载第{}页数据失败: {}", i + 1, e))?;
+
+        let mut data = vec![0u8; stream_size as usize];
+        reader.ReadBytes(&mut data)
+            .map_err(|e| format!("读取第{}页字节失败: {}", i + 1, e))?;
+
+        reader.Close().ok();
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        let data_url = format!("data:image/png;base64,{}", b64);
+
+        results.push(RenderedPage {
+            index: i,
+            image_data_url: data_url,
+            width: dest_w,
+            height: dest_h,
+        });
+
+        log::info!("Rendered page {} ({}x{})", i + 1, dest_w, dest_h);
+    }
+
+    Ok(results)
 }
 
 // =====================================================
@@ -94,6 +204,7 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
             ext,
             size,
             data_url,
+            path: Some(path_str),
         });
     }
     Ok(results)
@@ -195,6 +306,7 @@ pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
     }
 
     #[derive(Deserialize)]
+    #[allow(non_snake_case)]
     struct PsPrinter {
         Name: String,
         #[serde(default)]

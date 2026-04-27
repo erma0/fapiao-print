@@ -10,6 +10,7 @@
 
 ### 📥 文件管理
 - **多格式支持**：PDF、JPG、PNG、BMP、WebP、TIFF
+- **智能渲染**：WinRT 原生渲染优先（支持中文系统字体），PDF.js 回退
 - **批量添加**：拖放文件或点击选择，一次添加多张发票
 - **文件排序**：拖拽排序，调整打印顺序
 - **单张设置**：双击发票可单独设置份数和旋转角度
@@ -60,7 +61,7 @@
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | 前端 | 原生 HTML / CSS / JS | 单文件应用，无框架依赖 |
-| PDF 渲染 | PDF.js | 本地优先，CDN 回退 |
+| PDF 渲染 | WinRT + PDF.js | WinRT 优先（支持系统字体），PDF.js 回退 |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
 | PDF 生成 | printpdf | Rust 原生 PDF 生成 |
 | 打印 | Windows ShellExecuteW | 系统级打印，无弹窗 |
@@ -78,7 +79,7 @@ fapiao-print/
 │   ├── src/
 │   │   ├── main.rs             # 入口（隐藏控制台窗口）
 │   │   ├── lib.rs              # 命令定义、拖放处理
-│   │   └── pdf_engine.rs       # PDF 生成、文件读取、打印机列表
+│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、文件读取
 │   ├── capabilities/
 │   │   └── default.json        # Tauri 权限配置
 │   ├── icons/                  # 应用图标
@@ -139,7 +140,12 @@ npm run build
 
 ## 📥 下载与运行
 
-从 [Releases](../../releases) 下载 `fapiao-print.exe`，双击即可运行。
+从 [Releases](../../releases) 下载最新版本：
+
+| 文件 | 说明 |
+|------|------|
+| `发票打印工具_x64-setup.exe` | NSIS 安装包（推荐，自动处理 WebView2 安装） |
+| `fapiao-print.exe` | 免安装绿色版（需系统已安装 WebView2） |
 
 **运行依赖**：
 - Windows 11：✅ 直接运行（自带 WebView2）
@@ -148,7 +154,7 @@ npm run build
 
 ## 🤖 关于此项目
 
-本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **30+ 轮** 调试迭代。主要攻克的技术难点包括：
+本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **40+ 轮** 调试迭代。主要攻克的技术难点包括：
 
 - Tauri 2.x 文件对话框死锁问题（主线程同步调用导致）
 - WebView2 拖放文件事件失效（`dataTransfer.files` 为空）
@@ -156,6 +162,8 @@ npm run build
 - 缩放按钮在非均匀步进选项下的跳转逻辑
 - Windows 子进程隐藏命令行窗口
 - CSP 安全策略与 PDF.js CDN 回退的兼容
+- WinRT `IBufferByteAccess` COM 接口查询失败（`E_NOINTERFACE`），改用 `DataReader` 读取渲染数据
+- PDF.js CMap 配置，解决中文 CID 编码字体渲染问题
 
 ## 📄 许可证
 

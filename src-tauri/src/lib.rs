@@ -2,7 +2,7 @@ use tauri::command;
 
 mod pdf_engine;
 
-use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData};
+use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage};
 
 // =====================================================
 // Tauri Commands
@@ -12,19 +12,6 @@ use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData};
 #[command]
 fn open_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
     pdf_engine::read_invoice_files(paths)
-}
-
-/// Render pages to PDF only (no print, no open)
-#[command]
-fn generate_pdf(request: PdfRequest) -> Result<PdfResult, String> {
-    let output_path = std::env::temp_dir().join("fapiao_print_output.pdf");
-    pdf_engine::generate_pdf_from_pages(&request, &output_path)?;
-
-    Ok(PdfResult {
-        success: true,
-        message: "PDF生成成功".to_string(),
-        pdf_path: Some(output_path.to_string_lossy().to_string()),
-    })
 }
 
 /// Generate PDF then open system print dialog (or direct print)
@@ -91,14 +78,10 @@ fn get_printers() -> Result<Vec<PrinterInfo>, String> {
     pdf_engine::list_printers()
 }
 
-/// Open a file or folder with default app (no terminal window)
+/// Render PDF pages to images using Windows native API
 #[command]
-fn open_path(path: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        shell_execute("open", &path)?;
-    }
-    Ok(())
+fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPage>, String> {
+    pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(200))
 }
 
 // =====================================================
@@ -197,11 +180,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_invoice_files,
-            generate_pdf,
             generate_and_print,
             save_pdf,
             get_printers,
-            open_path,
+            render_pdf_pages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
