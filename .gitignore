@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+src-tauri/target/
+
+# Tauri generated
+src-tauri/gen/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# WorkBuddy internal
+.workbuddy/
