@@ -81,7 +81,7 @@ fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 /// Render PDF pages to images using Windows native API
 #[command]
 fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPage>, String> {
-    pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(300))
+    pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(pdf_engine::RENDER_DPI))
 }
 
 /// Open a URL in the default browser
@@ -92,6 +92,12 @@ fn open_url(url: String) -> Result<(), String> {
         shell_execute("open", &url)?;
     }
     Ok(())
+}
+
+/// OCR an image from base64 data URL, return recognized text
+#[command]
+fn ocr_image(data_url: String) -> Result<String, String> {
+    pdf_engine::ocr_image_from_data(&data_url)
 }
 
 // =====================================================
@@ -195,6 +201,7 @@ pub fn run() {
             get_printers,
             render_pdf_pages,
             open_url,
+            ocr_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

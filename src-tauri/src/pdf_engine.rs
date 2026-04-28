@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufWriter;
 
+/// Rendering DPI — must match frontend PDF_RENDER_DPI constant
+pub const RENDER_DPI: u32 = 300;
+
 // =====================================================
 // Types
 // =====================================================
@@ -57,6 +60,8 @@ pub struct RenderedPage {
     pub image_data_url: String,
     pub width: u32,
     pub height: u32,
+    /// Actual DPI used for rendering (may differ from requested DPI due to adaptive scaling)
+    pub render_dpi: u32,
 }
 
 // =====================================================
@@ -104,8 +109,23 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
         let page = doc.GetPage(i).map_err(|e| format!("获取第{}页失败: {}", i + 1, e))?;
 
         // Get page size via Size() which returns Foundation::Size { Width, Height }
+        // Size is in device-independent pixels (96 DPI base)
         let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", i + 1, e))?;
-        let scale = dpi as f32 / 96.0;
+        
+        // Adaptive DPI: small PDF pages need higher DPI so rendered pixels
+        // are sufficient for A4 print at RENDER_DPI (300)
+        // Ensure the longest side has at least MIN_RENDER_PX pixels
+        let min_render_px: u32 = 3508; // A4 long side at 300 DPI
+        let longest_side = size.Width.max(size.Height) as u32;
+        let base_pixels = longest_side * dpi / 96; // pixels at requested DPI
+        let effective_dpi = if base_pixels >= min_render_px {
+            dpi // already enough pixels
+        } else {
+            let needed = (min_render_px as f32 * 96.0 / longest_side as f32).ceil() as u32;
+            dpi.max(needed).min(1200)
+        };
+        
+        let scale = effective_dpi as f32 / 96.0;
         let dest_w = (size.Width * scale) as u32;
         let dest_h = (size.Height * scale) as u32;
 
@@ -147,9 +167,10 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
             image_data_url: data_url,
             width: dest_w,
             height: dest_h,
+            render_dpi: effective_dpi,
         });
 
-        log::info!("Rendered page {} ({}x{})", i + 1, dest_w, dest_h);
+        log::info!("Rendered page {} ({}x{}) @ {}dpi", i + 1, dest_w, dest_h, effective_dpi);
     }
 
     Ok(results)
@@ -187,14 +208,20 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
         if ext == "ofd" {
             match extract_ofd_images(&path_str) {
                 Ok(images) => {
-                    for (idx, img_data_url) in images.iter().enumerate() {
+                    for (idx, (img_data_url, img_ext)) in images.iter().enumerate() {
+                        // Remove .ofd/.OFD extension from name (case-insensitive)
+                        let base_name = if name.to_uppercase().ends_with(".OFD") {
+                            &name[..name.len()-4]
+                        } else {
+                            &name
+                        };
                         results.push(FileData {
                             name: if images.len() > 1 {
-                                format!("{}_第{}页.ofd", name.trim_end_matches(".ofd").trim_end_matches(".OFD"), idx + 1)
+                                format!("{}_第{}页.ofd", base_name, idx + 1)
                             } else {
                                 name.clone()
                             },
-                            ext: "png".to_string(), // extracted as PNG
+                            ext: img_ext.to_string(),
                             size,
                             data_url: img_data_url.clone(),
                             path: None, // no filePath needed, already converted to image
@@ -288,9 +315,9 @@ fn add_image_to_layer(
     let image = Image::from_dynamic_image(img);
 
     // Scale image to fill the page
-    // Frontend renders at 300 DPI, convert to mm
-    let img_w_mm = img.width() as f32 * 25.4 / 300.0;
-    let img_h_mm = img.height() as f32 * 25.4 / 300.0;
+    // Frontend renders at RENDER_DPI, convert to mm
+    let img_w_mm = img.width() as f32 * 25.4 / RENDER_DPI as f32;
+    let img_h_mm = img.height() as f32 * 25.4 / RENDER_DPI as f32;
 
     let scale_x = paper_w_mm / img_w_mm;
     let scale_y = paper_h_mm / img_h_mm;
@@ -303,7 +330,7 @@ fn add_image_to_layer(
             scale_x: Some(scale_x),
             scale_y: Some(scale_y),
             rotate: None,
-            dpi: Some(300.0),
+            dpi: Some(RENDER_DPI as f32),
         },
     );
 
@@ -377,13 +404,104 @@ fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage, String> {
 }
 
 // =====================================================
+// OCR — Windows.Media.Ocr (lightweight, built-in, Chinese support)
+// =====================================================
+
+/// OCR an image from base64 data URL, return recognized text
+#[cfg(target_os = "windows")]
+pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Graphics::Imaging::BitmapDecoder;
+    use windows::Storage::Streams::InMemoryRandomAccessStream;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use base64::Engine;
+
+    unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED); }
+
+    // Decode base64 data
+    let base64_data = if data_url.contains(',') {
+        data_url.split(',').nth(1).unwrap_or("")
+    } else {
+        data_url
+    };
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| format!("Base64解码失败: {}", e))?;
+
+    if bytes.is_empty() {
+        return Err("图片数据为空".to_string());
+    }
+
+    // Create stream from bytes
+    let stream = InMemoryRandomAccessStream::new()
+        .map_err(|e| format!("创建流失败: {}", e))?;
+
+    let writer = windows::Storage::Streams::DataWriter::CreateDataWriter(&stream)
+        .map_err(|e| format!("创建DataWriter失败: {}", e))?;
+
+    writer.WriteBytes(&bytes)
+        .map_err(|e| format!("写入数据失败: {}", e))?;
+
+    writer.StoreAsync()
+        .map_err(|e| format!("创建Store操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("存储数据失败: {}", e))?;
+
+    writer.FlushAsync()
+        .map_err(|e| format!("创建Flush操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("刷新数据失败: {}", e))?;
+
+    writer.Close().ok();
+
+    stream.Seek(0)
+        .map_err(|e| format!("Seek失败: {}", e))?;
+
+    // Decode bitmap from stream
+    let decoder = BitmapDecoder::CreateAsync(&stream)
+        .map_err(|e| format!("创建解码操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("解码图片失败: {}", e))?;
+
+    // Get SoftwareBitmap (no-arg version in windows 0.58)
+    let bitmap = decoder.GetSoftwareBitmapAsync()
+        .map_err(|e| format!("创建位图操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("获取位图失败: {}", e))?;
+
+    // Create OCR engine with user profile languages (includes Chinese on Chinese Windows)
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| format!("创建OCR引擎失败: {}（请确保系统已安装中文语言包）", e))?;
+
+    // Run OCR
+    let result = engine.RecognizeAsync(&bitmap)
+        .map_err(|e| format!("创建OCR识别操作失败: {}", e))?
+        .get()
+        .map_err(|e| format!("OCR识别失败: {}", e))?;
+
+    let text = result.Text()
+        .map_err(|e| format!("获取OCR文本失败: {}", e))?
+        .to_string();
+
+    log::info!("OCR recognized {} chars", text.len());
+
+    Ok(text)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn ocr_image_from_data(_data_url: &str) -> Result<String, String> {
+    Err("OCR仅支持Windows系统".to_string())
+}
+
+// =====================================================
 // OFD Format Support
 // =====================================================
 
 /// Extract embedded images from an OFD file (Chinese electronic invoice format)
 /// OFD is a ZIP archive containing XML page descriptions and image resources.
 /// For electronic invoices, the content is typically a full-page image.
-fn extract_ofd_images(ofd_path: &str) -> Result<Vec<String>, String> {
+fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
     use base64::Engine;
     use std::io::Read;
 
@@ -419,8 +537,23 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<String>, String> {
         return Err("OFD文件中未找到图片资源".to_string());
     }
 
-    // Sort entries to get consistent ordering (page 0, page 1, etc.)
-    image_entries.sort();
+    // Sort entries: prioritize page-ordered paths, then alphabetical
+    // OFD pages are typically: Pages/Page_0/Res/..., Pages/Page_1/Res/..., etc.
+    fn extract_page_index(path: &str) -> u32 {
+        // Look for "Page_N" pattern in path
+        let lower = path.to_lowercase();
+        if let Some(pos) = lower.find("page_") {
+            let rest = &path[pos + 5..];
+            let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(idx) = num_str.parse::<u32>() {
+                return idx;
+            }
+        }
+        u32::MAX // no page index found, sort last
+    }
+    image_entries.sort_by(|a, b| {
+        extract_page_index(a).cmp(&extract_page_index(b)).then(a.cmp(b))
+    });
 
     // Read and encode each image
     let mut results = Vec::new();
@@ -431,17 +564,19 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<String>, String> {
         entry.read_to_end(&mut data)
             .map_err(|e| format!("读取OFD图片数据失败: {}", e))?;
 
-        // Determine MIME type
+        // Determine MIME type and extension
+        // MIME uses actual image type (needed for Image loading), ext shows "ofd" for display
         let lower = entry_name.to_lowercase();
         let mime = if lower.ends_with(".png") {
             "image/png"
         } else {
             "image/jpeg"
         };
+        let img_ext = "ofd";
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
         let data_url = format!("data:{};base64,{}", mime, b64);
-        results.push(data_url);
+        results.push((data_url, img_ext.to_string()));
     }
 
     log::info!("OFD extracted {} images from {}", results.len(), ofd_path);

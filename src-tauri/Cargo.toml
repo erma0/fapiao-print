@@ -38,6 +38,7 @@ windows = { version = "0.58", features = [
     "Storage",
     "Storage_Streams",
     "Graphics_Imaging",
+    "Media_Ocr",
     "Foundation",
 ] }
 

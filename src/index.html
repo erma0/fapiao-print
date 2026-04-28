@@ -206,10 +206,18 @@
   }
   .toolbar-group { display: flex; gap: 4px; align-items: center; }
   .toolbar-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+  .zoom-ctrl { position: relative; display: flex; align-items: center; gap: 1px; padding: 3px 8px; font-size: 12px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; user-select: none; min-width: 56px; justify-content: center; }
+  .zoom-ctrl:hover { border-color: var(--primary); }
+  .zoom-arrow { font-size: 9px; opacity: .5; }
+  .zoom-menu { position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-lg); z-index: 100; min-width: 72px; padding: 3px 0; }
+  .zoom-menu div { padding: 4px 14px; font-size: 12px; cursor: pointer; white-space: nowrap; text-align: center; }
+  .zoom-menu div:hover { background: var(--hover); }
+  .zoom-sep { height: 1px; background: var(--border); margin: 3px 0 !important; padding: 0 !important; }
+  .zoom-sep:hover { background: var(--border) !important; }
 
   /* ===== Preview ===== */
-  .preview-wrap { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: center; }
-  #previewPages { align-self: flex-start; }
+  .preview-wrap { flex: 1; overflow: auto; padding: 20px; display: flex; }
+  #previewPages { margin: 0 auto; align-self: flex-start; }
   .preview-container { background: var(--surface); box-shadow: var(--shadow-lg); position: relative; flex-shrink: 0; }
   .invoice-slot { overflow: hidden; position: absolute; display: flex; align-items: center; justify-content: center; background: white; }
   .invoice-slot img { display: block; }
@@ -265,7 +273,7 @@
 
 
 <!-- File input — browser fallback only -->
-<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.ofd" multiple style="display:none" onchange="handleFileInput(this.files)">
+<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.tif,.ofd" multiple style="display:none" onchange="handleFileInput(this.files)">
 
 <div class="main-layout">
   <!-- Sidebar -->
@@ -281,7 +289,7 @@
       <div class="upload-zone" id="dropZone" onclick="triggerUpload()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
         <div class="upload-icon">📂</div>
         <div class="upload-text">拖入发票或点击选择</div>
-        <div class="upload-hint">支持 PDF / JPG / PNG / OFD 格式</div>
+        <div class="upload-hint">支持 PDF / 图片 / OFD 格式</div>
       </div>
       <div class="file-header">
         <div class="file-count" id="fileCount">0 张，已选 0</div>
@@ -306,14 +314,8 @@
         <div class="sec-title">🗂 版面布局</div>
         <div class="grid-sel" id="gridSel" style="grid-template-columns:repeat(3,1fr)">
           <div class="go active" data-cols="1" data-rows="1" onclick="setLayoutPreset(1,1,null,this)">1×1</div>
-          <div class="go" data-cols="2" data-rows="1" onclick="setLayoutPreset(2,1,null,this)">1×2</div>
-          <div class="go" data-cols="3" data-rows="1" onclick="setLayoutPreset(3,1,null,this)">1×3</div>
-          <div class="go" data-cols="1" data-rows="2" onclick="setLayoutPreset(1,2,null,this)">2×1</div>
+          <div class="go" data-cols="1" data-rows="2" onclick="setLayoutPreset(1,2,null,this)">1×2</div>
           <div class="go" data-cols="2" data-rows="2" onclick="setLayoutPreset(2,2,null,this)">2×2</div>
-          <div class="go" data-cols="3" data-rows="2" onclick="setLayoutPreset(3,2,null,this)">2×3</div>
-          <div class="go" data-cols="1" data-rows="3" onclick="setLayoutPreset(1,3,null,this)">3×1</div>
-          <div class="go" data-cols="2" data-rows="3" onclick="setLayoutPreset(2,3,null,this)">3×2</div>
-          <div class="go" data-cols="3" data-rows="3" onclick="setLayoutPreset(3,3,null,this)">3×3</div>
         </div>
         <div class="row" style="margin-top:4px;margin-bottom:0">
           <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
@@ -436,10 +438,8 @@
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
         <button class="btn btn-sm ql-btn active" data-cols="1" data-rows="1" onclick="quickLayout(1,1)" title="1行1列">1×1</button>
-        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="1" onclick="quickLayout(2,1)" title="1行2列">1×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="1" data-rows="2" onclick="quickLayout(1,2)" title="2行1列">1×2</button>
         <button class="btn btn-sm ql-btn" data-cols="2" data-rows="2" onclick="quickLayout(2,2)" title="2行2列">2×2</button>
-        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="1" onclick="quickLayout(3,1)" title="1行3列">1×3</button>
-        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="2" onclick="quickLayout(3,2)" title="2行3列">2×3</button>
         <button class="btn btn-sm ql-btn ql-custom" onclick="showCustomLayoutModal()" title="自定义布局" style="font-size:12px">⚙</button>
       </div>
       <div class="toolbar-sep"></div>
@@ -450,9 +450,18 @@
       </div>
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm btn-icon" onclick="changeZoom(-10)" title="缩小" style="font-size:16px;font-weight:700">−</button>
-        <select id="zoomSel" onchange="setZoom(this.value)" style="width:80px;padding:4px 6px;font-size:12px"><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option><option value="fit" selected>自适应</option></select>
-        <button class="btn btn-sm btn-icon" onclick="changeZoom(10)" title="放大" style="font-size:16px;font-weight:700">+</button>
+        <button class="btn btn-sm btn-icon" onclick="changeZoom(-5)" title="缩小 (Ctrl+−)" style="font-size:16px;font-weight:700">−</button>
+        <div class="zoom-ctrl" id="zoomCtrl">
+          <span id="zoomLabel" onclick="toggleZoomMenu()">自适应</span>
+          <span class="zoom-arrow" onclick="toggleZoomMenu()">▾</span>
+          <div class="zoom-menu hidden" id="zoomMenu">
+            <div onclick="setZoom(25)">25%</div><div onclick="setZoom(50)">50%</div><div onclick="setZoom(75)">75%</div>
+            <div onclick="setZoom(100)">100%</div><div onclick="setZoom(125)">125%</div><div onclick="setZoom(150)">150%</div>
+            <div onclick="setZoom(200)">200%</div><div onclick="setZoom(300)">300%</div>
+            <div class="zoom-sep"></div><div onclick="setZoom('fit')">自适应</div>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-icon" onclick="changeZoom(5)" title="放大 (Ctrl++)" style="font-size:16px;font-weight:700">+</button>
       </div>
       <div style="flex:1"></div>
       <div class="toolbar-group">
@@ -525,6 +534,7 @@ const S = {
 
 const PAPER = { A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356} };
 const MM2PX = 96 / 25.4;
+const PDF_RENDER_DPI = 300;  // PDF rendering DPI — must match Rust add_image_to_layer
 
 // =====================================================
 // Helpers
@@ -642,7 +652,14 @@ function loadFile(file) {
         const results = [];
         for (let p = 1; p <= pdf.numPages; p++) {
           const page = await pdf.getPage(p);
-          const vp = page.getViewport({ scale: 3.0 });
+          // Adaptive DPI: small PDF pages need higher DPI so they have enough pixels for A4 print
+          // Ensure the rendered image has at least MIN_RENDER_PX pixels on its longest side
+          var vp1 = page.getViewport({ scale: 1.0 });
+          var MIN_RENDER_PX = 3508; // A4 long side at 300 DPI
+          var longestSide = Math.max(vp1.width, vp1.height);
+          var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
+          targetDpi = Math.min(targetDpi, 1200); // Cap to avoid excessive memory
+          var vp = page.getViewport({ scale: targetDpi / 72 });
           const canvas = document.createElement('canvas');
           canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
@@ -656,10 +673,24 @@ function loadFile(file) {
             name: pdf.numPages>1 ? file.name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : file.name,
             size: file.size, type:'pdf', checked:true, previewUrl,
             copies:1, rotation:0, note:'', amount:amount, img,
-            ow:img.naturalWidth, oh:img.naturalHeight
+            ow:img.naturalWidth, oh:img.naturalHeight,
+            renderDpi: targetDpi
           });
         }
         URL.revokeObjectURL(url);
+        // OCR fallback for scanned PDFs — try ALL pages (not just first match)
+        var hasAmount = results.some(function(r) { return r.amount > 0; });
+        if (!hasAmount && isTauri && invoke) {
+          try {
+            for (var p = 0; p < results.length; p++) {
+              var ocrText = await invoke('ocr_image', { dataUrl: results[p].previewUrl });
+              if (ocrText) {
+                var amt = extractInvoiceAmount(ocrText);
+                if (amt > 0) results[p].amount = amt;
+              }
+            }
+          } catch(e) { console.warn('[OCR] 扫描版PDF识别失败:', e); }
+        }
         resolve(results);
       }).catch(err => {
         console.error('PDF load error:', err);
@@ -668,19 +699,34 @@ function loadFile(file) {
       });
     }
     // Image files
-    else if (['jpg','jpeg','png','bmp','webp','tiff','tif','ofd'].includes(ext)) {
+    else if (['jpg','jpeg','png','bmp','webp','tiff','tif'].includes(ext)) {
       const reader = new FileReader();
       reader.onload = async e => {
         const img = new Image(); img.src = e.target.result;
         await new Promise(r => { img.onload = r; });
-        resolve({
+        var fileObj = {
           id, name:file.name, size:file.size, type:ext, checked:true,
           previewUrl:e.target.result, copies:1, rotation:0, note:'', amount:0, img,
           ow:img.naturalWidth, oh:img.naturalHeight
-        });
+        };
+        // Try OCR for image files to auto-detect amount (Tauri only)
+        if (isTauri && invoke) {
+          try {
+            var ocrText = await invoke('ocr_image', { dataUrl: e.target.result });
+            if (ocrText) {
+              var amt = extractInvoiceAmount(ocrText);
+              if (amt > 0) fileObj.amount = amt;
+            }
+          } catch(e) { console.warn('[OCR] 图片识别失败:', e); }
+        }
+        resolve(fileObj);
       };
       reader.onerror = () => { toast('读取失败: ' + file.name); resolve(null); };
       reader.readAsDataURL(file);
+    }
+    else if (ext === 'ofd') {
+      toast('OFD 格式请使用桌面版打开');
+      resolve(null);
     }
     else {
       toast('不支持的格式: ' + ext);
@@ -699,7 +745,9 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
       // If we have a file path and are in Tauri, try WinRT rendering
       if (isTauri && invoke && filePath) {
         console.log('[PDF] Trying WinRT native rendering for:', filePath);
-        invoke('render_pdf_pages', { pdfPath: filePath, dpi: 300 }).then(async pages => {
+        // Adaptive DPI: Rust backend calculates per-page DPI based on page size
+        // Just pass the base DPI — Rust will increase it for small pages
+        invoke('render_pdf_pages', { pdfPath: filePath, dpi: PDF_RENDER_DPI }).then(async pages => {
           if (pages && pages.length > 0) {
             console.log('[PDF] WinRT rendering succeeded, pages:', pages.length);
             const results = [];
@@ -712,17 +760,31 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
                 name: pages.length>1 ? name.replace(/\.pdf$/i,'')+'_第'+(p+1)+'页.pdf' : name,
                 size: size, type:'pdf', checked:true, previewUrl: pg.imageDataUrl,
                 copies:1, rotation:0, note:'', amount:0, img,
-                ow:img.naturalWidth, oh:img.naturalHeight
+                ow:img.naturalWidth, oh:img.naturalHeight,
+                renderDpi: pg.renderDpi || PDF_RENDER_DPI
               });
             }
             // Try to auto-extract amounts via PDF.js text extraction
+            var hasAmount = false;
             if (dataUrl) {
               try {
                 var amounts = await tryExtractPdfAmounts(dataUrl, pages.length);
                 for (var k = 0; k < amounts.length && k < results.length; k++) {
-                  if (amounts[k] > 0) results[k].amount = amounts[k];
+                  if (amounts[k] > 0) { results[k].amount = amounts[k]; hasAmount = true; }
                 }
               } catch(e) { console.warn('[金额提取] WinRT路径PDF.js提取失败:', e); }
+            }
+            // If no text-layer amount found, try OCR on rendered page images (all pages)
+            if (!hasAmount && isTauri && invoke) {
+              try {
+                for (var p = 0; p < results.length; p++) {
+                  var ocrText = await invoke('ocr_image', { dataUrl: results[p].previewUrl });
+                  if (ocrText) {
+                    var amt = extractInvoiceAmount(ocrText);
+                    if (amt > 0) results[p].amount = amt;
+                  }
+                }
+              } catch(e) { console.warn('[OCR] 扫描版PDF识别失败:', e); }
             }
             resolve(results.length === 1 ? results[0] : results);
             return;
@@ -744,11 +806,24 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
     // Image files
     else {
       const img = new Image(); img.src = dataUrl;
-      img.onload = () => resolve({
-        id, name, size, type:ext, checked:true,
-        previewUrl: dataUrl, copies:1, rotation:0, note:'', amount:0, img,
-        ow:img.naturalWidth, oh:img.naturalHeight
-      });
+      img.onload = async () => {
+        var result = {
+          id, name, size, type:ext, checked:true,
+          previewUrl: dataUrl, copies:1, rotation:0, note:'', amount:0, img,
+          ow:img.naturalWidth, oh:img.naturalHeight
+        };
+        // Try OCR for image files to auto-detect amount
+        if (isTauri && invoke) {
+          try {
+            var ocrText = await invoke('ocr_image', { dataUrl: dataUrl });
+            if (ocrText) {
+              var amt = extractInvoiceAmount(ocrText);
+              if (amt > 0) result.amount = amt;
+            }
+          } catch(e) { console.warn('[OCR] 图片识别失败:', e); }
+        }
+        resolve(result);
+      };
       img.onerror = () => { toast('图片加载失败: ' + name); resolve(null); };
     }
   });
@@ -765,7 +840,13 @@ function loadPdfFromDataUrl(name, dataUrl, size, id, resolve) {
     var results = [];
     for (var p = 1; p <= pdf.numPages; p++) {
       var page = await pdf.getPage(p);
-      var vp = page.getViewport({ scale: 3.0 });
+      // Adaptive DPI: small PDF pages need higher DPI so they have enough pixels for A4 print
+      var vp1 = page.getViewport({ scale: 1.0 });
+      var MIN_RENDER_PX = 3508; // A4 long side at 300 DPI
+      var longestSide = Math.max(vp1.width, vp1.height);
+      var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
+      targetDpi = Math.min(targetDpi, 1200);
+      var vp = page.getViewport({ scale: targetDpi / 72 });
       var canvas = document.createElement('canvas');
       canvas.width = vp.width; canvas.height = vp.height;
       await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
@@ -779,8 +860,22 @@ function loadPdfFromDataUrl(name, dataUrl, size, id, resolve) {
         name: pdf.numPages>1 ? name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : name,
         size: size, type:'pdf', checked:true, previewUrl,
         copies:1, rotation:0, note:'', amount:amount, img,
-        ow:img.naturalWidth, oh:img.naturalHeight
+        ow:img.naturalWidth, oh:img.naturalHeight,
+        renderDpi: targetDpi
       });
+    }
+    // OCR fallback for scanned PDFs (no text layer) — try all pages
+    var hasAmount = results.some(function(r) { return r.amount > 0; });
+    if (!hasAmount && isTauri && invoke) {
+      try {
+        for (var p = 0; p < results.length; p++) {
+          var ocrText = await invoke('ocr_image', { dataUrl: results[p].previewUrl });
+          if (ocrText) {
+            var amt = extractInvoiceAmount(ocrText);
+            if (amt > 0) results[p].amount = amt;
+          }
+        }
+      } catch(e) { console.warn('[OCR] 扫描版PDF识别失败:', e); }
     }
     resolve(results.length === 1 ? results[0] : results);
   }).catch(err => {
@@ -803,17 +898,27 @@ function dataUrlToUint8Array(dataUrl) {
 // Invoice amount auto-detection
 // =====================================================
 
-// Parse amount from PDF.js text content
+// Parse amount from PDF.js text content or plain text string
 function extractInvoiceAmount(textContent) {
-  if (!textContent || !textContent.items || !textContent.items.length) return 0;
-  var fullText = textContent.items.map(function(item) { return item.str; }).join(' ');
-  // Priority patterns: 价税合计 > 合计 > 金额
+  var fullText;
+  if (typeof textContent === 'string') {
+    fullText = textContent;
+  } else if (textContent && textContent.items && textContent.items.length) {
+    // Join with empty string, NOT space — CID font PDFs have each CJK character as a separate item,
+    // joining with spaces would produce "价 税 合 计" which breaks our regex patterns
+    fullText = textContent.items.map(function(item) { return item.str; }).join('');
+  } else {
+    return 0;
+  }
+  // Normalize: remove spaces between CJK/fullwidth chars (can appear in OCR output or some PDFs)
+  fullText = fullText.replace(/([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])\s+([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g, '$1$2');
+  // Priority patterns: 价税合计(小写) > 价税合计¥ > 价税合计+数字 > 合计¥ > 金额
   var patterns = [
     /价税合计[（(]小写[）)]\s*[¥￥]?\s*([\d,，]+\.?\d*)/,
     /价税合计\s*[¥￥]\s*([\d,，]+\.?\d*)/,
-    /价税合计\s+(\d+[,，]?\d*\.?\d*)/,
+    /价税合计\s*([\d,，]+\.?\d*)/,
     /合\s*计\s*[¥￥]\s*([\d,，]+\.?\d*)/,
-    /[金]\s*额\s*[¥￥]?\s*([\d,，]+\.?\d*)/,
+    /金\s*额\s*[¥￥]?\s*([\d,，]+\.?\d*)/,
   ];
   for (var i = 0; i < patterns.length; i++) {
     var match = fullText.match(patterns[i]);
@@ -1159,7 +1264,7 @@ function renderPage(pageFiles, pi, total, s) {
   const pw=paperW*MM2PX, ph=paperH*MM2PX;
   const wrap=document.getElementById('previewWrap');
   var scale;
-  if(S.viewZoom===0||document.getElementById('zoomSel').value==='fit'){
+  if(S.viewZoom===0){
     scale=Math.min((wrap.clientWidth-40)/pw,(wrap.clientHeight-40)/ph,1.2);
   } else {
     scale=S.viewZoom/100;
@@ -1183,9 +1288,15 @@ function renderPage(pageFiles, pi, total, s) {
       if(s.globalRotation==='auto'){const isSlotL=sw>sh,isImgL=(f.ow||1)>(f.oh||1);rot=(isSlotL!==isImgL)?(f.rotation+90)%360:f.rotation;}
       else rot=((parseInt(s.globalRotation)||0)+f.rotation)%360;
       const filt=s.colorMode==='grayscale'?'filter:grayscale(1);':s.colorMode==='bw'?'filter:grayscale(1) contrast(1.5);':'';
-      const fit=s.fitMode==='fill'?'cover':'contain';
+      let fit='contain';
+      if(s.fitMode==='fill') fit='cover';
+      else if(s.fitMode==='original') fit='none';
+      else if(s.fitMode==='custom') fit='contain';
       const bdr=s.border?`box-shadow:inset 0 0 0 1px #000;`:`box-shadow:inset 0 0 0 0.5px rgba(0,0,0,0.1);`;
-      inner=`<img src="${src}" style="max-width:100%;max-height:100%;object-fit:${fit};${filt}${rot?'transform:rotate('+rot+'deg);':''}">`;
+      var transforms = '';
+      if (s.fitMode === 'custom' && s.customScale !== 1) transforms += 'scale(' + s.customScale + ') ';
+      if (rot) transforms += 'rotate(' + rot + 'deg) ';
+      inner=`<img src="${src}" style="${s.fitMode==='original'?'':'max-width:100%;max-height:100%;'}object-fit:${fit};${filt}${transforms?'transform:'+transforms+';':''}">`;
       if(s.number) inner+=`<div class="slot-num">${pi*rows*cols+si+1}</div>`;
       if(s.watermark&&s.watermarkText) {
         const ws=Math.min(sw*scale,sh*scale)*0.15;
@@ -1216,47 +1327,47 @@ function updatePageDots(t) { const d=document.getElementById('pageDots'); if(t<=
 function prevPage() { if(S.currentPage>0){S.currentPage--;updatePreview();} }
 function nextPage() { if(S.currentPage<S.totalPages-1){S.currentPage++;updatePreview();} }
 function gotoPage(i) { S.currentPage=i; updatePreview(); }
+function getFitZoom() {
+  var wrap = document.getElementById('previewWrap');
+  if (!wrap) return 100;
+  var ps = document.getElementById('paperSize').value;
+  var pw, ph;
+  if (ps === 'custom') { pw = parseFloat(document.getElementById('customW').value) || 210; ph = parseFloat(document.getElementById('customH').value) || 297; }
+  else { var p = PAPER[ps] || PAPER.A4; pw = p.w; ph = p.h; }
+  if (document.getElementById('orientation').value === 'landscape') { var tmp = pw; pw = ph; ph = tmp; }
+  var fitScale = Math.min((wrap.clientWidth - 40) / (pw * MM2PX), (wrap.clientHeight - 40) / (ph * MM2PX), 1.2);
+  return Math.round(fitScale * 100);
+}
+function updateZoomDisplay() {
+  var label = document.getElementById('zoomLabel');
+  if (!label) return;
+  label.textContent = S.viewZoom === 0 ? '自适应' : S.viewZoom + '%';
+}
 function changeZoom(d) {
-  var sel = document.getElementById('zoomSel');
-  // 当前缩放值
-  var cur;
-  if (sel.value === 'fit') {
-    // 从预览区实际缩放比推算
-    try {
-      var wrap = document.getElementById('previewWrap');
-      if (wrap) {
-        var ps = document.getElementById('paperSize').value;
-        var pw, ph;
-        if (ps === 'custom') { pw = parseFloat(document.getElementById('customW').value) || 210; ph = parseFloat(document.getElementById('customH').value) || 297; }
-        else { var p = PAPER[ps] || PAPER.A4; pw = p.w; ph = p.h; }
-        if (document.getElementById('orientation').value === 'landscape') { var tmp = pw; pw = ph; ph = tmp; }
-        var fitScale = Math.min((wrap.clientWidth - 40) / (pw * MM2PX), (wrap.clientHeight - 40) / (ph * MM2PX), 1.2);
-        cur = Math.round(fitScale * 100);
-      } else { cur = 100; }
-    } catch(e) { cur = 100; }
-  } else {
-    cur = parseInt(sel.value) || 100;
-  }
-  // 取所有数值选项并排序
-  var numericValues = [];
-  Array.from(sel.options).forEach(function(o) { var v = parseInt(o.value); if (!isNaN(v)) numericValues.push(v); });
-  numericValues.sort(function(a, b) { return a - b; });
-  // 找严格大于/小于当前值的下一个选项
-  var newVal = cur;
-  if (d > 0) {
-    for (var i = 0; i < numericValues.length; i++) { if (numericValues[i] > cur) { newVal = numericValues[i]; break; } }
-  } else {
-    for (var i = numericValues.length - 1; i >= 0; i--) { if (numericValues[i] < cur) { newVal = numericValues[i]; break; } }
-  }
-  sel.value = newVal;
+  var cur = S.viewZoom === 0 ? getFitZoom() : S.viewZoom;
+  var newVal = Math.max(10, Math.min(500, cur + d));
+  if (newVal === cur) return;
   S.viewZoom = newVal;
+  updateZoomDisplay();
   updatePreview();
 }
 function setZoom(v) {
-  if (v === 'fit') { S.viewZoom = 0; document.getElementById('zoomSel').value = 'fit'; }
-  else { S.viewZoom = parseInt(v) || 100; document.getElementById('zoomSel').value = v; }
+  if (v === 'fit' || v === 0) { S.viewZoom = 0; }
+  else { S.viewZoom = Math.max(10, Math.min(500, parseInt(v) || 100)); }
+  updateZoomDisplay();
   updatePreview();
+  document.getElementById('zoomMenu').classList.add('hidden');
 }
+function toggleZoomMenu() {
+  document.getElementById('zoomMenu').classList.toggle('hidden');
+}
+// Close zoom menu when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.zoom-ctrl')) {
+    var m = document.getElementById('zoomMenu');
+    if (m) m.classList.add('hidden');
+  }
+});
 function updatePrintBtn() { document.getElementById('printBtn').disabled=!S.files.some(f=>f.checked); }
 
 // =====================================================
@@ -1264,7 +1375,7 @@ function updatePrintBtn() { document.getElementById('printBtn').disabled=!S.file
 // =====================================================
 function renderPageToCanvas(pageFiles, s) {
   const {paperW,paperH,cols,rows,marginTop,marginBottom,marginLeft,marginRight,gapH,gapV} = s;
-  const DPI = 300;
+  const DPI = PDF_RENDER_DPI;
   const pxPerMm = DPI / 25.4;
   const pw = Math.round(paperW * pxPerMm);
   const ph = Math.round(paperH * pxPerMm);
@@ -1306,6 +1417,14 @@ function renderPageToCanvas(pageFiles, s) {
         const eH = (rot===90||rot===270) ? imgW : imgH;
 
         if (s.fitMode === 'fill') { drawW = sw; drawH = sh; }
+        else if (s.fitMode === 'original') {
+          // Original size: use image's actual pixel dimensions (1:1 mapping at 300 DPI)
+          drawW = eW; drawH = eH;
+        }
+        else if (s.fitMode === 'custom') {
+          const sc = Math.min(sw/eW, sh/eH) * (s.customScale || 1);
+          drawW = eW*sc; drawH = eH*sc;
+        }
         else { const sc = Math.min(sw/eW, sh/eH); drawW = eW*sc; drawH = eH*sc; }
 
         const drawX = sx + (sw - drawW) / 2;
@@ -1419,7 +1538,7 @@ async function savePdf() {
       var defaultName = '发票打印_' + ts + '.pdf';
       if (savedDir) {
         // 已有保存目录，直接拼接路径，不弹窗
-        savePath = savedDir + '\\' + defaultName;
+        savePath = savedDir + (savedDir.endsWith('\\') || savedDir.endsWith('/') ? '' : '\\') + defaultName;
         // 如果文件已存在，加序号
         var base = savePath.replace('.pdf','');
         var idx = 1;
@@ -1435,7 +1554,8 @@ async function savePdf() {
         });
         if (!savePath) return; // 用户取消
         // 记住用户选择的目录
-        var dir = savePath.substring(0, savePath.lastIndexOf('\\'));
+        var lastSep = Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/'));
+        var dir = lastSep >= 0 ? savePath.substring(0, lastSep) : '';
         if (dir) setSaveDir(dir);
       }
     } catch(e) {
@@ -1612,7 +1732,7 @@ function resetSettings() {
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
-  document.getElementById('zoomSel').value = 'fit';
+  updateZoomDisplay();
   // Reset toggles
   document.getElementById('toggleCutline').classList.add('on');
   document.getElementById('toggleNumber').classList.remove('on');
@@ -1646,6 +1766,54 @@ document.addEventListener('keydown', e => {
   if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault();nextPage();}
   if((e.ctrlKey||e.metaKey)&&e.key==='p'){e.preventDefault();doPrint();}
   if((e.ctrlKey||e.metaKey)&&e.key==='o'){e.preventDefault();triggerUpload();}
+  if((e.ctrlKey||e.metaKey)&&(e.key==='='||e.key==='+')){e.preventDefault();changeZoom(5);}
+  if((e.ctrlKey||e.metaKey)&&e.key==='-'){e.preventDefault();changeZoom(-5);}
+  if((e.ctrlKey||e.metaKey)&&e.key==='0'){e.preventDefault();setZoom('fit');}
+});
+
+// Ctrl+Wheel zoom with zoom-to-cursor
+document.getElementById('previewWrap').addEventListener('wheel', function(e) {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  var step = 5;
+  var curZoom = S.viewZoom === 0 ? getFitZoom() : S.viewZoom;
+  var delta = e.deltaY > 0 ? -step : step;
+  if (curZoom > 200) delta = delta * 2;
+  var newZoom = Math.max(10, Math.min(500, curZoom + delta));
+  if (newZoom === curZoom) return;
+
+  var oldScale = curZoom / 100;
+  var newScale = newZoom / 100;
+
+  // Record cursor position in logical (unscaled) content coordinates
+  var container = document.querySelector('.preview-container');
+  var logicalX = 0, logicalY = 0;
+  if (container) {
+    var cRect = container.getBoundingClientRect();
+    logicalX = (e.clientX - cRect.left) / oldScale;
+    logicalY = (e.clientY - cRect.top) / oldScale;
+  }
+
+  // Apply zoom
+  S.viewZoom = newZoom;
+  updateZoomDisplay();
+  updatePreview();
+
+  // After re-render, adjust scroll so the same logical point stays under cursor
+  var newContainer = document.querySelector('.preview-container');
+  if (newContainer) {
+    var ncRect = newContainer.getBoundingClientRect();
+    var dx = (ncRect.left + logicalX * newScale) - e.clientX;
+    var dy = (ncRect.top + logicalY * newScale) - e.clientY;
+    var wrap = document.getElementById('previewWrap');
+    wrap.scrollLeft += dx;
+    wrap.scrollTop += dy;
+  }
+}, { passive: false });
+
+// Double-click to reset zoom
+document.getElementById('previewWrap').addEventListener('dblclick', function() {
+  if (S.viewZoom !== 0) { setZoom('fit'); }
 });
 
 // Global drag & drop (browser fallback)
