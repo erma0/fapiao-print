@@ -32,3 +32,6 @@ desktop.ini
 screenshots/pdfrender.cs
 screenshots/pdfrender.ps1
 src-tauri/src/pdf_render.ps1
+
+# Temp screenshots
+screenshot_*.png

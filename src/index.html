@@ -124,7 +124,14 @@
   .file-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .file-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; margin-top: 2px; }
   .copy-badge { background: var(--warning-light); color: var(--warning); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
   .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
+  .file-summary {
+    padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface2);
+    font-size: 12px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .file-summary .amt-total { color: var(--success); font-weight: 700; font-size: 14px; }
+  .file-summary .amt-count { color: var(--text-muted); }
   .ib {
     width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
     border-radius: 5px; display: flex; align-items: center; justify-content: center;
@@ -153,12 +160,14 @@
   .go {
     border: 2px solid var(--border); border-radius: 6px; cursor: pointer;
     display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 1px;
-    transition: all 0.15s; background: var(--surface2); font-size: 11px; color: var(--text-secondary); font-weight: 600;
-    padding: 10px 0;
+    transition: all 0.15s; background: var(--surface2); font-size: 12px; color: var(--text-secondary); font-weight: 600;
+    padding: 7px 0;
   }
   .go:hover { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
   .go.active { border-color: var(--accent); background: var(--accent); color: white; }
   .ql-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .ql-custom { font-size: 13px !important; padding: 5px 8px !important; }
+  .custom-layout-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
 
   .trow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .tlbl { font-size: 13px; color: var(--text-secondary); }
@@ -256,7 +265,7 @@
 
 
 <!-- File input — browser fallback only -->
-<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff" multiple style="display:none" onchange="handleFileInput(this.files)">
+<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.ofd" multiple style="display:none" onchange="handleFileInput(this.files)">
 
 <div class="main-layout">
   <!-- Sidebar -->
@@ -272,7 +281,7 @@
       <div class="upload-zone" id="dropZone" onclick="triggerUpload()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
         <div class="upload-icon">📂</div>
         <div class="upload-text">拖入发票或点击选择</div>
-        <div class="upload-hint">支持 PDF / JPG / PNG 等格式</div>
+        <div class="upload-hint">支持 PDF / JPG / PNG / OFD 格式</div>
       </div>
       <div class="file-header">
         <div class="file-count" id="fileCount">0 张，已选 0</div>
@@ -283,6 +292,7 @@
         </div>
       </div>
       <div id="fileList"></div>
+      <div class="file-summary" id="amountSummary" style="display:none"></div>
     </div>
 
     <div class="sidebar-panel hidden" id="panel-settings">
@@ -295,9 +305,24 @@
       <div class="sec">
         <div class="sec-title">🗂 版面布局</div>
         <div class="grid-sel" id="gridSel" style="grid-template-columns:repeat(3,1fr)">
-          <div class="go active" data-cols="1" data-rows="1" data-orient="landscape" onclick="setLayoutPreset(1,1,'landscape',this)">1×1<br><span style="font-size:9px;opacity:0.7">横向</span></div>
-          <div class="go" data-cols="1" data-rows="2" data-orient="portrait" onclick="setLayoutPreset(1,2,'portrait',this)">1×2<br><span style="font-size:9px;opacity:0.7">纵向</span></div>
-          <div class="go" data-cols="2" data-rows="2" data-orient="landscape" onclick="setLayoutPreset(2,2,'landscape',this)">2×2<br><span style="font-size:9px;opacity:0.7">横向</span></div>
+          <div class="go active" data-cols="1" data-rows="1" onclick="setLayoutPreset(1,1,null,this)">1×1</div>
+          <div class="go" data-cols="2" data-rows="1" onclick="setLayoutPreset(2,1,null,this)">1×2</div>
+          <div class="go" data-cols="3" data-rows="1" onclick="setLayoutPreset(3,1,null,this)">1×3</div>
+          <div class="go" data-cols="1" data-rows="2" onclick="setLayoutPreset(1,2,null,this)">2×1</div>
+          <div class="go" data-cols="2" data-rows="2" onclick="setLayoutPreset(2,2,null,this)">2×2</div>
+          <div class="go" data-cols="3" data-rows="2" onclick="setLayoutPreset(3,2,null,this)">2×3</div>
+          <div class="go" data-cols="1" data-rows="3" onclick="setLayoutPreset(1,3,null,this)">3×1</div>
+          <div class="go" data-cols="2" data-rows="3" onclick="setLayoutPreset(2,3,null,this)">3×2</div>
+          <div class="go" data-cols="3" data-rows="3" onclick="setLayoutPreset(3,3,null,this)">3×3</div>
+        </div>
+        <div class="row" style="margin-top:4px;margin-bottom:0">
+          <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
+          <div style="display:flex;gap:4px;align-items:center;flex:1">
+            <input type="number" id="customRows" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
+            <span style="color:var(--text-muted);font-size:13px">行 ×</span>
+            <input type="number" id="customCols" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
+            <span style="color:var(--text-muted);font-size:13px">列</span>
+          </div>
         </div>
       </div>
       <div class="sec">
@@ -378,6 +403,11 @@
     <!-- Settings / Preferences panel -->
     <div class="sidebar-panel hidden" id="panel-prefs">
       <div class="sec">
+        <div class="sec-title">🔍 发票查验</div>
+        <button class="btn btn-sm" style="width:100%" onclick="verifyInvoice()">🔍 国家税务总局发票查验</button>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">打开国家税务总局全国增值税发票查验平台，输入发票代码、号码等信息即可查验真伪。</div>
+      </div>
+      <div class="sec">
         <div class="sec-title">📄 PDF 设置</div>
         <div class="trow"><label class="tlbl">保存后自动打开</label><button class="tgl on" id="toggleAutoOpenPdf" onclick="tglPref('autoOpenPdf',this)"></button></div>
         <div class="row" style="margin-top:8px"><label class="lbl">保存目录</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="text" id="saveDir" readonly placeholder="未设置，每次手动选择" style="flex:1;font-size:12px;cursor:default;padding:5px 8px" onclick="pickSaveDir()"><button class="btn btn-sm btn-icon" onclick="pickSaveDir()" title="选择目录">📂</button><button class="btn btn-sm btn-icon" onclick="clearSaveDir()" title="清除目录">✕</button></div></div>
@@ -406,8 +436,11 @@
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
         <button class="btn btn-sm ql-btn active" data-cols="1" data-rows="1" onclick="quickLayout(1,1)" title="1行1列">1×1</button>
-        <button class="btn btn-sm ql-btn" data-cols="1" data-rows="2" onclick="quickLayout(1,2)" title="1列2行">1×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="1" onclick="quickLayout(2,1)" title="1行2列">1×2</button>
         <button class="btn btn-sm ql-btn" data-cols="2" data-rows="2" onclick="quickLayout(2,2)" title="2行2列">2×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="1" onclick="quickLayout(3,1)" title="1行3列">1×3</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="2" onclick="quickLayout(3,2)" title="2行3列">2×3</button>
+        <button class="btn btn-sm ql-btn ql-custom" onclick="showCustomLayoutModal()" title="自定义布局" style="font-size:12px">⚙</button>
       </div>
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
@@ -452,7 +485,8 @@
       <div id="stPages">0 页</div>
       <div id="stLayout">1×1</div>
       <div id="stPaper">A4</div>
-      <div style="margin-left:auto">v1.0.0</div>
+      <div id="stAmount" style="color:var(--success);font-weight:600"></div>
+      <div style="margin-left:auto">v1.2.0</div>
     </div>
   </main>
 </div>
@@ -469,7 +503,7 @@
 // =====================================================
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.0.0 | isTauri:', isTauri);
+console.log('发票批量打印 v1.2.0 | isTauri:', isTauri);
 
 // =====================================================
 // State
@@ -516,7 +550,7 @@ async function triggerUpload() {
         options: {
           multiple: true,
           title: '选择发票文件',
-          filters: [{ name: '发票文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif'] }]
+          filters: [{ name: '发票文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif', 'ofd'] }]
         }
       });
       if (!result) return; // user cancelled
@@ -564,7 +598,12 @@ async function processFileDataList(fileDataList) {
     }
   }
   renderFileList(); updatePreview(); updatePrintBtn();
-  if (added > 0) toast('已添加 ' + added + ' 张发票');
+  if (added > 0) {
+    var autoAmt = S.files.slice(-added).filter(f => f.amount > 0).length;
+    var msg = '已添加 ' + added + ' 张发票';
+    if (autoAmt > 0) msg += '，' + autoAmt + ' 张已自动识别金额';
+    toast(msg);
+  }
 }
 
 // Process an array of File objects
@@ -603,18 +642,20 @@ function loadFile(file) {
         const results = [];
         for (let p = 1; p <= pdf.numPages; p++) {
           const page = await pdf.getPage(p);
-          const vp = page.getViewport({ scale: 2.0 });
+          const vp = page.getViewport({ scale: 3.0 });
           const canvas = document.createElement('canvas');
           canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-          const previewUrl = canvas.toDataURL('image/jpeg', 0.92);
+          const previewUrl = canvas.toDataURL('image/png');
           const img = new Image(); img.src = previewUrl;
           await new Promise(r => { img.onload = r; });
+          var textContent = await page.getTextContent();
+          var amount = extractInvoiceAmount(textContent);
           results.push({
             id: id+'_p'+p,
             name: pdf.numPages>1 ? file.name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : file.name,
             size: file.size, type:'pdf', checked:true, previewUrl,
-            copies:1, rotation:0, note:'', img,
+            copies:1, rotation:0, note:'', amount:amount, img,
             ow:img.naturalWidth, oh:img.naturalHeight
           });
         }
@@ -627,14 +668,14 @@ function loadFile(file) {
       });
     }
     // Image files
-    else if (['jpg','jpeg','png','bmp','webp','tiff','tif'].includes(ext)) {
+    else if (['jpg','jpeg','png','bmp','webp','tiff','tif','ofd'].includes(ext)) {
       const reader = new FileReader();
       reader.onload = async e => {
         const img = new Image(); img.src = e.target.result;
         await new Promise(r => { img.onload = r; });
         resolve({
           id, name:file.name, size:file.size, type:ext, checked:true,
-          previewUrl:e.target.result, copies:1, rotation:0, note:'', img,
+          previewUrl:e.target.result, copies:1, rotation:0, note:'', amount:0, img,
           ow:img.naturalWidth, oh:img.naturalHeight
         });
       };
@@ -658,7 +699,7 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
       // If we have a file path and are in Tauri, try WinRT rendering
       if (isTauri && invoke && filePath) {
         console.log('[PDF] Trying WinRT native rendering for:', filePath);
-        invoke('render_pdf_pages', { pdfPath: filePath, dpi: 200 }).then(async pages => {
+        invoke('render_pdf_pages', { pdfPath: filePath, dpi: 300 }).then(async pages => {
           if (pages && pages.length > 0) {
             console.log('[PDF] WinRT rendering succeeded, pages:', pages.length);
             const results = [];
@@ -670,9 +711,18 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
                 id: id+'_p'+(p+1),
                 name: pages.length>1 ? name.replace(/\.pdf$/i,'')+'_第'+(p+1)+'页.pdf' : name,
                 size: size, type:'pdf', checked:true, previewUrl: pg.imageDataUrl,
-                copies:1, rotation:0, note:'', img,
+                copies:1, rotation:0, note:'', amount:0, img,
                 ow:img.naturalWidth, oh:img.naturalHeight
               });
+            }
+            // Try to auto-extract amounts via PDF.js text extraction
+            if (dataUrl) {
+              try {
+                var amounts = await tryExtractPdfAmounts(dataUrl, pages.length);
+                for (var k = 0; k < amounts.length && k < results.length; k++) {
+                  if (amounts[k] > 0) results[k].amount = amounts[k];
+                }
+              } catch(e) { console.warn('[金额提取] WinRT路径PDF.js提取失败:', e); }
             }
             resolve(results.length === 1 ? results[0] : results);
             return;
@@ -696,7 +746,7 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
       const img = new Image(); img.src = dataUrl;
       img.onload = () => resolve({
         id, name, size, type:ext, checked:true,
-        previewUrl: dataUrl, copies:1, rotation:0, note:'', img,
+        previewUrl: dataUrl, copies:1, rotation:0, note:'', amount:0, img,
         ow:img.naturalWidth, oh:img.naturalHeight
       });
       img.onerror = () => { toast('图片加载失败: ' + name); resolve(null); };
@@ -715,18 +765,20 @@ function loadPdfFromDataUrl(name, dataUrl, size, id, resolve) {
     var results = [];
     for (var p = 1; p <= pdf.numPages; p++) {
       var page = await pdf.getPage(p);
-      var vp = page.getViewport({ scale: 2.0 });
+      var vp = page.getViewport({ scale: 3.0 });
       var canvas = document.createElement('canvas');
       canvas.width = vp.width; canvas.height = vp.height;
       await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-      var previewUrl = canvas.toDataURL('image/jpeg', 0.92);
+      var previewUrl = canvas.toDataURL('image/png');
       var img = new Image(); img.src = previewUrl;
       await new Promise(r => { img.onload = r; });
+      var textContent = await page.getTextContent();
+      var amount = extractInvoiceAmount(textContent);
       results.push({
         id: id+'_p'+p,
         name: pdf.numPages>1 ? name.replace(/\.pdf$/i,'')+'_第'+p+'页.pdf' : name,
         size: size, type:'pdf', checked:true, previewUrl,
-        copies:1, rotation:0, note:'', img,
+        copies:1, rotation:0, note:'', amount:amount, img,
         ow:img.naturalWidth, oh:img.naturalHeight
       });
     }
@@ -747,6 +799,57 @@ function dataUrlToUint8Array(dataUrl) {
   return bytes;
 }
 
+// =====================================================
+// Invoice amount auto-detection
+// =====================================================
+
+// Parse amount from PDF.js text content
+function extractInvoiceAmount(textContent) {
+  if (!textContent || !textContent.items || !textContent.items.length) return 0;
+  var fullText = textContent.items.map(function(item) { return item.str; }).join(' ');
+  // Priority patterns: 价税合计 > 合计 > 金额
+  var patterns = [
+    /价税合计[（(]小写[）)]\s*[¥￥]?\s*([\d,，]+\.?\d*)/,
+    /价税合计\s*[¥￥]\s*([\d,，]+\.?\d*)/,
+    /价税合计\s+(\d+[,，]?\d*\.?\d*)/,
+    /合\s*计\s*[¥￥]\s*([\d,，]+\.?\d*)/,
+    /[金]\s*额\s*[¥￥]?\s*([\d,，]+\.?\d*)/,
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var match = fullText.match(patterns[i]);
+    if (match && match[1]) {
+      var num = parseFloat(match[1].replace(/[,，]/g, ''));
+      if (!isNaN(num) && num > 0) return Math.round(num * 100) / 100;
+    }
+  }
+  return 0;
+}
+
+// Extract amounts from all pages of a PDF (via data URL)
+async function tryExtractPdfAmounts(dataUrl, pageCount) {
+  if (!window.pdfjsLib) return [];
+  try {
+    var raw = dataUrlToUint8Array(dataUrl);
+    var pdf = await pdfjsLib.getDocument({
+      data: raw,
+      cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/',
+      disableFontFace: true, useSystemFonts: false
+    }).promise;
+    var amounts = [];
+    for (var p = 1; p <= pdf.numPages; p++) {
+      var page = await pdf.getPage(p);
+      var textContent = await page.getTextContent();
+      amounts.push(extractInvoiceAmount(textContent));
+    }
+    return amounts;
+  } catch(e) {
+    console.warn('[金额提取] PDF文字提取失败:', e);
+    return [];
+  }
+}
+
 // Drag & Drop
 function handleDragOver(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.add('drag-over'); }
 function handleDragLeave(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.remove('drag-over'); }
@@ -765,17 +868,21 @@ function renderFileList() {
   const list = document.getElementById('fileList');
   const sel = S.files.filter(f=>f.checked).length;
   document.getElementById('fileCount').textContent = S.files.length + ' 张，已选 ' + sel;
-  if (!S.files.length) { list.innerHTML=''; return; }
+  var summaryEl = document.getElementById('amountSummary');
+  if (!S.files.length) { list.innerHTML=''; if(summaryEl) summaryEl.style.display='none'; updateAmountSummary(); return; }
+  if(summaryEl) summaryEl.style.display='flex';
   list.innerHTML = S.files.map((f,i) => {
     const cb = f.copies>1?`<span class="copy-badge">${f.copies}份</span>`:'';
     const rb = f.rotation?`<span class="rot-badge">${f.rotation}°</span>`:'';
+    const ab = f.amount>0?`<span class="amt-badge">¥${f.amount.toFixed(2)}</span>`:'';
     return `<div class="file-item" draggable="true" ondragstart="dStart(event,${i})" ondragover="dOver(event)" ondrop="dDrop(event,${i})" ondblclick="openInvModal(${i})">
       <div class="file-check ${f.checked?'checked':''}" onclick="togCheck(${i})"></div>
       <div class="file-thumb">${f.previewUrl?`<img src="${f.previewUrl}">`:'📄'}<div class="type-badge">${f.type==='jpeg'?'jpg':f.type}</div></div>
-      <div class="file-info"><div class="file-name" title="${f.name}">${f.name}</div><div class="file-meta">${fmtSize(f.size)}${cb}${rb}</div></div>
+      <div class="file-info"><div class="file-name" title="${f.name}">${f.name}</div><div class="file-meta">${fmtSize(f.size)}${cb}${rb}${ab}</div></div>
       <div style="display:flex;gap:2px"><button class="ib" onclick="rotFile(${i})" title="旋转90°">↻</button><button class="ib danger" onclick="rmFile(${i})">✕</button></div>
     </div>`;
   }).join('');
+  updateAmountSummary();
 }
 function togCheck(i) { S.files[i].checked=!S.files[i].checked; renderFileList(); updatePreview(); }
 function selectAll() { S.files.forEach(f=>f.checked=true); renderFileList(); updatePreview(); }
@@ -789,18 +896,34 @@ function dStart(e,i) { dSrc=i; e.dataTransfer.effectAllowed='move'; }
 function dOver(e) { e.preventDefault(); }
 function dDrop(e,i) { e.preventDefault(); if(dSrc===null||dSrc===i)return; const item=S.files.splice(dSrc,1)[0]; S.files.splice(i,0,item); dSrc=null; renderFileList(); updatePreview(); }
 
+// Amount statistics
+function updateAmountSummary() {
+  var el = document.getElementById('amountSummary');
+  if (!el) return;
+  var checked = S.files.filter(f => f.checked);
+  var total = checked.reduce((s, f) => s + (f.amount || 0), 0);
+  var withAmt = checked.filter(f => f.amount > 0).length;
+  el.innerHTML = checked.length > 0
+    ? `<span class="amt-count">${withAmt}/${checked.length} 张已填金额</span><span class="amt-total">¥${total.toFixed(2)}</span>`
+    : '';
+  // Also update statusbar
+  var stAmt = document.getElementById('stAmount');
+  if (stAmt) stAmt.textContent = total > 0 ? '¥' + total.toFixed(2) : '';
+}
+
 // Invoice modal
 function openInvModal(i) {
   S.editIdx=i; const f=S.files[i];
   document.getElementById('invModalBody').innerHTML=`
     <div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px">📄 ${f.name}</div>
     <div class="row"><label class="lbl">份数</label><div style="display:flex;gap:4px;align-items:center"><button class="btn btn-sm btn-icon" onclick="mc(-1)">−</button><input type="number" id="mCopies" value="${f.copies}" min="1" max="99" style="width:52px;text-align:center"><button class="btn btn-sm btn-icon" onclick="mc(1)">+</button></div></div>
+    <div class="row"><label class="lbl">金额</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--success)">¥</span><input type="number" id="mAmount" value="${f.amount||''}" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>
     <div class="row"><label class="lbl">旋转</label><div class="ctrl"><select id="mRot"><option value="0" ${f.rotation===0?'selected':''}>不旋转</option><option value="90" ${f.rotation===90?'selected':''}>90°</option><option value="180" ${f.rotation===180?'selected':''}>180°</option><option value="270" ${f.rotation===270?'selected':''}>270°</option></select></div></div>`;
   document.getElementById('invModal').classList.remove('hidden');
 }
 function mc(d) { const e=document.getElementById('mCopies'); e.value=Math.max(1,Math.min(99,parseInt(e.value)+d)); }
 function closeInvModal() { document.getElementById('invModal').classList.add('hidden'); }
-function confirmInvModal() { if(S.editIdx<0)return; const f=S.files[S.editIdx]; f.copies=Math.max(1,parseInt(document.getElementById('mCopies').value)||1); f.rotation=parseInt(document.getElementById('mRot').value)||0; closeInvModal(); renderFileList(); updatePreview(); }
+function confirmInvModal() { if(S.editIdx<0)return; const f=S.files[S.editIdx]; f.copies=Math.max(1,parseInt(document.getElementById('mCopies').value)||1); f.rotation=parseInt(document.getElementById('mRot').value)||0; var amtVal=parseFloat(document.getElementById('mAmount').value); f.amount=isNaN(amtVal)||amtVal<0?0:Math.round(amtVal*100)/100; closeInvModal(); renderFileList(); updatePreview(); }
 
 // =====================================================
 // Layout / Settings
@@ -810,58 +933,106 @@ function setLayout(c,r,el) {
   // 同步侧边栏 .go 选中状态
   document.querySelectorAll('.go').forEach(e=>e.classList.remove('active'));
   if(el&&el.classList.contains('go')) el.classList.add('active');
+  else {
+    // 如果没传el，尝试匹配预设
+    document.querySelectorAll('.go').forEach(function(e) {
+      if(parseInt(e.dataset.cols)===c&&parseInt(e.dataset.rows)===r) e.classList.add('active');
+    });
+  }
   // 同步 toolbar 快捷按钮高亮
-  document.querySelectorAll('.ql-btn').forEach(e=>e.classList.remove('active'));
-  document.querySelectorAll('.ql-btn').forEach(e=>{
-    if(parseInt(e.dataset.cols)===c&&parseInt(e.dataset.rows)===r) e.classList.add('active');
-  });
+  syncToolbarHighlight(c, r);
+  // 同步自定义输入
+  document.getElementById('customRows').value = r;
+  document.getElementById('customCols').value = c;
   updatePreview();
 }
 function quickLayout(c,r) {
-  // 根据布局确定纸张方向：1×1/2×2→横向，1×2→纵向
-  var orient = (c === r) ? 'landscape' : 'portrait';
+  // 自动检测纸张方向：行>列→纵向，否则横向
+  var orient = r > c ? 'portrait' : 'landscape';
   document.getElementById('orientation').value = orient;
-  // 找侧边栏对应 .go 元素
+  // 同步侧边栏 .go 高亮
   var goEl = null;
-  document.querySelectorAll('.go').forEach(e=>{
-    if(parseInt(e.dataset.cols)===c&&parseInt(e.dataset.rows)===r&&e.dataset.orient===orient) goEl=e;
+  document.querySelectorAll('.go').forEach(function(e) {
+    if(parseInt(e.dataset.cols)===c&&parseInt(e.dataset.rows)===r) goEl=e;
   });
   setLayout(c,r,goEl);
+  // 同步自定义输入
+  document.getElementById('customRows').value = r;
+  document.getElementById('customCols').value = c;
 }
 function tgl(k,btn) {
   S.feat[k]=!S.feat[k]; btn.classList.toggle('on',S.feat[k]); if(k==='watermark')document.getElementById('wmOpts').style.display=S.feat[k]?'block':'none'; if(k==='trimWhite'&&S.feat[k])processTrim(); updatePreview();
 }
-// 布局预设切换（联动纸张方向）
+// 布局预设切换（自动检测方向，同步自定义输入）
 function setLayoutPreset(c, r, orient, el) {
+  // 自动检测方向：行>列→纵向，否则横向
+  if (!orient) orient = r > c ? 'portrait' : 'landscape';
   document.getElementById('orientation').value = orient;
   S.layout = { cols: c, rows: r };
   // 同步侧边栏 .go 高亮
   document.querySelectorAll('.go').forEach(function(e) { e.classList.remove('active'); });
   if (el) el.classList.add('active');
   // 同步 toolbar ql-btn 高亮
-  document.querySelectorAll('.ql-btn').forEach(function(e) { e.classList.remove('active'); });
-  document.querySelectorAll('.ql-btn').forEach(function(e) {
+  syncToolbarHighlight(c, r);
+  // 同步自定义输入
+  document.getElementById('customRows').value = r;
+  document.getElementById('customCols').value = c;
+  updatePreview();
+}
+
+// 自定义布局输入
+function applyCustomLayout() {
+  var r = Math.max(1, Math.min(10, parseInt(document.getElementById('customRows').value) || 1));
+  var c = Math.max(1, Math.min(10, parseInt(document.getElementById('customCols').value) || 1));
+  document.getElementById('customRows').value = r;
+  document.getElementById('customCols').value = c;
+  // 自动检测方向
+  var orient = r > c ? 'portrait' : 'landscape';
+  document.getElementById('orientation').value = orient;
+  S.layout = { cols: c, rows: r };
+  // 清除侧边栏预设高亮，除非匹配预设
+  document.querySelectorAll('.go').forEach(function(e) {
+    e.classList.remove('active');
     if (parseInt(e.dataset.cols) === c && parseInt(e.dataset.rows) === r) e.classList.add('active');
   });
+  // 同步 toolbar
+  syncToolbarHighlight(c, r);
   updatePreview();
+}
+
+// 工具栏自定义布局弹窗（快速设置行×列）
+function showCustomLayoutModal() {
+  var r = S.layout.rows, c = S.layout.cols;
+  document.getElementById('customRows').value = r;
+  document.getElementById('customCols').value = c;
+  // 切换到排版面板并聚焦自定义输入
+  switchTab('settings', document.querySelectorAll('.sidebar-tab')[1]);
+  setTimeout(function() { document.getElementById('customRows').focus(); document.getElementById('customRows').select(); }, 100);
+}
+
+// 同步工具栏快捷按钮高亮
+function syncToolbarHighlight(c, r) {
+  document.querySelectorAll('.ql-btn').forEach(function(e) {
+    e.classList.remove('active');
+    if (!e.classList.contains('ql-custom') && parseInt(e.dataset.cols) === c && parseInt(e.dataset.rows) === r) {
+      e.classList.add('active');
+    }
+  });
 }
 
 // 手动改了纸张方向后，同步布局按钮高亮（不切换布局）
 function syncLayoutHighlight() {
   var orient = document.getElementById('orientation').value;
+  var c = S.layout.cols, r = S.layout.rows;
+  // 侧边栏预设高亮
   document.querySelectorAll('.go').forEach(function(e) {
     e.classList.remove('active');
-    if (parseInt(e.dataset.cols) === S.layout.cols && parseInt(e.dataset.rows) === S.layout.rows && e.dataset.orient === orient) {
+    if (parseInt(e.dataset.cols) === c && parseInt(e.dataset.rows) === r) {
       e.classList.add('active');
     }
   });
-  // 同步 toolbar ql-btn
-  document.querySelectorAll('.ql-btn').forEach(function(e) {
-    e.classList.remove('active');
-    if (parseInt(e.dataset.cols) === S.layout.cols && parseInt(e.dataset.rows) === S.layout.rows) {
-      e.classList.add('active');
-    }
-  });
+  // 工具栏快捷按钮
+  syncToolbarHighlight(c, r);
 }
 
 function switchTab(n,el) {
@@ -900,7 +1071,7 @@ function trimImg(src) {
       const p=5;top=Math.max(0,top-p);left=Math.max(0,left-p);bottom=Math.min(c.height-1,bottom+p);right=Math.min(c.width-1,right+p);
       const c2=document.createElement('canvas');c2.width=right-left+1;c2.height=bottom-top+1;
       c2.getContext('2d').drawImage(c,left,top,c2.width,c2.height,0,0,c2.width,c2.height);
-      resolve(c2.toDataURL('image/jpeg',0.92));
+      resolve(c2.toDataURL('image/png'));
     };
   });
 }
@@ -995,12 +1166,16 @@ function renderPage(pageFiles, pi, total, s) {
   }
   const dw=Math.round(pw*scale), dh=Math.round(ph*scale);
   const mt=marginTop*MM2PX,mb=marginBottom*MM2PX,ml=marginLeft*MM2PX,mr=marginRight*MM2PX,gh=gapH*MM2PX,gv=gapV*MM2PX;
-  const sw=(pw-ml-mr-(cols-1)*gh)/cols, sh=(ph-mt-mb-(rows-1)*gv)/rows;
+  // Per-slot margins: each invoice has its own margin, not just page-level
+  const sw=(pw-cols*(ml+mr)-(cols-1)*gh)/cols, sh=(ph-rows*(mt+mb)-(rows-1)*gv)/rows;
 
   let html='';
   for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) {
     const si=r*cols+c, f=pageFiles?pageFiles[si]:null;
-    const sx=(ml+c*(sw+gh))*scale, sy=(mt+r*(sh+gv))*scale;
+    const sx=(c*(sw+ml+mr+gh))*scale, sy=(r*(sh+mt+mb+gv))*scale;
+    // Invoice image offset within slot: apply per-slot margin
+    const imgX=sx+ml*scale, imgY=sy+mt*scale;
+    const imgW=sw*scale, imgH=sh*scale;
     let inner='';
     if(f&&f.previewUrl) {
       const src=S.feat.trimWhite&&f.trimmedUrl?f.trimmedUrl:f.previewUrl;
@@ -1016,15 +1191,15 @@ function renderPage(pageFiles, pi, total, s) {
         const ws=Math.min(sw*scale,sh*scale)*0.15;
         inner+=`<div class="watermark" style="color:${s.watermarkColor};opacity:${s.watermarkOpacity};font-size:${ws}px;transform:translate(-50%,-50%) rotate(${s.watermarkAngle}deg);top:50%;left:50%">${s.watermarkText}</div>`;
       }
-      html+=`<div class="invoice-slot" style="position:absolute;left:${sx}px;top:${sy}px;width:${sw*scale}px;height:${sh*scale}px;${bdr}">${inner}</div>`;
+      html+=`<div class="invoice-slot" style="position:absolute;left:${imgX}px;top:${imgY}px;width:${imgW}px;height:${imgH}px;${bdr}">${inner}</div>`;
     } else {
       inner=`<div class="slot-empty">空</div>`;
-      html+=`<div class="invoice-slot" style="position:absolute;left:${sx}px;top:${sy}px;width:${sw*scale}px;height:${sh*scale}px">${inner}</div>`;
+      html+=`<div class="invoice-slot" style="position:absolute;left:${imgX}px;top:${imgY}px;width:${imgW}px;height:${imgH}px">${inner}</div>`;
     }
   }
   if(s.cutline&&(cols>1||rows>1)) {
-    for(let r=1;r<rows;r++){const y=(mt+r*sh+(r-0.5)*gv)*scale;html+=`<div class="cut-line" style="top:${y}px"></div>`;}
-    for(let c=1;c<cols;c++){const x=(ml+c*sw+(c-0.5)*gh)*scale;html+=`<div class="cut-line-v" style="left:${x}px"></div>`;}
+    for(let r=1;r<rows;r++){const y=(r*(sh+mt+mb+gv)-gv/2)*scale;html+=`<div class="cut-line" style="top:${y}px"></div>`;}
+    for(let c=1;c<cols;c++){const x=(c*(sw+ml+mr+gh)-gh/2)*scale;html+=`<div class="cut-line-v" style="left:${x}px"></div>`;}
   }
   if(s.pageNum) html+=`<div style="position:absolute;bottom:5px;left:0;right:0;text-align:center;font-size:10px;color:#94a3b8">第 ${pi+1} 页 / 共 ${total} 页</div>`;
 
@@ -1089,7 +1264,7 @@ function updatePrintBtn() { document.getElementById('printBtn').disabled=!S.file
 // =====================================================
 function renderPageToCanvas(pageFiles, s) {
   const {paperW,paperH,cols,rows,marginTop,marginBottom,marginLeft,marginRight,gapH,gapV} = s;
-  const DPI = 150;
+  const DPI = 300;
   const pxPerMm = DPI / 25.4;
   const pw = Math.round(paperW * pxPerMm);
   const ph = Math.round(paperH * pxPerMm);
@@ -1102,15 +1277,17 @@ function renderPageToCanvas(pageFiles, s) {
   const mt = marginTop * pxPerMm, mb = marginBottom * pxPerMm;
   const ml = marginLeft * pxPerMm, mr = marginRight * pxPerMm;
   const gh = gapH * pxPerMm, gv = gapV * pxPerMm;
-  const sw = (pw - ml - mr - (cols-1)*gh) / cols;
-  const sh = (ph - mt - mb - (rows-1)*gv) / rows;
+  // Per-slot margins: each invoice has its own margin
+  const sw = (pw - cols*(ml+mr) - (cols-1)*gh) / cols;
+  const sh = (ph - rows*(mt+mb) - (rows-1)*gv) / rows;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const si = r * cols + c;
       const f = pageFiles ? pageFiles[si] : null;
-      const sx = ml + c * (sw + gh);
-      const sy = mt + r * (sh + gv);
+      // Per-slot: each slot occupies (image + margin_left + margin_right) width
+      const sx = ml + c * (sw + ml + mr + gh);
+      const sy = mt + r * (sh + mt + mb + gv);
 
       if (f && f.img) {
         ctx.save();
@@ -1162,8 +1339,8 @@ function renderPageToCanvas(pageFiles, s) {
   // Cut lines
   if (s.cutline && (cols>1||rows>1)) {
     ctx.setLineDash([6,4]); ctx.strokeStyle='#94a3b8'; ctx.lineWidth=0.5;
-    for (let r=1;r<rows;r++) { const y=mt+r*sh+(r-0.5)*gv; ctx.beginPath();ctx.moveTo(ml,y);ctx.lineTo(pw-mr,y);ctx.stroke(); }
-    for (let c=1;c<cols;c++) { const x=ml+c*sw+(c-0.5)*gh; ctx.beginPath();ctx.moveTo(x,mt);ctx.lineTo(x,ph-mb);ctx.stroke(); }
+    for (let r=1;r<rows;r++) { const y=r*(sh+mt+mb+gv)-gv/2; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(pw,y);ctx.stroke(); }
+    for (let c=1;c<cols;c++) { const x=c*(sw+ml+mr+gh)-gh/2; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,ph);ctx.stroke(); }
     ctx.setLineDash([]);
   }
 
@@ -1179,7 +1356,7 @@ function renderPageToCanvas(pageFiles, s) {
     ctx.restore();
   }
 
-  return canvas.toDataURL('image/jpeg', 0.95);
+  return canvas.toDataURL('image/png');
 }
 
 // =====================================================
@@ -1308,11 +1485,11 @@ function fallbackPrint(pages, s) {
   expanded.forEach(page => {
     html += `<div class="page">`;
     const mt=s.marginTop,mb=s.marginBottom,ml=s.marginLeft,mr=s.marginRight;
-    const slotW=(s.paperW-ml-mr-(s.cols-1)*s.gapH)/s.cols;
-    const slotH=(s.paperH-mt-mb-(s.rows-1)*s.gapV)/s.rows;
+    const slotW=(s.paperW-s.cols*(ml+mr)-(s.cols-1)*s.gapH)/s.cols;
+    const slotH=(s.paperH-s.rows*(mt+mb)-(s.rows-1)*s.gapV)/s.rows;
     for(let r=0;r<s.rows;r++) for(let c=0;c<s.cols;c++) {
       const f=page[r*s.cols+c];
-      const x=ml+c*(slotW+s.gapH), y=mt+r*(slotH+s.gapV);
+      const x=ml+c*(slotW+ml+mr+s.gapH), y=mt+r*(slotH+mt+mb+s.gapV);
       if(f&&f.previewUrl) {
         const src=S.feat.trimWhite&&f.trimmedUrl?f.trimmedUrl:f.previewUrl;
         html+=`<div class="slot" style="left:${x}mm;top:${y}mm;width:${slotW}mm;height:${slotH}mm"><img src="${src}"></div>`;
@@ -1374,6 +1551,20 @@ function clearSaveDir() {
   toast('已清除保存目录');
 }
 
+// Invoice verification
+async function verifyInvoice() {
+  var url = 'https://inv-veri.chinatax.gov.cn/';
+  if (isTauri && invoke) {
+    try {
+      await invoke('open_url', { url: url });
+    } catch(e) {
+      toast('打开查验网站失败: ' + String(e));
+    }
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
 // Theme switch
 function applyTheme() {
   var theme = document.getElementById('themeMode').value;
@@ -1405,6 +1596,8 @@ function resetSettings() {
   // Reset UI controls
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
+  document.getElementById('customRows').value = 1;
+  document.getElementById('customCols').value = 1;
   document.getElementById('marginTop').value = 5; document.getElementById('marginTopN').value = 5;
   document.getElementById('marginBottom').value = 5; document.getElementById('marginBottomN').value = 5;
   document.getElementById('marginLeft').value = 5; document.getElementById('marginLeftN').value = 5;

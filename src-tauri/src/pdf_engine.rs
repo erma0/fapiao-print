@@ -175,13 +175,39 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
 
-        // Only accept supported formats
-        if !["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif"].contains(&ext.as_str()) {
+        // Only accept supported formats (including OFD)
+        if !["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif", "ofd"].contains(&ext.as_str()) {
             continue;
         }
 
         let metadata = path.metadata().map_err(|e| format!("读取文件信息失败: {}", e))?;
         let size = metadata.len();
+
+        // OFD: extract embedded images from the ZIP archive
+        if ext == "ofd" {
+            match extract_ofd_images(&path_str) {
+                Ok(images) => {
+                    for (idx, img_data_url) in images.iter().enumerate() {
+                        results.push(FileData {
+                            name: if images.len() > 1 {
+                                format!("{}_第{}页.ofd", name.trim_end_matches(".ofd").trim_end_matches(".OFD"), idx + 1)
+                            } else {
+                                name.clone()
+                            },
+                            ext: "png".to_string(), // extracted as PNG
+                            size,
+                            data_url: img_data_url.clone(),
+                            path: None, // no filePath needed, already converted to image
+                        });
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!("OFD extraction failed for {}: {}", name, e);
+                    continue;
+                }
+            }
+        }
 
         let bytes = std::fs::read(path).map_err(|e| format!("读取文件失败 {}: {}", name, e))?;
 
@@ -262,9 +288,9 @@ fn add_image_to_layer(
     let image = Image::from_dynamic_image(img);
 
     // Scale image to fill the page
-    // Assume 96 DPI for screen images, convert to mm
-    let img_w_mm = img.width() as f32 * 25.4 / 96.0;
-    let img_h_mm = img.height() as f32 * 25.4 / 96.0;
+    // Frontend renders at 300 DPI, convert to mm
+    let img_w_mm = img.width() as f32 * 25.4 / 300.0;
+    let img_h_mm = img.height() as f32 * 25.4 / 300.0;
 
     let scale_x = paper_w_mm / img_w_mm;
     let scale_y = paper_h_mm / img_h_mm;
@@ -277,7 +303,7 @@ fn add_image_to_layer(
             scale_x: Some(scale_x),
             scale_y: Some(scale_y),
             rotate: None,
-            dpi: Some(96.0),
+            dpi: Some(300.0),
         },
     );
 
@@ -348,4 +374,76 @@ fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage, String> {
         .map_err(|e| format!("Base64解码失败: {}", e))?;
 
     image::load_from_memory(&bytes).map_err(|e| format!("图片解码失败: {}", e))
+}
+
+// =====================================================
+// OFD Format Support
+// =====================================================
+
+/// Extract embedded images from an OFD file (Chinese electronic invoice format)
+/// OFD is a ZIP archive containing XML page descriptions and image resources.
+/// For electronic invoices, the content is typically a full-page image.
+fn extract_ofd_images(ofd_path: &str) -> Result<Vec<String>, String> {
+    use base64::Engine;
+    use std::io::Read;
+
+    let file = std::fs::File::open(ofd_path)
+        .map_err(|e| format!("打开OFD文件失败: {}", e))?;
+
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("解析OFD ZIP失败: {}", e))?;
+
+    // Strategy: find all image files in the archive and return them
+    // OFD images are typically in paths like:
+    //   - Pages/Page_0/Res/xxx.jpg (per-page resources)
+    //   - Res/xxx.jpg (document-level resources)
+    //   - DocumentRes/xxx.jpg
+    // Common image extensions: jpg, jpeg, png
+    let mut image_entries: Vec<String> = Vec::new();
+
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
+        let name = entry.name().to_string();
+        let lower = name.to_lowercase();
+
+        // Look for image files (not in signature or annotation paths)
+        if (lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png"))
+            && !lower.contains("sign_")
+            && !lower.contains("seal_")
+        {
+            image_entries.push(name);
+        }
+    }
+
+    if image_entries.is_empty() {
+        return Err("OFD文件中未找到图片资源".to_string());
+    }
+
+    // Sort entries to get consistent ordering (page 0, page 1, etc.)
+    image_entries.sort();
+
+    // Read and encode each image
+    let mut results = Vec::new();
+    for entry_name in &image_entries {
+        let mut entry = archive.by_name(entry_name)
+            .map_err(|e| format!("读取OFD图片失败: {}", e))?;
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data)
+            .map_err(|e| format!("读取OFD图片数据失败: {}", e))?;
+
+        // Determine MIME type
+        let lower = entry_name.to_lowercase();
+        let mime = if lower.ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        let data_url = format!("data:{};base64,{}", mime, b64);
+        results.push(data_url);
+    }
+
+    log::info!("OFD extracted {} images from {}", results.len(), ofd_path);
+    Ok(results)
 }

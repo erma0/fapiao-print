@@ -9,8 +9,9 @@
 ## ✨ 功能特性
 
 ### 📥 文件管理
-- **多格式支持**：PDF、JPG、PNG、BMP、WebP、TIFF
+- **多格式支持**：PDF、OFD、JPG、PNG、BMP、WebP、TIFF
 - **智能渲染**：WinRT 原生渲染优先（支持中文系统字体），PDF.js 回退
+- **发票查验**：一键跳转国家税务总局发票查验平台
 - **批量添加**：拖放文件或点击选择，一次添加多张发票
 - **文件排序**：拖拽排序，调整打印顺序
 - **单张设置**：双击发票可单独设置份数和旋转角度
@@ -154,7 +155,7 @@ npm run build
 
 ## 🤖 关于此项目
 
-本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **40+ 轮** 调试迭代。主要攻克的技术难点包括：
+本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **50+ 轮** 调试迭代。主要攻克的技术难点包括：
 
 - Tauri 2.x 文件对话框死锁问题（主线程同步调用导致）
 - WebView2 拖放文件事件失效（`dataTransfer.files` 为空）
@@ -164,6 +165,9 @@ npm run build
 - CSP 安全策略与 PDF.js CDN 回退的兼容
 - WinRT `IBufferByteAccess` COM 接口查询失败（`E_NOINTERFACE`），改用 `DataReader` 读取渲染数据
 - PDF.js CMap 配置，解决中文 CID 编码字体渲染问题
+- OFD 格式解析（ZIP + XML + 图片提取）
+- PDF 画质优化：300 DPI + PNG 无损输出
+- 多发票排版边距独立计算（per-slot margin）
 
 ## 📄 许可证
 

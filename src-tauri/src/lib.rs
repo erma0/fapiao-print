@@ -81,7 +81,17 @@ fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 /// Render PDF pages to images using Windows native API
 #[command]
 fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPage>, String> {
-    pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(200))
+    pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(300))
+}
+
+/// Open a URL in the default browser
+#[command]
+fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        shell_execute("open", &url)?;
+    }
+    Ok(())
 }
 
 // =====================================================
@@ -160,7 +170,7 @@ pub fn run() {
                                     .filter_map(|p| {
                                         let valid_ext = p.extension()
                                             .and_then(|e| e.to_str())
-                                            .map(|e| ["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif"].contains(&e.to_lowercase().as_str()))
+                                            .map(|e| ["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif", "ofd"].contains(&e.to_lowercase().as_str()))
                                             .unwrap_or(false);
                                         if valid_ext { Some(p.to_string_lossy().to_string()) } else { None }
                                     })
@@ -184,6 +194,7 @@ pub fn run() {
             save_pdf,
             get_printers,
             render_pdf_pages,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
