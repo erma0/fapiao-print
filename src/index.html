@@ -155,11 +155,11 @@
       </div>
       <div class="sec">
         <div class="sec-title">🖨 打印设置</div>
-        <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="try{localStorage.setItem('fapiao-print-mode',this.value);}catch(e){}"><option value="dialog">弹出打印对话框</option><option value="direct">直接打印</option></select></div></div>
+        <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="try{localStorage.setItem('fapiao-print-mode',this.value)}catch(e){}"><option value="dialog">弹出打印对话框</option><option value="direct">直接打印</option></select></div></div>
       </div>
       <div class="sec">
         <div class="sec-title">💰 金额统计</div>
-        <div class="row"><label class="lbl">统计模式</label><div class="ctrl"><select id="amtMode" onchange="S.amtMode=this.value;localStorage.setItem('fapiao-amt-mode',this.value);updateAmountSummary()"><option value="tax">含税总价</option><option value="notax">不含税金额</option><option value="both">同时显示</option></select></div></div>
+        <div class="row"><label class="lbl">统计模式</label><div class="ctrl"><select id="amtMode" onchange="S.amtMode=this.value;try{localStorage.setItem('fapiao-amt-mode',this.value)}catch(e){};updateAmountSummary()"><option value="tax">含税总价</option><option value="notax">不含税金额</option><option value="both">同时显示</option></select></div></div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">自动识别发票价税合计（含税）和合计金额（不含税），火车票识别票价。</div>
       </div>
       <div class="sec">
@@ -239,16 +239,13 @@
       <div id="stLayout">1×1</div>
       <div id="stPaper">A4</div>
       <div id="stAmount" style="color:var(--success);font-weight:600"></div>
-      <div style="margin-left:auto">v1.4.0</div>
+      <div style="margin-left:auto">v1.5.0</div>
     </div>
   </main>
 </div>
 
 <!-- Invoice options modal -->
 <div class="modal-bg hidden" id="invModal"><div class="modal"><div class="modal-title">📝 发票选项</div><div id="invModalBody"></div><div class="modal-actions"><button class="btn" onclick="closeInvModal()">取消</button><button class="btn btn-primary" onclick="confirmInvModal()">确认</button></div></div></div>
-
-<!-- Hidden canvas for print rendering -->
-<canvas id="renderCanvas" style="display:none"></canvas>
 
 <!-- Scripts — loaded in order: OCR → Layout → Print → App -->
 <script src="ocr.js"></script>

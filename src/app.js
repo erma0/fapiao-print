@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.4.0 | isTauri:', isTauri);
+console.log('发票批量打印 v1.5.0 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -187,239 +187,60 @@ async function processFiles(files) {
   if (added > 0) toast('已添加 ' + added + ' 张发票，识别中...');
 }
 
-// Load a single File object (browser mode)
-function loadFile(file) {
-  return new Promise(function(resolve) {
-    var ext = file.name.split('.').pop().toLowerCase();
-    var id = 'f' + Date.now() + Math.random().toString(36).slice(2);
-
-    // PDF — render with PDF.js
-    if (ext === 'pdf') {
-      if (!window.pdfjsLib) {
-        toast('PDF.js 尚未加载，请稍后重试');
-        resolve(null); return;
-      }
-      var url = URL.createObjectURL(file);
-      pdfjsLib.getDocument({ url: url, cMapUrl: CMAP_BASE_URL, cMapPacked: true, standardFontDataUrl: STD_FONT_BASE_URL, disableFontFace: true, useSystemFonts: false }).promise.then(async function(pdf) {
-        var results = [];
-        for (var p = 1; p <= pdf.numPages; p++) {
-          var page = await pdf.getPage(p);
-          var vp1 = page.getViewport({ scale: 1.0 });
-          var longestSide = Math.max(vp1.width, vp1.height);
-          var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
-          targetDpi = Math.min(targetDpi, 1200);
-          var vp = page.getViewport({ scale: targetDpi / 72 });
-          var canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-          var previewUrl = canvas.toDataURL('image/png');
-          var img = new Image(); img.src = previewUrl;
-          await new Promise(function(r) { img.onload = r; });
-          var textContent = await page.getTextContent();
-          var info = extractInvoiceInfo(textContent);
-          var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
-          results.push(createFileObj({
-            id: id + '_p' + p,
-            name: pdf.numPages > 1 ? file.name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : file.name,
-            size: file.size, type: 'pdf', previewUrl: previewUrl,
-            img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax,
-            amount: effAmt, renderDpi: targetDpi,
-            sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
-            _ocrText: info._ocrText
-          }));
-        }
-        URL.revokeObjectURL(url);
-        // OCR for pages that text extraction missed
-        for (var p = 0; p < results.length; p++) {
-          if (results[p].amount > 0) continue;
-          await applyOcr(results[p], results[p].previewUrl);
-        }
-        resolve(results);
-      }).catch(function(err) {
-        console.error('PDF load error:', err);
-        toast('PDF 加载失败: ' + file.name);
-        resolve(null);
-      });
-    }
-    // Image files
-    else if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif'].indexOf(ext) >= 0) {
-      var reader = new FileReader();
-      reader.onload = async function(e) {
-        var img = new Image(); img.src = e.target.result;
-        await new Promise(function(r) { img.onload = r; });
-        var fileObj = createFileObj({
-          id: id, name: file.name, size: file.size, type: ext,
-          previewUrl: e.target.result, img: img
-        });
-        await applyOcr(fileObj, e.target.result);
-        resolve(fileObj);
-      };
-      reader.onerror = function() { toast('读取失败: ' + file.name); resolve(null); };
-      reader.readAsDataURL(file);
-    }
-    else if (ext === 'ofd') {
-      toast('OFD 格式请使用桌面版打开');
-      resolve(null);
-    }
-    else {
-      toast('不支持的格式: ' + ext);
-      resolve(null);
-    }
-  });
-}
-
-// Load file from base64 data URL (returned by Rust backend)
-function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
-  return new Promise(function(resolve) {
-    var id = 'f' + Date.now() + Math.random().toString(36).slice(2);
-
-    // PDF — try Windows native rendering first, fallback to PDF.js
-    if (ext === 'pdf') {
-      if (isTauri && invoke && filePath) {
-        console.log('[PDF] Trying WinRT native rendering for:', filePath);
-        invoke('render_pdf_pages', { pdfPath: filePath, dpi: PDF_RENDER_DPI }).then(async function(pages) {
-          if (pages && pages.length > 0) {
-            console.log('[PDF] WinRT rendering succeeded, pages:', pages.length);
-            var results = [];
-            for (var p = 0; p < pages.length; p++) {
-              var pg = pages[p];
-              var img = new Image(); img.src = pg.imageDataUrl;
-              await new Promise(function(r) { img.onload = r; });
-              results.push(createFileObj({
-                id: id + '_p' + (p + 1),
-                name: pages.length > 1 ? name.replace(/\.pdf$/i, '') + '_第' + (p + 1) + '页.pdf' : name,
-                size: size, type: 'pdf', previewUrl: pg.imageDataUrl,
-                img: img, renderDpi: pg.renderDpi || PDF_RENDER_DPI
-              }));
-            }
-            // OCR for pages without amount
-            for (var p = 0; p < results.length; p++) {
-              if (results[p].amount > 0) continue;
-              await applyOcr(results[p], results[p].previewUrl);
-            }
-            // Fallback: try PDF.js text extraction for pages OCR missed
-            if (dataUrl) {
-              var noAmtPages = results.filter(function(r) { return r.amount <= 0; });
-              var noSellerPages = results.filter(function(r) { return !r.sellerName && !r._isTicket; });
-              if (noAmtPages.length > 0 || noSellerPages.length > 0) {
-                try {
-                  var pdfInfoList = await tryExtractPdfInfo(dataUrl, pages.length);
-                  for (var k = 0; k < pdfInfoList.length && k < results.length; k++) {
-                    var pi = pdfInfoList[k];
-                    var piEffAmt = pi.amountTax > 0 ? pi.amountTax : pi.amountNoTax;
-                    if (piEffAmt > 0 && results[k].amount <= 0) {
-                      results[k].amount = piEffAmt;
-                      results[k].amountTax = pi.amountTax;
-                      results[k].amountNoTax = pi.amountNoTax;
-                    }
-                    if (pi.isTicket) results[k]._isTicket = true;
-                    if (!pi.isTicket && !results[k]._isTicket) {
-                      if (pi.sellerName && !results[k].sellerName) results[k].sellerName = pi.sellerName;
-                      if (pi.sellerCreditCode && !results[k].sellerCreditCode) results[k].sellerCreditCode = pi.sellerCreditCode;
-                    }
-                  }
-                } catch(e) { console.warn('[信息提取] PDF.js提取失败:', e); }
-              }
-            }
-            resolve(results.length === 1 ? results[0] : results);
-            return;
-          }
-          console.warn('[PDF] WinRT returned empty, falling back to PDF.js');
-          loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
-        }).catch(function(err) {
-          console.error('[PDF] WinRT rendering failed, falling back to PDF.js:', err);
-          loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
-        });
-        return;
-      }
-      loadPdfFromDataUrl(name, dataUrl, size, id, resolve);
-    }
-    // Image files
-    else {
-      var img = new Image(); img.src = dataUrl;
-      img.onload = async function() {
-        var result = createFileObj({
-          id: id, name: name, size: size, type: ext,
-          previewUrl: dataUrl, img: img
-        });
-        await applyOcr(result, dataUrl);
-        resolve(result);
-      };
-      img.onerror = function() { toast('图片加载失败: ' + name); resolve(null); };
-    }
-  });
-}
-
-// PDF.js fallback for loading PDF from data URL
-function loadPdfFromDataUrl(name, dataUrl, size, id, resolve) {
-  if (!window.pdfjsLib) {
-    toast('PDF.js 尚未加载，请稍后重试');
-    resolve(null); return;
-  }
-  var raw = dataUrlToUint8Array(dataUrl);
-  pdfjsLib.getDocument({ data: raw, cMapUrl: CMAP_BASE_URL, cMapPacked: true, standardFontDataUrl: STD_FONT_BASE_URL, disableFontFace: true, useSystemFonts: false }).promise.then(async function(pdf) {
-    var results = [];
-    for (var p = 1; p <= pdf.numPages; p++) {
-      var page = await pdf.getPage(p);
-      var vp1 = page.getViewport({ scale: 1.0 });
-      var longestSide = Math.max(vp1.width, vp1.height);
-      var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
-      targetDpi = Math.min(targetDpi, 1200);
-      var vp = page.getViewport({ scale: targetDpi / 72 });
-      var canvas = document.createElement('canvas');
-      canvas.width = vp.width; canvas.height = vp.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-      var previewUrl = canvas.toDataURL('image/png');
-      var img = new Image(); img.src = previewUrl;
-      await new Promise(function(r) { img.onload = r; });
-      var textContent = await page.getTextContent();
-      var info = extractInvoiceInfo(textContent);
-      var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
-      results.push(createFileObj({
-        id: id + '_p' + p,
-        name: pdf.numPages > 1 ? name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : name,
-        size: size, type: 'pdf', previewUrl: previewUrl,
-        img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax,
-        amount: effAmt, renderDpi: targetDpi,
-        sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
-        _ocrText: info._ocrText
-      }));
-    }
-    // OCR for pages that text extraction missed
-    for (var p = 0; p < results.length; p++) {
-      if (results[p].amount > 0) continue;
-      await applyOcr(results[p], results[p].previewUrl);
-    }
-    resolve(results.length === 1 ? results[0] : results);
-  }).catch(function(err) {
-    console.error('PDF load error:', err);
-    toast('PDF 加载失败: ' + name);
-    resolve(null);
-  });
-}
+// NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl() removed in v1.4.1
+// Replaced by Fast variants (loadFileFast, loadFileFromDataUrlFast, loadPdfFromDataUrlFast)
+// which show preview first and run OCR in background for better UX.
 
 // =====================================================
 // Fast loading functions — show preview first, OCR in background
 // =====================================================
 
 /**
- * Apply OCR without blocking — resolves immediately, updates UI when done
+ * Cleanup function called by Rust before closing the window.
+ * Clears OCR queues and sets closing flag to prevent new work.
  */
+window._tauriCleanup = function() {
+  window.__TAURI_CLOSING__ = true;
+  _ocrQueue = [];
+  console.log('[Cleanup] OCR queue cleared, closing flag set');
+};
+var _ocrQueue = [];
+var _ocrRunning = 0;
+var _ocrMaxConcurrent = 2;
+
+function _drainOcrQueue() {
+  while (_ocrRunning < _ocrMaxConcurrent && _ocrQueue.length > 0) {
+    var task = _ocrQueue.shift();
+    _ocrRunning++;
+    task().then(function() {
+      _ocrRunning--;
+      _drainOcrQueue();
+    }).catch(function() {
+      _ocrRunning--;
+      _drainOcrQueue();
+    });
+  }
+}
+
 function applyOcrAsync(fileObj, dataUrl) {
-  if (!isTauri || !invoke) return;
-  applyOcr(fileObj, dataUrl).then(function() {
-    updateFileItem(fileObj);
-    updateAmountSummary();
-  }).catch(function(e) {
-    console.warn('[OCR] 后台识别失败:', e);
+  if (!isTauri || !invoke || window.__TAURI_CLOSING__) return;
+  _ocrQueue.push(function() {
+    return applyOcr(fileObj, dataUrl).then(function() {
+      updateFileItem(fileObj);
+      updateAmountSummary();
+    }).catch(function(e) {
+      console.warn('[OCR] 后台识别失败:', e);
+    });
   });
+  _drainOcrQueue();
 }
 
 /**
  * Background OCR for PDF pages + PDF.js text extraction fallback.
- * Does NOT await — fires and forgets, updates UI incrementally.
+ * Uses OCR queue for throttling. Updates UI incrementally.
  */
 function backgroundOcrPdf(results, dataUrl) {
+  if (window.__TAURI_CLOSING__) return;
   if (!isTauri || !invoke) {
     // Non-Tauri: try PDF.js text extraction as the only source
     if (dataUrl) {
@@ -447,18 +268,21 @@ function backgroundOcrPdf(results, dataUrl) {
     return;
   }
 
-  // Tauri: fire OCR for pages missing info
+  // Tauri: use throttled OCR queue for pages missing info
   for (var p = 0; p < results.length; p++) {
     if (results[p].amount > 0 && results[p].sellerName) continue;
     (function(idx) {
-      applyOcr(results[idx], results[idx].previewUrl).then(function() {
-        updateFileItem(results[idx]);
-        updateAmountSummary();
-      }).catch(function(e) {
-        console.warn('[OCR] PDF页后台识别失败:', e);
+      _ocrQueue.push(function() {
+        return applyOcr(results[idx], results[idx].previewUrl).then(function() {
+          updateFileItem(results[idx]);
+          updateAmountSummary();
+        }).catch(function(e) {
+          console.warn('[OCR] PDF页后台识别失败:', e);
+        });
       });
     })(p);
   }
+  _drainOcrQueue();
 
   // Also try PDF.js text extraction for seller info (WinRT rendering doesn't extract text)
   if (dataUrl) {
@@ -717,9 +541,12 @@ function renderFileList() {
     var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : '';
     var sb = f.sellerName ? '<span class="seller-badge" title="' + escHtml(f.sellerCreditCode || '') + '">' + escHtml(f.sellerName.length > 16 ? f.sellerName.substring(0, 16) + '\u2026' : f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
+    // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
+    var safePreviewUrl = escHtml(f.previewUrl || '');
+    var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     return '<div class="file-item" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
-      '<div class="file-thumb">' + (f.previewUrl ? '<img src="' + f.previewUrl + '">' : '\uD83D\uDCC4') + '<div class="type-badge">' + (f.type === 'jpeg' ? 'jpg' : f.type) + '</div></div>' +
+      '<div class="file-thumb">' + (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4') + '<div class="type-badge">' + safeType + '</div></div>' +
       '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + '</div>' + (sb ? '<div class="file-seller">' + sb + '</div>' : '<div class="file-seller" style="display:none"></div>') + '</div>' +
       '<div style="display:flex;gap:2px"><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>' +
     '</div>';
@@ -939,7 +766,6 @@ async function processTrim() {
     toast('裁剪失败: ' + String(err));
   }
 }
-// trimImg() removed — now handled by Rust backend via `trim_image` command (10-50x faster)
 
 // =====================================================
 // Get settings

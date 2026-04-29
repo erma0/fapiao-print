@@ -34,7 +34,11 @@ html.dark select, html.dark input[type="number"], html.dark input[type="text"] {
 }
 html.dark select option { background: #16213e; color: #e2e8f0; }
 html.dark .upload-zone { background: #1a1a2e; }
+html.dark .file-item { border-bottom-color: #2a2a4a; }
 html.dark .file-item:hover { background: #1e2a4a; }
+html.dark .file-check { background: #1a1a2e; border-color: #3a3a5a; }
+html.dark .file-check.checked { background: #5b8def; border-color: #5b8def; }
+html.dark .file-header { background: #16213e; border-bottom-color: #2a2a4a; }
 html.dark .btn { background: #1e2a4a; border-color: #2a2a4a; color: #e2e8f0; }
 html.dark .btn:hover { background: #2a3a5a; }
 html.dark .btn-primary { background: #5b8def; border-color: #5b8def; color: white; }
@@ -52,6 +56,21 @@ html.dark .modal { background: #16213e; }
 html.dark .loading { background: rgba(26,26,46,0.92); }
 html.dark .statusbar { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .empty-state { color: #636e80; }
+html.dark input[type="range"] { accent-color: #5b8def; }
+html.dark .file-thumb { background: #1a1a2e; border-color: #2a2a4a; }
+html.dark .copy-badge { background: #3a3520; color: #d69e2e; }
+html.dark .amt-badge { background: #1a3a36; color: #38b2ac; }
+html.dark .seller-badge { background: #1e2a4a; color: #a0aec0; }
+html.dark .file-summary { background: #16213e; border-top-color: #2a2a4a; }
+html.dark .sec { border-bottom-color: #2a2a4a; }
+html.dark .tgl { background: #3a3a5a; }
+html.dark .tgl.on { background: #5b8def; }
+html.dark .page-nav { background: #16213e; border-top-color: #2a2a4a; }
+html.dark .page-dot { background: #3a3a5a; }
+html.dark .page-dot.active { background: #5b8def; }
+html.dark .modal-bg { background: rgba(0,0,0,0.6); }
+html.dark input[type="color"] { border-color: #2a2a4a; background: #1a1a2e; }
+html.dark ::-webkit-scrollbar-thumb { background: #3a3a5a; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {

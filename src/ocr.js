@@ -311,14 +311,6 @@ function extractInvoiceInfo(textContent) {
 }
 
 /**
- * Legacy wrapper that only returns amounts
- */
-function extractInvoiceAmount(textContent) {
-  var info = extractInvoiceInfo(textContent);
-  return { amountTax: info.amountTax, amountNoTax: info.amountNoTax };
-}
-
-/**
  * Extract invoice info from all pages of a PDF (via data URL).
  * Returns array of full info objects (amounts + seller).
  */

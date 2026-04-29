@@ -86,10 +86,13 @@ async function doPrint() {
 
     if (isTauri && invoke) {
       document.getElementById('loadingText').textContent = '正在生成PDF，请稍候...';
+      // Get system temp directory instead of hardcoded path
+      var tempDir = await invoke('get_temp_dir');
+      var outputPath = tempDir + '\\fapiao_print_output.pdf';
       var printMode = document.getElementById('printMode').value;
       var result = await invoke('generate_pdf_from_layout', {
         request: layoutReq,
-        outputPath: 'C:\\temp\\fapiao_print_output.pdf',
+        outputPath: outputPath,
         directPrint: printMode === 'direct',
         printerName: s.printerName || null
       });
@@ -158,9 +161,9 @@ async function savePdf() {
       hideLoading();
       if (result.success) {
         toast('\u2705 PDF已保存: ' + result.pdfPath);
-        // Auto-open
+        // Auto-open using ShellExecute (more reliable than open_url + file:///)
         if (S.feat.autoOpenPdf && result.pdfPath) {
-          try { invoke('open_url', { url: 'file:///' + result.pdfPath.replace(/\\/g, '/') }); } catch(e) {}
+          try { invoke('open_file', { path: result.pdfPath }); } catch(e) {}
         }
       } else {
         toast('PDF生成失败：' + result.message);
@@ -195,7 +198,7 @@ function fallbackPrint(files, s) {
       var x = ml + c * (slotW + ml + mr + s.gapH), y = mt + r * (slotH + mt + mb + s.gapV);
       if (f && f.previewUrl) {
         var src = S.feat.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
-        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + src + '"></div>';
+        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + escHtml(src) + '"></div>';
       }
     }
     html += '</div>';

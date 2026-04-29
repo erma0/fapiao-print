@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::BufWriter;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Rendering DPI — must match frontend PDF_RENDER_DPI constant
 pub const RENDER_DPI: u32 = 300;
 
+/// Conversion factor: 1 mm = 2.834646 pt (72 pt per inch / 25.4 mm per inch)
+const MM_TO_PT: f32 = 72.0 / 25.4;
+
 /// Global shutdown flag — checked by long-running COM operations to abort early.
-/// Set to true when the user clicks the close button, before TerminateProcess.
+/// Set to true when the user clicks the close button, before graceful window close.
 pub static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 // =====================================================
@@ -46,18 +47,6 @@ impl Drop for ComGuard {
 // =====================================================
 // Types
 // =====================================================
-
-/// Request from frontend: each page is a rendered base64 image
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PdfRequest {
-    /// Rendered page images as base64 data URLs
-    pub pages: Vec<String>,
-    /// Paper width in mm
-    pub paper_w: f32,
-    /// Paper height in mm
-    pub paper_h: f32,
-}
 
 /// Result of PDF generation / printing
 #[derive(Debug, Serialize)]
@@ -143,6 +132,10 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
     let mut results = Vec::new();
 
     for i in 0..page_count {
+        // Check shutdown flag frequently so we can abort early
+        if SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return Err("应用正在关闭，渲染已中止".to_string());
+        }
         let page = doc.GetPage(i).map_err(|e| format!("获取第{}页失败: {}", i + 1, e))?;
 
         // Get page size via Size() which returns Foundation::Size { Width, Height }
@@ -173,6 +166,12 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
 
         // Render to stream
         let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败: {}", e))?;
+
+        // Check shutdown before starting render
+        if SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return Err("应用正在关闭，渲染已中止".to_string());
+        }
+
         page.RenderWithOptionsToStreamAsync(&stream, &options)
             .map_err(|e| format!("创建渲染操作失败: {}", e))?
             .get()
@@ -252,7 +251,9 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
             match extract_ofd_images(&path_str) {
                 Ok(images) => {
                     for (idx, (img_data_url, img_ext)) in images.iter().enumerate() {
-                        let base_name = if name.to_uppercase().ends_with(".OFD") {
+                        let base_name = if name.to_uppercase().ends_with(".OFD") && name.len() > 4 {
+                            &name[..name.len()-4]
+                        } else if name.len() > 4 {
                             &name[..name.len()-4]
                         } else {
                             &name
@@ -315,81 +316,7 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
 }
 
 // =====================================================
-// PDF Generation from page images
-// =====================================================
-
-pub fn generate_pdf_from_pages(request: &PdfRequest, output_path: &std::path::Path) -> Result<(), String> {
-    use printpdf::*;
-
-    let paper_w = Mm(request.paper_w);
-    let paper_h = Mm(request.paper_h);
-
-    if request.pages.is_empty() {
-        return Err("没有页面数据".to_string());
-    }
-
-    // Decode first page image
-    let first_img = decode_base64_image(&request.pages[0])?;
-
-    let (doc, page1_idx, layer1_idx) = PdfDocument::new(
-        "发票打印",
-        paper_w,
-        paper_h,
-        "Layer 1",
-    );
-
-    // Place first image
-    add_image_to_layer(&doc.get_page(page1_idx).get_layer(layer1_idx), &first_img, request.paper_w, request.paper_h)?;
-
-    // Add remaining pages
-    for (i, page_data) in request.pages.iter().skip(1).enumerate() {
-        let img = decode_base64_image(page_data)?;
-        let (page_idx, layer_idx) = doc.add_page(paper_w, paper_h, &format!("Layer {}", i + 2));
-        add_image_to_layer(&doc.get_page(page_idx).get_layer(layer_idx), &img, request.paper_w, request.paper_h)?;
-    }
-
-    // Save
-    let mut out = BufWriter::new(File::create(output_path).map_err(|e| format!("创建文件失败: {}", e))?);
-    doc.save(&mut out).map_err(|e| format!("保存PDF失败: {}", e))?;
-
-    Ok(())
-}
-
-fn add_image_to_layer(
-    layer: &printpdf::PdfLayerReference,
-    img: &image::DynamicImage,
-    paper_w_mm: f32,
-    paper_h_mm: f32,
-) -> Result<(), String> {
-    use printpdf::*;
-
-    let image = Image::from_dynamic_image(img);
-
-    // Scale image to fill the page
-    // Frontend renders at RENDER_DPI, convert to mm
-    let img_w_mm = img.width() as f32 * 25.4 / RENDER_DPI as f32;
-    let img_h_mm = img.height() as f32 * 25.4 / RENDER_DPI as f32;
-
-    let scale_x = paper_w_mm / img_w_mm;
-    let scale_y = paper_h_mm / img_h_mm;
-
-    image.add_to_layer(
-        layer.clone(),
-        ImageTransform {
-            translate_x: Some(Mm(0.0)),
-            translate_y: Some(Mm(0.0)),
-            scale_x: Some(scale_x),
-            scale_y: Some(scale_y),
-            rotate: None,
-            dpi: Some(RENDER_DPI as f32),
-        },
-    );
-
-    Ok(())
-}
-
-// =====================================================
-// List Printers (Windows)
+// PDF Generation from layout request (only remaining path)
 // =====================================================
 
 #[cfg(target_os = "windows")]
@@ -451,7 +378,7 @@ pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
 // Helpers
 // =====================================================
 
-fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage, String> {
+pub(crate) fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage, String> {
     use base64::Engine;
 
     let base64_data = if data_url.contains(',') {
@@ -503,6 +430,11 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
     let stream = InMemoryRandomAccessStream::new()
         .map_err(|e| format!("创建流失败: {}", e))?;
 
+    // Check shutdown before starting OCR
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭，OCR已中止".to_string());
+    }
+
     let writer = windows::Storage::Streams::DataWriter::CreateDataWriter(&stream)
         .map_err(|e| format!("创建DataWriter失败: {}", e))?;
 
@@ -537,10 +469,16 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         .map_err(|e| format!("获取位图失败: {}", e))?;
 
     // Create OCR engine with user profile languages (includes Chinese on Chinese Windows)
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭，OCR已中止".to_string());
+    }
     let engine = OcrEngine::TryCreateFromUserProfileLanguages()
         .map_err(|e| format!("创建OCR引擎失败: {}（请确保系统已安装中文语言包）", e))?;
 
     // Run OCR
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭，OCR已中止".to_string());
+    }
     let result = engine.RecognizeAsync(&bitmap)
         .map_err(|e| format!("创建OCR识别操作失败: {}", e))?
         .get()
@@ -722,20 +660,20 @@ pub fn trim_white_edges(img: &image::DynamicImage, threshold: u8) -> image::Dyna
 
     let cw = right - left + 1;
     let ch = bottom - top + 1;
-    let cropped: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
-        rgba.crop_imm(left, top, cw, ch).to_image();
-    image::DynamicImage::ImageRgba8(cropped)
+    let cropped = image::imageops::crop_imm(&rgba, left, top, cw, ch);
+    image::DynamicImage::from(cropped.to_image())
 }
 
 // =====================================================
 // Layout Rendering (JS canvas → Rust)
 // =====================================================
 
-use serde::{Deserialize, Serialize};
-
 /// Settings for layout rendering — mirrors JS getSettings() output.
+/// Fields used only for deserialization from JS (border/number/watermark rendered in preview only)
+/// are allowed to be dead code since they're needed for serde but not used in Rust PDF generation.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct RenderSettings {
     pub paper_w: f32,
     pub paper_h: f32,
@@ -765,8 +703,11 @@ pub struct RenderSettings {
 }
 
 /// A file image with its metadata — sent from JS.
+/// ow/oh/rotation are used by JS for layout decisions but not directly by Rust
+/// (Rust gets rotation from SlotSpec and dimensions from decoded image).
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct FileSpec {
     pub data_url: String,
     pub ow: u32,
@@ -836,81 +777,139 @@ fn calculate_layout_mm(settings: &RenderSettings) -> (Vec<LayoutSlotMm>, f32, f3
     (slots, pw, ph)
 }
 
-/// Decode a base64 data URL to DynamicImage.
-fn decode_file_image(data_url: &str) -> Result<image::DynamicImage, String> {
-    decode_base64_image(data_url)
-}
-
 /// Apply grayscale or B&W conversion to an image.
 fn apply_color_mode(img: image::DynamicImage, mode: &str) -> image::DynamicImage {
     match mode {
         "grayscale" => {
             let gray = img.to_luma8();
-            let rgba = image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
-                let p = gray.get_pixel(x, y);
-                image::Rgba([p[0], p[0], p[0], 255])
-            });
-            image::DynamicImage::ImageRgba8(rgba)
+            image::DynamicImage::from(gray)
         }
         "bw" => {
             let gray = img.to_luma8();
-            let rgba = image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
+            let bw = image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
                 let p = gray.get_pixel(x, y);
-                let v = if p[0] > 128 { 255 } else { 0 };
-                image::Rgba([v, v, v, 255])
+                let v = if p[0] > 128 { 255u8 } else { 0u8 };
+                image::Luma([v])
             });
-            image::DynamicImage::ImageRgba8(rgba)
+            image::DynamicImage::from(bw)
         }
         _ => img,
     }
 }
 
-/// Render a single page: add all slot images to the PDF page.
-fn render_one_page(
-    doc: &printpdf::PdfDocument,
-    page_idx: printpdf::indices::PdfPageIndex,
-    layer_idx: printpdf::indices::PdfLayerIndex,
-    page_spec: &PageSpec,
+/// Cached XObject info: image dimensions in mm + registered XObjectId.
+struct CachedXobj {
+    iw_mm: f32,
+    ih_mm: f32,
+    xobj_id: printpdf::XObjectId,
+}
+
+/// Decode all unique images (base64 → DynamicImage), apply trim + color mode.
+/// Rotation is NOT applied here — it's per-slot and handled in build_page_ops.
+/// Returns decoded images indexed by file_index.
+fn decode_images(
     files: &[FileSpec],
     settings: &RenderSettings,
-    slot_positions: &[LayoutSlotMm],
-) -> Result<(), String> {
-    use printpdf::*;
+) -> Vec<Option<image::DynamicImage>> {
+    let mut decoded: Vec<Option<image::DynamicImage>> = Vec::with_capacity(files.len());
 
-    let layer = doc.get_page(page_idx).get_layer(layer_idx);
-
-    for (slot_idx, slot_spec) in page_spec.slots.iter().enumerate() {
-        let file_idx = match slot_spec.file_index {
-            Some(idx) if idx < files.len() => idx,
-            _ => continue,
+    for file_spec in files {
+        let mut img = match decode_base64_image(&file_spec.data_url) {
+            Ok(i) => i,
+            Err(e) => {
+                log::warn!("Image decode failed: {}", e);
+                decoded.push(None);
+                continue;
+            }
         };
-        let file_spec = &files[file_idx];
 
-        // Decode image
-        let mut img = decode_file_image(&file_spec.data_url)?;
-        let rot = slot_spec.rotation;
-
-        // Apply trim
+        // Apply trim (global setting, not per-slot)
         if settings.trim_white.unwrap_or(false) {
             img = trim_white_edges(&img, 245);
         }
 
-        // Apply rotation (90° multiples)
-        img = match ((rot % 360) + 360) % 360 {
-            90  => image::DynamicImage::ImageRgba8(image::imageops::rotate90(&img.to_rgba8())),
-            180 => image::DynamicImage::ImageRgba8(image::imageops::rotate180(&img.to_rgba8())),
-            270 => image::DynamicImage::ImageRgba8(image::imageops::rotate270(&img.to_rgba8())),
-            _   => img,
-        };
-
-        // Apply color mode
+        // Apply color mode (global setting, not per-slot)
         img = apply_color_mode(img, &settings.color_mode);
 
-        let (iw, ih) = (img.width(), img.height());
+        decoded.push(Some(img));
+    }
 
-        // Compute draw dimensions in mm at RENDER_DPI
-        let iw_mm = iw as f32 * 25.4 / RENDER_DPI as f32;
-        let ih_mm = ih as f32 * 25.4 / RENDER_DPI as f32;
+    decoded
+}
+
+/// Get or create a cached XObject for (file_index, rotation).
+/// Decoded images are rotated, converted to RawImage, and registered once per unique combo.
+fn get_cached_xobj(
+    doc: &mut printpdf::PdfDocument,
+    cache: &mut std::collections::HashMap<(usize, i32), CachedXobj>,
+    file_idx: usize,
+    rotation: i32,
+    decoded: &[Option<image::DynamicImage>],
+) -> Option<CachedXobj> {
+    let key = (file_idx, rotation);
+
+    if let Some(cached) = cache.get(&key) {
+        return Some(CachedXobj {
+            iw_mm: cached.iw_mm,
+            ih_mm: cached.ih_mm,
+            xobj_id: cached.xobj_id.clone(),
+        });
+    }
+
+    let img = decoded[file_idx].as_ref()?;
+
+    // Apply rotation to a clone of the decoded image
+    let rotated = match ((rotation % 360) + 360) % 360 {
+        90  => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _   => img.clone(),
+    };
+
+    let (iw, ih) = (rotated.width(), rotated.height());
+    let iw_mm = iw as f32 * 25.4 / RENDER_DPI as f32;
+    let ih_mm = ih as f32 * 25.4 / RENDER_DPI as f32;
+
+    let raw_image = match printpdf::RawImage::from_dynamic_image(rotated) {
+        Ok(ri) => ri,
+        Err(e) => {
+            log::warn!("RawImage conversion failed for file {} rot {}: {}", file_idx, rotation, e);
+            return None;
+        }
+    };
+    let xobj_id = doc.add_image(&raw_image);
+
+    let cached = CachedXobj { iw_mm, ih_mm, xobj_id: xobj_id.clone() };
+    cache.insert(key, cached);
+
+    Some(CachedXobj { iw_mm, ih_mm, xobj_id })
+}
+
+/// Build page operations for one page using decoded images + XObject cache.
+fn build_page_ops(
+    doc: &mut printpdf::PdfDocument,
+    page_spec: &PageSpec,
+    settings: &RenderSettings,
+    slot_positions: &[LayoutSlotMm],
+    decoded: &[Option<image::DynamicImage>],
+    xobj_cache: &mut std::collections::HashMap<(usize, i32), CachedXobj>,
+) -> Vec<printpdf::Op> {
+    let mut ops = Vec::new();
+
+    for (slot_idx, slot_spec) in page_spec.slots.iter().enumerate() {
+        let file_idx = match slot_spec.file_index {
+            Some(idx) if idx < decoded.len() && decoded[idx].is_some() => idx,
+            _ => continue,
+        };
+
+        let rotation = slot_spec.rotation;
+        let cached = match get_cached_xobj(doc, xobj_cache, file_idx, rotation, decoded) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let iw_mm = cached.iw_mm;
+        let ih_mm = cached.ih_mm;
 
         // Compute scale to fit in slot
         let (scale_x, scale_y) = match settings.fit_mode.as_str() {
@@ -921,8 +920,9 @@ fn render_one_page(
             }
             "original" => (1.0, 1.0),
             "custom" => {
-                let ref_dim = slot_positions[slot_idx].w_mm.min(slot_positions[slot_idx].h_mm);
-                let s = ref_dim / iw_mm * settings.custom_scale;
+                let contain_s = (slot_positions[slot_idx].w_mm / iw_mm)
+                    .min(slot_positions[slot_idx].h_mm / ih_mm);
+                let s = contain_s * settings.custom_scale;
                 (s, s)
             }
             _ => {
@@ -941,67 +941,24 @@ fn render_one_page(
         let offset_y_mm = slot_positions[slot_idx].y_mm
             + (slot_positions[slot_idx].h_mm - draw_h_mm) / 2.0;
 
-        // The image's natural size in PDF at RENDER_DPI:
-        //   iw_px → iw_mm = iw * 25.4 / RENDER_DPI
-        // We want to scale it to draw_w_mm:
-        //   scale_for_pdf = draw_w_mm / iw_mm
-        // But printpdf applies: natural_size * dpi_scale * transform_scale
-        // where natural_size at dpi=D: DPI_inches * 25.4 mm
-        // Actually, printpdf's ImageTransform with dpi=Some(d):
-        //   rendered_width_mm = img_width_px / d * 25.4 * scale_x
-        // So to get draw_w_mm: scale_x = draw_w_mm / (iw as f32 / RENDER_DPI as f32 * 25.4)
-        // Which is exactly: scale_x = draw_w_mm / iw_mm
-        // And we already computed that!
+        // Convert mm to Pt — XObjectTransform uses Pt
+        let offset_x_pt = offset_x_mm * MM_TO_PT;
+        let offset_y_pt = offset_y_mm * MM_TO_PT;
 
-        let pdf_image = Image::from_dynamic_image(&img);
-        pdf_image.add_to_layer(
-            layer.clone(),
-            ImageTransform {
-                translate_x: Some(Mm(offset_x_mm)),
-                translate_y: Some(Mm(offset_y_mm)),
+        ops.push(printpdf::Op::UseXobject {
+            id: cached.xobj_id.clone(),
+            transform: printpdf::XObjectTransform {
+                translate_x: Some(printpdf::Pt(offset_x_pt)),
+                translate_y: Some(printpdf::Pt(offset_y_pt)),
                 scale_x: Some(scale_x),
                 scale_y: Some(scale_y),
-                rotate: None,
                 dpi: Some(RENDER_DPI as f32),
+                rotate: None,
             },
-        );
-
-        // Number badge
-        if settings.number {
-            let num_str = (slot_idx + 1).to_string();
-            // Position at top-right of slot (convert to bottom-left)
-            let num_x_mm = slot_positions[slot_idx].x_mm + slot_positions[slot_idx].w_mm - 5.0;
-            let num_y_mm = slot_positions[slot_idx].y_mm + slot_positions[slot_idx].h_mm - 3.0;
-            layer.use_text(
-                num_str,
-                11.0,
-                Mm(num_x_mm),
-                Mm(num_y_mm),
-                printpdf::IndirectFontRef::default(),
-            );
-        }
+        });
     }
 
-    // Watermark
-    if settings.watermark {
-        if let Some(ref text) = settings.watermark_text {
-            let center_x = settings.paper_w / 2.0;
-            let center_y = settings.paper_h / 2.0;
-            // Note: printpdf's use_text doesn't support rotation easily.
-            // For rotated text, we'd need to use a transformation matrix or
-            // accept un-rotated watermark text.
-            // For now, add un-rotated text at center.
-            layer.use_text(
-                text.clone(),
-                48.0,
-                Mm(center_x - 40.0),
-                Mm(center_y),
-                printpdf::IndirectFontRef::default(),
-            );
-        }
-    }
-
-    Ok(())
+    ops
 }
 
 /// Generate PDF from layout request (files + pages + settings).
@@ -1010,48 +967,50 @@ pub fn generate_pdf_from_layout(
     request: &LayoutRenderRequest,
     output_path: &std::path::Path,
 ) -> Result<(), String> {
-    use printpdf::*;
-
     if request.pages.is_empty() {
         return Err("没有页面数据".to_string());
     }
 
     let (slot_positions, pw, ph) = calculate_layout_mm(&request.settings);
 
-    // Create PDF document
-    let (doc, page1_idx, layer1_idx) = PdfDocument::new(
-        "发票打印",
-        Mm(pw),
-        Mm(ph),
-        "Layer 1",
-    );
+    // Create PDF document (new API: no page dimensions at creation time)
+    let mut doc = printpdf::PdfDocument::new("发票打印");
 
-    for (page_idx, page_spec) in request.pages.iter().enumerate() {
-        let (p_idx, l_idx) = if page_idx == 0 {
-            (page1_idx, layer1_idx)
-        } else {
-            let (pi, li) = doc.add_page(Mm(pw), Mm(ph), &format!("Layer {}", page_idx + 1));
-            (pi, li)
-        };
+    // Step 1: Decode all unique images (base64 → DynamicImage), apply trim + color mode.
+    // Rotation is per-slot and deferred to build_page_ops for correct (file, rotation) caching.
+    let decoded = decode_images(&request.files, &request.settings);
 
-        render_one_page(
-            &doc,
-            p_idx,
-            l_idx,
+    // Step 2: Build pages, caching XObjects by (file_index, rotation) to avoid redundant work.
+    let mut xobj_cache: std::collections::HashMap<(usize, i32), CachedXobj> = std::collections::HashMap::new();
+
+    for page_spec in &request.pages {
+        let ops = build_page_ops(
+            &mut doc,
             page_spec,
-            &request.files,
             &request.settings,
             &slot_positions,
-        )?;
+            &decoded,
+            &mut xobj_cache,
+        );
+
+        let page = printpdf::PdfPage::new(
+            printpdf::Mm(pw),
+            printpdf::Mm(ph),
+            ops,
+        );
+        doc.pages.push(page);
     }
 
-    // Save PDF
-    let mut out = std::io::BufWriter::new(
-        std::fs::File::create(output_path)
-            .map_err(|e| format!("创建文件失败: {}", e))?,
-    );
-    doc.save(&mut out)
-        .map_err(|e| format!("保存PDF失败: {}", e))?;
+    // Save PDF — new API returns Vec<u8> directly (not Result)
+    let mut warnings = Vec::new();
+    let pdf_bytes = doc.save(&printpdf::PdfSaveOptions::default(), &mut warnings);
+
+    if !warnings.is_empty() {
+        log::warn!("PDF save warnings: {} items", warnings.len());
+    }
+
+    std::fs::write(output_path, &pdf_bytes)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "fapiao-print"
-version = "1.4.0"
+version = "1.5.0"
 description = "电子发票批量打印工具"
 authors = ["fapiao-print"]
 license = "MIT"
@@ -24,8 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 base64 = "0.22"
-image = { version = "0.24", default-features = false, features = ["jpeg", "png", "ico"] }
-printpdf = { version = "0.7", features = ["embedded_images"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "ico", "bmp", "tiff", "webp"] }
+printpdf = { version = "0.9", features = ["images"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rayon = "1.10"
 

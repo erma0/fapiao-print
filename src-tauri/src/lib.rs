@@ -1,9 +1,9 @@
 use tauri::command;
 
-// v1.4.0: OCR fix + layout optimization + close fix
+// v1.5.0: upgraded image 0.24→0.25 (webp), printpdf 0.7→0.9 (new API)
 
 mod pdf_engine;
-use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
+use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
 
 // =====================================================
 // Tauri Commands
@@ -13,78 +13,6 @@ use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage, Com
 #[command]
 fn open_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
     pdf_engine::read_invoice_files(paths)
-}
-
-/// Generate PDF then print directly or open for preview
-#[command]
-fn generate_and_print(request: PdfRequest, direct_print: Option<bool>, printer_name: Option<String>) -> Result<PdfResult, String> {
-    let output_path = std::env::temp_dir().join("fapiao_print_output.pdf");
-    pdf_engine::generate_pdf_from_pages(&request, &output_path)?;
-
-    let is_direct = direct_print.unwrap_or(false);
-    let printer = printer_name.as_deref();
-
-    #[cfg(target_os = "windows")]
-    {
-        if is_direct {
-            // Direct print: use winprint to send PDF to printer (no PDF reader needed)
-            direct_print_pdf(&output_path, printer)?;
-        } else {
-            // Dialog mode: open PDF in default viewer for preview
-            shell_execute("open", &output_path.to_string_lossy())?;
-        }
-    }
-
-    let msg = if is_direct {
-        if let Some(name) = printer {
-            format!("已发送到打印机「{}」", name)
-        } else {
-            "已发送到默认打印机".to_string()
-        }
-    } else {
-        "已打开PDF预览，请在阅读器中确认打印".to_string()
-    };
-
-    Ok(PdfResult {
-        success: true,
-        message: msg,
-        pdf_path: Some(output_path.to_string_lossy().to_string()),
-    })
-}
-
-/// Save PDF to user-chosen path (or Desktop) and optionally open it
-#[command]
-fn save_pdf(request: PdfRequest, save_path: Option<String>, auto_open: Option<bool>) -> Result<PdfResult, String> {
-    let output_path = if let Some(path) = save_path {
-        std::path::PathBuf::from(path)
-    } else {
-        let desktop = std::env::var("USERPROFILE")
-            .map(|p| std::path::PathBuf::from(p).join("Desktop"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let timestamp = chrono_free_filename();
-        desktop.join(format!("发票打印_{}.pdf", timestamp))
-    };
-
-    // Ensure parent dir exists
-    if let Some(parent) = output_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    pdf_engine::generate_pdf_from_pages(&request, &output_path)?;
-
-    // Open the saved PDF with default viewer only if autoOpen is true
-    #[cfg(target_os = "windows")]
-    {
-        if auto_open.unwrap_or(true) {
-            let _ = shell_execute("open", &output_path.to_string_lossy());
-        }
-    }
-
-    Ok(PdfResult {
-        success: true,
-        message: "PDF已保存".to_string(),
-        pdf_path: Some(output_path.to_string_lossy().to_string()),
-    })
 }
 
 /// List available printers
@@ -101,6 +29,16 @@ fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPa
         return Err("应用正在关闭".to_string());
     }
     pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(pdf_engine::RENDER_DPI))
+}
+
+/// Open a file with the default application (for auto-opening saved PDFs)
+#[command]
+fn open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        shell_execute("open", &path)?;
+    }
+    Ok(())
 }
 
 /// Open a URL in the default browser
@@ -131,6 +69,15 @@ fn get_config() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Get system temp directory path (for print output)
+#[command]
+fn get_temp_dir() -> Result<String, String> {
+    let temp = std::env::temp_dir();
+    // Ensure the temp dir exists
+    let _ = std::fs::create_dir_all(&temp);
+    Ok(temp.to_string_lossy().to_string())
+}
+
 // =====================================================
 // New Commands: Trim Image & Layout-based PDF Generation
 // =====================================================
@@ -139,18 +86,18 @@ fn get_config() -> Result<serde_json::Value, String> {
 #[command]
 fn trim_image(data_url: String) -> Result<String, String> {
     use base64::Engine;
-    use image::ImageOutputFormat;
+    use std::io::Cursor;
 
     let img = pdf_engine::decode_base64_image(&data_url)
         .map_err(|e| format!("解码失败: {}", e))?;
     let trimmed = pdf_engine::trim_white_edges(&img, 245);
 
     // Encode back to PNG base64
-    let mut buf = Vec::new();
+    let mut buf = Cursor::new(Vec::new());
     trimmed.write_to(&mut buf, image::ImageFormat::Png)
         .map_err(|e| format!("PNG编码失败: {}", e))?;
 
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
     Ok(format!("data:image/png;base64,{}", b64))
 }
 
@@ -179,9 +126,9 @@ fn generate_pdf_from_layout(
     #[cfg(target_os = "windows")]
     {
         if is_direct {
-            super::direct_print_pdf(output, printer)?;
+            direct_print_pdf(output, printer)?;
         } else {
-            super::shell_execute("open", &output.to_string_lossy())?;
+            shell_execute("open", &output.to_string_lossy())?;
         }
     }
 
@@ -205,14 +152,6 @@ fn generate_pdf_from_layout(
 // =====================================================
 // Helpers
 // =====================================================
-
-fn chrono_free_filename() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format!("{}", now)
-}
 
 /// Call Windows ShellExecuteW — no cmd.exe, no terminal window
 #[cfg(target_os = "windows")]
@@ -312,38 +251,31 @@ pub fn run() {
 
                 window.on_window_event(move |event| {
                     match event {
-                        // --- Close event: two-phase shutdown ---
-                        // Phase 1: Set SHUTTING_DOWN flag to reject new OCR/COM requests
-                        // Phase 2: Spawn a thread that waits 500ms then force-kills the process.
-                        //   - 500ms gives in-flight operations time to complete
-                        //   - TerminateProcess bypasses at-exit handlers (including CoUninitialize
-                        //     which can deadlock if COM async ops are still running)
-                        //   - The thread also kills any lingering WebView2 child processes
-                        tauri::WindowEvent::CloseRequested { .. } => {
+                        // --- Close event: graceful shutdown ---
+                        // Only set SHUTTING_DOWN flag to reject new OCR/COM requests.
+                        // Let Tauri handle the rest — it will destroy the window, clean up
+                        // WebView2 child processes, and exit the process normally.
+                        // Previous code used taskkill/TerminateProcess to force-kill the
+                        // process tree, which interrupted Tauri's cleanup and left WebView2
+                        // child processes as orphans — that was the actual cause of lingering
+                        // processes after exit.
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
                             use std::sync::atomic::Ordering;
+                            // If already shutting down, allow the close to proceed.
+                            if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            // Prevent immediate close so in-flight operations can abort.
+                            api.prevent_close();
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
-                            let pid = std::process::id();
+                            // Notify frontend to clear queues and stop accepting new work.
+                            let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
+                            // Brief delay for OCR/PDF threads to notice the flag,
+                            // then explicitly close the window.
+                            let win2 = win.clone();
                             std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                #[cfg(target_os = "windows")]
-                                {
-                                    // Kill the entire process tree using taskkill /F /T /PID
-                                    // This ensures WebView2 child processes are also terminated
-                                    use std::os::windows::process::CommandExt;
-                                    let _ = std::process::Command::new("taskkill")
-                                        .args(["/F", "/T", "/PID", &pid.to_string()])
-                                        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                                        .spawn();
-                                    // Fallback: TerminateProcess if taskkill failed
-                                    std::thread::sleep(std::time::Duration::from_millis(200));
-                                    unsafe {
-                                        use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-                                        let handle = GetCurrentProcess();
-                                        let _ = TerminateProcess(handle, 0);
-                                    }
-                                }
-                                #[cfg(not(target_os = "windows"))]
-                                std::process::exit(0);
+                                std::thread::sleep(std::time::Duration::from_millis(400));
+                                let _ = win2.close();
                             });
                         }
                         // --- Drag-and-drop file handling ---
@@ -373,13 +305,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_invoice_files,
-            generate_and_print,
-            save_pdf,
             get_printers,
             render_pdf_pages,
             open_url,
+            open_file,
             ocr_image,
             get_config,
+            get_temp_dir,
             trim_image,
             generate_pdf_from_layout,
         ])
