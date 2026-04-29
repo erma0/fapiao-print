@@ -218,35 +218,40 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
 // =====================================================
 
 pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
-    let mut results = Vec::new();
-    for path_str in paths {
-        let path = std::path::Path::new(&path_str);
-        if !path.exists() {
-            continue;
-        }
+    use rayon::prelude::*;
 
-        let name = path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+    // Filter and validate paths first (fast, no I/O)
+    let valid_paths: Vec<(String, String, String, u64)> = paths.iter()
+        .filter_map(|path_str| {
+            let path = std::path::Path::new(path_str);
+            if !path.exists() { return None; }
 
-        let ext = path.extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
+            let name = path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
 
-        // Only accept supported formats (including OFD)
-        if !["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif", "ofd"].contains(&ext.as_str()) {
-            continue;
-        }
+            let ext = path.extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
 
-        let metadata = path.metadata().map_err(|e| format!("读取文件信息失败: {}", e))?;
-        let size = metadata.len();
+            if !["pdf", "jpg", "jpeg", "png", "bmp", "webp", "tiff", "tif", "ofd"].contains(&ext.as_str()) {
+                return None;
+            }
 
-        // OFD: extract embedded images from the ZIP archive
+            let size = path.metadata().ok()?.len();
+            Some((path_str.clone(), name, ext, size))
+        })
+        .collect();
+
+    // Process OFD files first (sequential, they need ZIP extraction)
+    let mut results: Vec<FileData> = Vec::new();
+    let mut non_ofd_paths: Vec<(String, String, String, u64)> = Vec::new();
+
+    for (path_str, name, ext, size) in valid_paths {
         if ext == "ofd" {
             match extract_ofd_images(&path_str) {
                 Ok(images) => {
                     for (idx, (img_data_url, img_ext)) in images.iter().enumerate() {
-                        // Remove .ofd/.OFD extension from name (case-insensitive)
                         let base_name = if name.to_uppercase().ends_with(".OFD") {
                             &name[..name.len()-4]
                         } else {
@@ -261,42 +266,51 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
                             ext: img_ext.to_string(),
                             size,
                             data_url: img_data_url.clone(),
-                            path: None, // no filePath needed, already converted to image
+                            path: None,
                         });
                     }
-                    continue;
                 }
                 Err(e) => {
                     log::warn!("OFD extraction failed for {}: {}", name, e);
-                    continue;
                 }
             }
+        } else {
+            non_ofd_paths.push((path_str, name, ext, size));
         }
-
-        let bytes = std::fs::read(path).map_err(|e| format!("读取文件失败 {}: {}", name, e))?;
-
-        let mime = match ext.as_str() {
-            "pdf" => "application/pdf",
-            "jpg" | "jpeg" => "image/jpeg",
-            "png" => "image/png",
-            "bmp" => "image/bmp",
-            "webp" => "image/webp",
-            "tiff" | "tif" => "image/tiff",
-            _ => "application/octet-stream",
-        };
-
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let data_url = format!("data:{};base64,{}", mime, b64);
-
-        results.push(FileData {
-            name,
-            ext,
-            size,
-            data_url,
-            path: Some(path_str),
-        });
     }
+
+    // Read and encode non-OFD files in parallel using rayon
+    let parallel_results: Vec<FileData> = non_ofd_paths
+        .par_iter()
+        .filter_map(|(path_str, name, ext, size)| {
+            // Read file bytes
+            let bytes = std::fs::read(path_str).ok()?;
+
+            let mime = match ext.as_str() {
+                "pdf" => "application/pdf",
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "bmp" => "image/bmp",
+                "webp" => "image/webp",
+                "tiff" | "tif" => "image/tiff",
+                _ => "application/octet-stream",
+            };
+
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let data_url = format!("data:{};base64,{}", mime, b64);
+
+            Some(FileData {
+                name: name.clone(),
+                ext: ext.clone(),
+                size: *size,
+                data_url,
+                path: Some(path_str.clone()),
+            })
+        })
+        .collect();
+
+    results.extend(parallel_results);
     Ok(results)
 }
 

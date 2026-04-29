@@ -121,11 +121,12 @@ body {
 }
 .file-info { flex: 1; min-width: 0; }
 .file-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+.file-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; margin-top: 2px; flex-wrap: wrap; }
 .copy-badge { background: var(--warning-light); color: var(--warning); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
-.amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+.amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
-.seller-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); }
+.seller-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
+.file-seller { margin-top: 1px; line-height: 1.3; overflow: hidden; }
 .file-summary {
   padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface2);
   font-size: 12px; display: flex; align-items: center; justify-content: space-between;

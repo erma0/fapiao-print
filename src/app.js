@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.3.0 | isTauri:', isTauri);
+console.log('发票批量打印 v1.4.0 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -300,7 +300,7 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
             // Fallback: try PDF.js text extraction for pages OCR missed
             if (dataUrl) {
               var noAmtPages = results.filter(function(r) { return r.amount <= 0; });
-              var noSellerPages = results.filter(function(r) { return !r.sellerName; });
+              var noSellerPages = results.filter(function(r) { return !r.sellerName && !r._isTicket; });
               if (noAmtPages.length > 0 || noSellerPages.length > 0) {
                 try {
                   var pdfInfoList = await tryExtractPdfInfo(dataUrl, pages.length);
@@ -312,8 +312,11 @@ function loadFileFromDataUrl(name, dataUrl, size, ext, filePath) {
                       results[k].amountTax = pi.amountTax;
                       results[k].amountNoTax = pi.amountNoTax;
                     }
-                    if (pi.sellerName && !results[k].sellerName) results[k].sellerName = pi.sellerName;
-                    if (pi.sellerCreditCode && !results[k].sellerCreditCode) results[k].sellerCreditCode = pi.sellerCreditCode;
+                    if (pi.isTicket) results[k]._isTicket = true;
+                    if (!pi.isTicket && !results[k]._isTicket) {
+                      if (pi.sellerName && !results[k].sellerName) results[k].sellerName = pi.sellerName;
+                      if (pi.sellerCreditCode && !results[k].sellerCreditCode) results[k].sellerCreditCode = pi.sellerCreditCode;
+                    }
                   }
                 } catch(e) { console.warn('[信息提取] PDF.js提取失败:', e); }
               }
@@ -431,8 +434,12 @@ function backgroundOcrPdf(results, dataUrl) {
             results[k].amountNoTax = pi.amountNoTax;
             updated = true;
           }
-          if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
-          if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
+          // Skip seller info for tickets
+          if (!pi.isTicket) {
+            if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
+            if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
+          }
+          if (pi.isTicket) { results[k]._isTicket = true; }
         }
         if (updated) { renderFileList(); updateAmountSummary(); }
       }).catch(function() {});
@@ -456,7 +463,7 @@ function backgroundOcrPdf(results, dataUrl) {
   // Also try PDF.js text extraction for seller info (WinRT rendering doesn't extract text)
   if (dataUrl) {
     var noAmtPages = results.filter(function(r) { return r.amount <= 0; });
-    var noSellerPages = results.filter(function(r) { return !r.sellerName; });
+    var noSellerPages = results.filter(function(r) { return !r.sellerName && !r._isTicket; });
     if (noAmtPages.length > 0 || noSellerPages.length > 0) {
       tryExtractPdfInfo(dataUrl, results.length).then(function(pdfInfoList) {
         var updated = false;
@@ -469,8 +476,12 @@ function backgroundOcrPdf(results, dataUrl) {
             results[k].amountNoTax = pi.amountNoTax;
             updated = true;
           }
-          if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
-          if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
+          // Skip seller info for tickets
+          if (!pi.isTicket && !results[k]._isTicket) {
+            if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
+            if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
+          }
+          if (pi.isTicket) { results[k]._isTicket = true; }
         }
         if (updated) { renderFileList(); updateAmountSummary(); }
       }).catch(function(e) { console.warn('[信息提取] PDF.js提取失败:', e); });
@@ -493,7 +504,12 @@ function updateFileItem(fileObj) {
   var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : '';
   var sb = f.sellerName ? '<span class="seller-badge" title="' + escHtml(f.sellerCreditCode || '') + '">' + escHtml(f.sellerName.length > 16 ? f.sellerName.substring(0, 16) + '\u2026' : f.sellerName) + '</span>' : '';
   var metaEl = items[idx].querySelector('.file-meta');
-  if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab + sb;
+  var sellerEl = items[idx].querySelector('.file-seller');
+  if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
+  if (sellerEl) {
+    sellerEl.innerHTML = sb;
+    sellerEl.style.display = sb ? '' : 'none';
+  }
 }
 
 /**
@@ -704,7 +720,7 @@ function renderFileList() {
     return '<div class="file-item" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + (f.previewUrl ? '<img src="' + f.previewUrl + '">' : '\uD83D\uDCC4') + '<div class="type-badge">' + (f.type === 'jpeg' ? 'jpg' : f.type) + '</div></div>' +
-      '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + sb + '</div></div>' +
+      '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + '</div>' + (sb ? '<div class="file-seller">' + sb + '</div>' : '<div class="file-seller" style="display:none"></div>') + '</div>' +
       '<div style="display:flex;gap:2px"><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>' +
     '</div>';
   }).join('');

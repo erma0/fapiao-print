@@ -13,8 +13,16 @@ function parseAmt(s) {
 }
 
 /**
+ * Detect if text is a train/ride ticket (no seller info needed)
+ */
+function isTicketText(text) {
+  var t = text.substring(0, 500);
+  return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t);
+}
+
+/**
  * Extract invoice info from OCR text or PDF.js text content.
- * Returns: { amountTax, amountNoTax, sellerName, sellerCreditCode, _ocrText }
+ * Returns: { amountTax, amountNoTax, sellerName, sellerCreditCode, _ocrText, isTicket }
  *
  * OCR patterns handled:
  *   VAT invoices: 价税合计(大写)…(小写) ¥317.00, 合计(小写) ¥299.06
@@ -31,41 +39,97 @@ function extractInvoiceInfo(textContent) {
   } else if (textContent && textContent.items && textContent.items.length) {
     fullText = textContent.items.map(function(item) { return item.str; }).join('');
   } else {
-    return { amountTax: 0, amountNoTax: 0, sellerName: '', sellerCreditCode: '' };
+    return { amountTax: 0, amountNoTax: 0, sellerName: '', sellerCreditCode: '', isTicket: false };
   }
 
-  // === Extract seller info BEFORE normalization (uses raw text with line breaks) ===
+  // === Detect ticket type early ===
+  var isTicket = isTicketText(fullText);
   var sellerName = '', sellerCreditCode = '';
 
-  // Credit code: find ALL matches, take the LAST one (seller's in standard invoices where buyer comes first)
-  var ccRe = /(?:统一社会信用代码|纳税人识别号)\s*[:：／/]?\s*([A-Z0-9]{15,20})/gi;
-  var ccM, lastCcCode = '', lastCcPos = -1;
-  while ((ccM = ccRe.exec(fullText)) !== null) {
-    lastCcCode = ccM[1];
-    lastCcPos = ccM.index;
-  }
-  if (lastCcCode) sellerCreditCode = lastCcCode.toUpperCase();
+  // === Skip seller extraction for tickets (train/ride tickets have no seller) ===
+  if (!isTicket) {
+    // === Extract seller info BEFORE normalization (uses raw text with line breaks) ===
 
-  // Seller name — three strategies in priority order:
-  // Strategy 1: Direct "销售方(+信息)" + "名称:" pattern (most specific)
-  var snMatch = fullText.match(/销售方(?:信息)?\s*名称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号)|\n|$)/i);
-  if (snMatch) {
-    sellerName = snMatch[1].trim();
-  }
-  // Strategy 2: Find the LAST "名称:" near the LAST credit code (seller's section)
-  if (!sellerName) {
-    if (lastCcPos >= 0) {
-      var searchRegion = fullText.substring(0, lastCcPos);
-      var nameRe = /名称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号)|\n|$)/gi;
+    // Credit code: find ALL matches, take the LAST one (seller's in standard invoices where buyer comes first)
+    var ccRe = /(?:统一社会信用代码|纳税人识别号)\s*[:：／/]?\s*([A-Z0-9]{15,20})/gi;
+    var ccM, lastCcCode = '', lastCcPos = -1;
+    var firstCcPos = -1;
+    while ((ccM = ccRe.exec(fullText)) !== null) {
+      if (firstCcPos < 0) firstCcPos = ccM.index;
+      lastCcCode = ccM[1];
+      lastCcPos = ccM.index;
+    }
+    if (lastCcCode) sellerCreditCode = lastCcCode.toUpperCase();
+
+    // Seller name — multiple strategies in priority order:
+    // Strategy 1: Direct "销售方(+信息)" + "名称:" pattern (most specific)
+    var snMatch = fullText.match(/销售方(?:信息)?\s*名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+    if (snMatch) {
+      sellerName = snMatch[1].trim();
+      // Clean up: remove trailing section labels that got captured
+      sellerName = sellerName.replace(/\s*(?:购买方|销售方|信息|名称|纳税人|统一社会|地址|开户行|电话|账号).*$/i, '');
+    }
+
+    // Strategy 2: Find "名称:" AFTER "销售方" keyword (near seller's section)
+    if (!sellerName) {
+      var sellerKwMatch = fullText.match(/销售方[^\n]{0,100}?名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+      if (sellerKwMatch) {
+        sellerName = sellerKwMatch[1].trim();
+      }
+    }
+
+    // Strategy 3: Find "名称:" in the region AFTER the buyer's credit code (i.e., seller's section)
+    if (!sellerName && lastCcPos >= 0) {
+      // Search from first credit code position onward — find "名称:" AFTER any credit code
+      // The seller's section comes after the buyer's section
+      var searchStart = firstCcPos;
+      var searchRegion = fullText.substring(searchStart);
+      var nameRe = /名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/gi;
       var nm, lastName = '';
       while ((nm = nameRe.exec(searchRegion)) !== null) {
-        lastName = nm[1];
+        var candidate = nm[1].trim();
+        // Filter out buyer section labels that may have been captured
+        if (!/^(?:购买方|信息|名称)/.test(candidate) && candidate.length > 1) {
+          lastName = candidate;
+        }
       }
-      if (lastName) sellerName = lastName.trim();
-    } else {
-      // No credit code found at all — try any "名称:" in full text
-      var fallbackMatch = fullText.match(/名称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号)|\n|$)/i);
-      if (fallbackMatch) sellerName = fallbackMatch[1].trim();
+      if (lastName) sellerName = lastName;
+    }
+
+    // Strategy 4: Find the LAST "名称:" in full text (after last credit code position)
+    if (!sellerName && lastCcPos >= 0) {
+      var regionAfterLastCc = fullText.substring(lastCcPos);
+      var nameAfter = regionAfterLastCc.match(/名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号)|\n|$)/i);
+      if (nameAfter) {
+        var cand = nameAfter[1].trim();
+        if (cand.length > 1 && !/^(?:购买方|信息|名称)/.test(cand)) {
+          sellerName = cand;
+        }
+      }
+    }
+
+    // Strategy 5: No credit code found at all — try any "名称:" but filter buyer keywords
+    if (!sellerName) {
+      var allNames = [];
+      var fallbackRe = /名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号)|\n|$)/gi;
+      var fm;
+      while ((fm = fallbackRe.exec(fullText)) !== null) {
+        var c = fm[1].trim();
+        if (c.length > 1 && !/^(?:购买方|信息|名称)/.test(c)) {
+          allNames.push(c);
+        }
+      }
+      // If we found multiple names, the LAST one is likely the seller's
+      if (allNames.length > 0) sellerName = allNames[allNames.length - 1];
+    }
+
+    // Final cleanup: remove common OCR artifacts and section labels
+    if (sellerName) {
+      sellerName = sellerName.replace(/^[\s:：]+/, '').replace(/[\s:：]+$/, '');
+      // Remove if the name is just a section label
+      if (/^(?:购买方信息|销售方信息|购买方|销售方|名称|信息|纳税人|地址|电话|开户行|账号)$/.test(sellerName)) {
+        sellerName = '';
+      }
     }
   }
 
@@ -139,9 +203,18 @@ function extractInvoiceInfo(textContent) {
       if (val > 0 && val < 10000) { amountTax = val; amountNoTax = val; }
     }
   }
+  // 车票: "票价" keyword with amount pattern (no ¥ symbol)
   if (!amountTax && !amountNoTax) {
-    var yMatch = fullText.match(/¥\s*(\d+(?:,\d{3})*\.\d{2})\s*[^\d]*?(?:车票|车次|座位|检票)/);
-    if (!yMatch) yMatch = fullText.match(/(?:车票|车次|座位|检票)[^\d]*?¥\s*(\d+(?:,\d{3})*\.\d{2})/);
+    var priceLineMatch = fullText.match(/票\s*价[^\d]*?(\d+\.\d{2})/);
+    if (priceLineMatch) {
+      var pval = parseAmt(priceLineMatch[1]);
+      if (pval > 0 && pval < 10000) { amountTax = pval; amountNoTax = pval; }
+    }
+  }
+  // 车票: amount near train keywords
+  if (!amountTax && !amountNoTax) {
+    var yMatch = fullText.match(/¥\s*(\d+(?:,\d{3})*\.\d{2})\s*[^\d]*?(?:车票|车次|座位|检票|进站|出站|乘车|站台)/);
+    if (!yMatch) yMatch = fullText.match(/(?:车票|车次|座位|检票|进站|出站|乘车|站台)[^\d]*?¥\s*(\d+(?:,\d{3})*\.\d{2})/);
     if (yMatch) {
       var val2 = parseAmt(yMatch[1]);
       if (val2 > 0 && val2 < 10000) { amountTax = val2; amountNoTax = val2; }
@@ -154,8 +227,16 @@ function extractInvoiceInfo(textContent) {
       if (val3 > 0 && val3 < 10000) { amountTax = val3; amountNoTax = val3; }
     }
   }
+  // 车票: "全价" or "优惠价" pattern
   if (!amountTax && !amountNoTax) {
-    var trainKwRe = /(?:车\s*次|车\s*站|号\s*车|检\s*票|铺\s*位|卧\s*铺|二\s*等|一\s*等|动\s*车|高\s*铁|特\s*等)/;
+    var discountMatch = fullText.match(/(?:全\s*价|优\s*惠\s*价|学\s*生\s*价)[^\d]*?(\d+\.\d{2})/);
+    if (discountMatch) {
+      var dval = parseAmt(discountMatch[1]);
+      if (dval > 0 && dval < 10000) { amountTax = dval; amountNoTax = dval; }
+    }
+  }
+  if (!amountTax && !amountNoTax) {
+    var trainKwRe = /(?:车\s*次|车\s*站|号\s*车|检\s*票|铺\s*位|卧\s*铺|二\s*等|一\s*等|动\s*车|高\s*铁|特\s*等|进\s*站|出\s*站|乘\s*车|站\s*台)/;
     if (trainKwRe.test(fullText)) {
       var allYen = [];
       var yenRe = /¥\s*(\d+(?:,\d{3})*\.\d{2})/g;
@@ -164,6 +245,15 @@ function extractInvoiceInfo(textContent) {
         var yv = parseAmt(ym[1]);
         if (yv > 0 && yv < 5000) allYen.push(yv);
       }
+      // Also look for amounts without ¥ symbol — pattern: "票价 553.00" or standalone amounts after keywords
+      if (allYen.length === 0) {
+        var bareAmtRe = /(?:票\s*价|全\s*价|金\s*额)[^\d]*?(\d+\.\d{2})/gi;
+        var bm;
+        while ((bm = bareAmtRe.exec(fullText)) !== null) {
+          var bv = parseAmt(bm[1]);
+          if (bv > 0 && bv < 5000) allYen.push(bv);
+        }
+      }
       if (allYen.length === 1) {
         amountTax = allYen[0]; amountNoTax = allYen[0];
       } else if (allYen.length > 1) {
@@ -171,6 +261,15 @@ function extractInvoiceInfo(textContent) {
         if (typicalYen.length === 1) { amountTax = typicalYen[0]; amountNoTax = typicalYen[0]; }
         else if (typicalYen.length > 1) { amountTax = Math.max.apply(Math, typicalYen); amountNoTax = amountTax; }
       }
+    }
+  }
+
+  // === Step 6.6: 出租车票 / 乘车票 — specific patterns ===
+  if (!amountTax && !amountNoTax) {
+    var taxiMatch = fullText.match(/(?:乘\s*车|出\s*租|打\s*车|网\s*约\s*车)[^\n]*?(?:金\s*额|费\s*用|价\s*格)[^\d]*?(\d+\.\d{2})/i);
+    if (taxiMatch) {
+      var tval = parseAmt(taxiMatch[1]);
+      if (tval > 0 && tval < 5000) { amountTax = tval; amountNoTax = tval; }
     }
   }
 
@@ -203,12 +302,12 @@ function extractInvoiceInfo(textContent) {
     amountTax = amountNoTax;
   }
 
-  console.log('[OCR提取] 金额:', { amountTax: amountTax, amountNoTax: amountNoTax }, '销售方:', sellerName || '(未识别)', '信用代码:', sellerCreditCode || '(未识别)');
-  if (!amountTax && !amountNoTax && !sellerName) {
+  console.log('[OCR提取] 金额:', { amountTax: amountTax, amountNoTax: amountNoTax }, '销售方:', sellerName || '(未识别)', '信用代码:', sellerCreditCode || '(未识别)', '车票:', isTicket);
+  if (!amountTax && !amountNoTax && !sellerName && !isTicket) {
     console.warn('[OCR提取] 未能识别任何信息，OCR完整文本:', fullText);
   }
 
-  return { amountTax: amountTax, amountNoTax: amountNoTax, sellerName: sellerName, sellerCreditCode: sellerCreditCode, _ocrText: fullText };
+  return { amountTax: amountTax, amountNoTax: amountNoTax, sellerName: sellerName, sellerCreditCode: sellerCreditCode, _ocrText: fullText, isTicket: isTicket };
 }
 
 /**
@@ -265,9 +364,13 @@ async function applyOcr(fileObj, dataUrl) {
       fileObj.amountTax = info.amountTax;
       fileObj.amountNoTax = info.amountNoTax;
     }
-    if (info.sellerName) fileObj.sellerName = info.sellerName;
-    if (info.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
+    // Skip seller info for tickets
+    if (!info.isTicket) {
+      if (info.sellerName) fileObj.sellerName = info.sellerName;
+      if (info.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
+    }
     fileObj._ocrText = info._ocrText || ocrText;
+    fileObj._isTicket = info.isTicket || false;
   } catch(e) {
     console.warn('[OCR] 识别失败:', e);
   }

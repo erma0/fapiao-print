@@ -1,6 +1,6 @@
 use tauri::command;
 
-// v1.3.1: fast import + close fix
+// v1.4.0: OCR fix + layout optimization + close fix
 
 mod pdf_engine;
 use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
@@ -314,21 +314,33 @@ pub fn run() {
                     match event {
                         // --- Close event: two-phase shutdown ---
                         // Phase 1: Set SHUTTING_DOWN flag to reject new OCR/COM requests
-                        // Phase 2: Spawn a thread that waits 300ms then calls TerminateProcess.
-                        //   - 300ms gives in-flight operations time to check the flag and return
+                        // Phase 2: Spawn a thread that waits 500ms then force-kills the process.
+                        //   - 500ms gives in-flight operations time to complete
                         //   - TerminateProcess bypasses at-exit handlers (including CoUninitialize
                         //     which can deadlock if COM async ops are still running)
-                        //   - Running in a separate thread avoids deadlocking in WebView2 callback
+                        //   - The thread also kills any lingering WebView2 child processes
                         tauri::WindowEvent::CloseRequested { .. } => {
                             use std::sync::atomic::Ordering;
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
-                            std::thread::spawn(|| {
-                                std::thread::sleep(std::time::Duration::from_millis(300));
+                            let pid = std::process::id();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
                                 #[cfg(target_os = "windows")]
-                                unsafe {
-                                    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-                                    let handle = GetCurrentProcess();
-                                    let _ = TerminateProcess(handle, 0);
+                                {
+                                    // Kill the entire process tree using taskkill /F /T /PID
+                                    // This ensures WebView2 child processes are also terminated
+                                    use std::os::windows::process::CommandExt;
+                                    let _ = std::process::Command::new("taskkill")
+                                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                                        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                                        .spawn();
+                                    // Fallback: TerminateProcess if taskkill failed
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                    unsafe {
+                                        use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                                        let handle = GetCurrentProcess();
+                                        let _ = TerminateProcess(handle, 0);
+                                    }
                                 }
                                 #[cfg(not(target_os = "windows"))]
                                 std::process::exit(0);
