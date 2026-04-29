@@ -5,32 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>电子发票批量打印工具</title>
 <link rel="stylesheet" href="styles.css">
-<!-- Splash screen: shown immediately, removed after app initializes -->
-<style>
-  #splash{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#eef2f7 0%,#dbeafe 100%);transition:opacity .3s}
-  #splash.hide{opacity:0;pointer-events:none}
-  #splashIcon{font-size:48px;margin-bottom:12px;animation:splashPulse 1.2s ease-in-out infinite}
-  #splashTitle{font-size:20px;font-weight:700;color:#1a202c;margin-bottom:4px}
-  #splashSub{font-size:13px;color:#94a3b8}
-  #splashBar{width:120px;height:3px;background:#d8e0ea;border-radius:2px;margin-top:16px;overflow:hidden}
-  #splashBarInner{width:0%;height:100%;background:#2563eb;border-radius:2px;animation:splashLoad 1s ease-in-out forwards}
-  @keyframes splashPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
-  @keyframes splashLoad{0%{width:0%}60%{width:70%}100%{width:100%}}
-  html.dark #splash{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%)}
-  html.dark #splashTitle{color:#e2e8f0}
-  html.dark #splashSub{color:#636e80}
-  html.dark #splashBar{background:#2a2a4a}
-  html.dark #splashBarInner{background:#5b8def}
-</style>
 </head>
 <body>
-<!-- Splash screen -->
-<div id="splash">
-  <div id="splashIcon">📄</div>
-  <div id="splashTitle">发票批量打印</div>
-  <div id="splashSub">正在启动...</div>
-  <div id="splashBar"><div id="splashBarInner"></div></div>
-</div>
 
 <div class="loading hidden" id="loading"><div class="spinner"></div><span id="loadingText">处理中...</span></div>
 

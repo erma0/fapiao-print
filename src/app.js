@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.5.1 | isTauri:', isTauri);
+console.log('发票批量打印 v1.5.2 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -739,11 +739,17 @@ function syncLayoutHighlight() {
   });
   syncToolbarHighlight(c, r);
 }
+var _printersLoaded = false;
 function switchTab(n, el) {
   document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.sidebar-panel').forEach(function(p) { p.classList.add('hidden'); });
   el.classList.add('active');
   document.getElementById('panel-' + n).classList.remove('hidden');
+  // Lazy-load printers on first visit to print tab
+  if (n === 'print' && !_printersLoaded && isTauri && invoke) {
+    _printersLoaded = true;
+    refreshPrinters();
+  }
 }
 function onPaperChange() { document.getElementById('customPaperRow').style.display = document.getElementById('paperSize').value === 'custom' ? 'flex' : 'none'; updatePreview(); }
 function onFitChange() { document.getElementById('customScaleRow').style.display = document.getElementById('fitMode').value === 'custom' ? 'flex' : 'none'; updatePreview(); }
@@ -1107,8 +1113,7 @@ window._tauriFileDrop = function(paths) {
   document.head.appendChild(s);
 })();
 
-// Auto-refresh printers in Tauri — delayed to avoid blocking startup
-if (isTauri) setTimeout(function() { refreshPrinters(); }, 800);
+// Printers are loaded on-demand when user opens the print tab (see switchTab)
 
 // =====================================================
 // DPI Runtime Validation — verify frontend matches Rust
@@ -1168,26 +1173,20 @@ document.getElementById('orientation').value = 'landscape';
 })();
 
 // =====================================================
-// Remove splash screen after everything is loaded
+// Show main window after DOM is ready (window starts hidden via visible:false)
 // =====================================================
 (function() {
-  function removeSplash() {
-    var splash = document.getElementById('splash');
-    if (splash) {
-      splash.classList.add('hide');
-      setTimeout(function() { splash.remove(); }, 350);
-    }
-    // Tell Rust to show the window now that content is rendered (prevents white flash)
+  function showApp() {
     if (isTauri && invoke) {
       try { invoke('show_window'); } catch(e) {}
     }
   }
-  // Remove splash after a minimum display time (prevents flash) or when DOM is ready
-  if (document.readyState === 'complete') {
-    setTimeout(removeSplash, 300);
+  // Show window as soon as DOM is rendered — no splash, no flash
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showApp);
   } else {
-    window.addEventListener('load', function() { setTimeout(removeSplash, 300); });
-    // Fallback: remove after 2s no matter what
-    setTimeout(removeSplash, 2000);
+    showApp();
   }
+  // Fallback: show after 2s no matter what
+  setTimeout(showApp, 2000);
 })();

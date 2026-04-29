@@ -252,13 +252,8 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
-            // Hide window initially to prevent white flash on startup.
-            // The frontend splash screen will request the window to show once loaded.
-            {
-                use tauri::Manager;
-                let window = app.get_webview_window("main").unwrap();
-                let _ = window.hide();
-            }
+            // Window starts hidden via tauri.conf.json "visible: false" — no white flash.
+            // The frontend will call show_window once the UI is fully rendered.
             // Handle window events: close + drag-and-drop
             {
                 use tauri::Manager;

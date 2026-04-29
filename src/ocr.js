@@ -54,8 +54,10 @@ function extractInvoiceInfo(textContent) {
     var ccRe = /(?:统一社会信用代码|纳税人识别号)\s*[:：／/]\s*([A-Z0-9]{15,20})/gi;
     var ccM, lastCcCode = '', lastCcPos = -1;
     var firstCcPos = -1;
+    var allCcPositions = []; // track all credit code positions for region analysis
     while ((ccM = ccRe.exec(fullText)) !== null) {
       if (firstCcPos < 0) firstCcPos = ccM.index;
+      allCcPositions.push({ code: ccM[1], pos: ccM.index });
       lastCcCode = ccM[1];
       lastCcPos = ccM.index;
     }
@@ -70,14 +72,18 @@ function extractInvoiceInfo(textContent) {
           lastCcCode = sccM[1];
           lastCcPos = sccM.index;
           if (firstCcPos < 0) firstCcPos = sccM.index;
+          allCcPositions.push({ code: sccM[1], pos: sccM.index });
         }
       }
       if (lastCcCode) sellerCreditCode = lastCcCode.toUpperCase();
     }
 
+    // Company name suffixes — comprehensive list for Chinese business names
+    var companySuffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
+
     // Seller name — multiple strategies in priority order:
     // Strategy 1: Direct "销售方(+信息)" + "名称:" pattern (most specific)
-    var snMatch = fullText.match(/销售方(?:信息)?\s*名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+    var snMatch = fullText.match(/销\s*售\s*方(?:信息)?\s*名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
     if (snMatch) {
       sellerName = snMatch[1].trim();
       // Clean up: remove trailing section labels that got captured
@@ -86,9 +92,17 @@ function extractInvoiceInfo(textContent) {
 
     // Strategy 2: Find "名称:" AFTER "销售方" keyword (near seller's section)
     if (!sellerName) {
-      var sellerKwMatch = fullText.match(/销售方[^\n]{0,100}?名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+      var sellerKwMatch = fullText.match(/销\s*售\s*方[^\n]{0,100}?名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
       if (sellerKwMatch) {
         sellerName = sellerKwMatch[1].trim();
+      }
+    }
+
+    // Strategy 2.5: "销方" abbreviated form (some invoices use short form)
+    if (!sellerName) {
+      var shortSellerMatch = fullText.match(/销\s*方(?:信息)?\s*名\s*称\s*[:：]\s*([^\n]{1,80}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+      if (shortSellerMatch) {
+        sellerName = shortSellerMatch[1].trim();
       }
     }
 
@@ -139,7 +153,7 @@ function extractInvoiceInfo(textContent) {
 
     // Strategy 6: "收款单位"/"销货单位"/"开票方" pattern (some invoice formats use these)
     if (!sellerName) {
-      var altSellerMatch = fullText.match(/(?:收款单位|销货单位|开票方|销售单位|开票人)[^\n]{0,30}?[:：]?\s*([^\n]{2,60}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+      var altSellerMatch = fullText.match(/(?:收款单位|销货单位|开票方|销售单位|开票人|代开企业)[^\n]{0,30}?[:：]?\s*([^\n]{2,60}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
       if (altSellerMatch) {
         var altCand = altSellerMatch[1].trim();
         if (altCand.length > 1 && !/^(?:购买方|信息|名称|地址|电话)/.test(altCand)) {
@@ -153,7 +167,7 @@ function extractInvoiceInfo(textContent) {
     if (!sellerName && lastCcPos >= 0) {
       var afterLastCc = fullText.substring(lastCcPos);
       // Look for Chinese company name pattern near credit code
-      var companyRe = /(?:[A-Z0-9]{15,20})\s*[:：]?\s*([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]+(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|室|坊|铺))/;
+      var companyRe = new RegExp('(?:[A-Z0-9]{15,20})\\s*[:：]?\\s*([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + companySuffix + ')');
       var compMatch = afterLastCc.match(companyRe);
       if (compMatch) {
         sellerName = compMatch[1].trim();
@@ -162,21 +176,34 @@ function extractInvoiceInfo(textContent) {
 
     // Strategy 8: Find any Chinese company name after "销售方" keyword
     if (!sellerName) {
-      var sellerRegionMatch = fullText.match(/销售方[^\n]{0,200}/i);
+      var sellerRegionMatch = fullText.match(/销\s*售\s*方[^\n]{0,200}/i);
       if (sellerRegionMatch) {
         var region = sellerRegionMatch[0];
-        var companyInRegion = region.match(/([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]+(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处))/);
+        var companyInRegion = region.match(new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + companySuffix + ')'));
         if (companyInRegion) {
           sellerName = companyInRegion[1].trim();
         }
       }
     }
 
-    // Strategy 9: Last resort — find the LAST company name pattern in text
-    // If text contains "购买方" section before "销售方" section, the last company name is usually the seller
+    // Strategy 8.5: Find company name after "销方" keyword (short form)
+    if (!sellerName) {
+      var shortSellerRegion = fullText.match(/销\s*方[^\n]{0,200}/i);
+      if (shortSellerRegion) {
+        var region2 = shortSellerRegion[0];
+        var companyInRegion2 = region2.match(new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + companySuffix + ')'));
+        if (companyInRegion2) {
+          sellerName = companyInRegion2[1].trim();
+        }
+      }
+    }
+
+    // Strategy 9: Last resort — find company name patterns in text
+    // If we have credit codes, even 1 company name is likely the seller
+    // If no credit codes, need ≥2 to distinguish buyer from seller
     if (!sellerName) {
       var allCompanies = [];
-      var companyGlobalRe = /([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]{2,25}(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处))/g;
+      var companyGlobalRe = new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]{2,25}' + companySuffix + ')', 'g');
       var cm2;
       while ((cm2 = companyGlobalRe.exec(fullText)) !== null) {
         var cname = cm2[1].trim();
@@ -185,10 +212,60 @@ function extractInvoiceInfo(textContent) {
           allCompanies.push(cname);
         }
       }
-      // In standard invoices, the last company name is often the seller
-      // But only use this if we have at least 2 company names (buyer + seller pattern)
-      if (allCompanies.length >= 2) {
+      if (allCcPositions.length >= 1 && allCompanies.length >= 1) {
+        // We have at least one credit code — the last company name is likely the seller
         sellerName = allCompanies[allCompanies.length - 1];
+      } else if (allCompanies.length >= 2) {
+        // No credit codes but multiple companies — last one is likely seller
+        sellerName = allCompanies[allCompanies.length - 1];
+      }
+    }
+
+    // Strategy 10: Region between buyer and seller credit codes
+    // If we have ≥2 credit codes, the text between the second-to-last and last code
+    // often contains the seller's company name
+    if (!sellerName && allCcPositions.length >= 2) {
+      var secondLastPos = allCcPositions[allCcPositions.length - 2].pos;
+      var regionBetween = fullText.substring(secondLastPos, lastCcPos);
+      var betweenCompany = regionBetween.match(new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + companySuffix + ')'));
+      if (betweenCompany) {
+        var bCand = betweenCompany[1].trim();
+        if (bCand.length > 2 && !/^(?:购买方|信息|名称|地址)/.test(bCand)) {
+          sellerName = bCand;
+        }
+      }
+    }
+
+    // Strategy 11: Find company name after last credit code (broader pattern)
+    // Some OCR outputs have company name on the line AFTER the credit code
+    if (!sellerName && lastCcPos >= 0) {
+      var afterCc = fullText.substring(lastCcPos);
+      // Match Chinese characters that look like a company name (broader than strict suffix pattern)
+      var broadCompanyRe = /[\u4e00-\u9fff]{2,4}(?:[\u4e00-\u9fff\w（）()·\-\.]*)(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|有限合伙|合伙企业|个体|工作室|经营部|门市|分公司|事业部|事务所|医院|学校|合作社|企业|商社)/;
+      var broadMatch = afterCc.match(broadCompanyRe);
+      if (broadMatch) {
+        sellerName = broadMatch[0].trim();
+      }
+    }
+
+    // Strategy 12: Find the last "名称:" with more relaxed content matching
+    // Some OCR outputs have company name after "名称:" but with unusual characters
+    if (!sellerName) {
+      var allNameEntries = [];
+      var relaxedNameRe = /名\s*称\s*[:：]\s*([^\n]{2,80}?)(?=\n|$)/gi;
+      var rnm;
+      while ((rnm = relaxedNameRe.exec(fullText)) !== null) {
+        var rCand = rnm[1].trim();
+        // Must contain at least 2 Chinese characters and look like a business name
+        if (/[\u4e00-\u9fff]{2,}/.test(rCand) && !/^(?:购买方|销售方|信息|名称|地址|电话|纳税人)/.test(rCand)) {
+          // Clean any trailing non-name content
+          rCand = rCand.replace(/\s*(?:纳税人|统一社会|地址|开户行|电话|账号|复核|收款|开票).*$/i, '');
+          if (rCand.length > 2) allNameEntries.push(rCand);
+        }
+      }
+      if (allNameEntries.length > 0) {
+        // Last entry is most likely the seller
+        sellerName = allNameEntries[allNameEntries.length - 1];
       }
     }
 
@@ -203,6 +280,8 @@ function extractInvoiceInfo(textContent) {
       sellerName = sellerName.replace(/[，,。.、：:；;！!？?]+$/, '');
       // Remove trailing digits that are likely OCR noise
       sellerName = sellerName.replace(/\d{6,}$/, '');
+      // Remove trailing credit code fragments
+      sellerName = sellerName.replace(/\s+[A-Z0-9]{15,20}$/, '');
       sellerName = sellerName.trim();
       // Remove if too short after cleanup
       if (sellerName.length < 2) sellerName = '';
