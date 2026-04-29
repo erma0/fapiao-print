@@ -1,8 +1,9 @@
 use tauri::command;
 
-mod pdf_engine;
+// v1.3.1: fast import + close fix
 
-use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage};
+mod pdf_engine;
+use pdf_engine::{PdfRequest, PdfResult, PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
 
 // =====================================================
 // Tauri Commands
@@ -14,25 +15,39 @@ fn open_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
     pdf_engine::read_invoice_files(paths)
 }
 
-/// Generate PDF then open system print dialog (or direct print)
+/// Generate PDF then print directly or open for preview
 #[command]
-fn generate_and_print(request: PdfRequest, direct_print: Option<bool>) -> Result<PdfResult, String> {
+fn generate_and_print(request: PdfRequest, direct_print: Option<bool>, printer_name: Option<String>) -> Result<PdfResult, String> {
     let output_path = std::env::temp_dir().join("fapiao_print_output.pdf");
     pdf_engine::generate_pdf_from_pages(&request, &output_path)?;
 
     let is_direct = direct_print.unwrap_or(false);
+    let printer = printer_name.as_deref();
 
     #[cfg(target_os = "windows")]
     {
-        // dialog 模式：用 "open" 打开 PDF，用户可在阅读器中预览后手动打印
-        // direct 模式：用 "print" 直接发送到打印机
-        let verb = if is_direct { "print" } else { "open" };
-        shell_execute(verb, &output_path.to_string_lossy())?;
+        if is_direct {
+            // Direct print: use winprint to send PDF to printer (no PDF reader needed)
+            direct_print_pdf(&output_path, printer)?;
+        } else {
+            // Dialog mode: open PDF in default viewer for preview
+            shell_execute("open", &output_path.to_string_lossy())?;
+        }
     }
+
+    let msg = if is_direct {
+        if let Some(name) = printer {
+            format!("已发送到打印机「{}」", name)
+        } else {
+            "已发送到默认打印机".to_string()
+        }
+    } else {
+        "已打开PDF预览，请在阅读器中确认打印".to_string()
+    };
 
     Ok(PdfResult {
         success: true,
-        message: if is_direct { "已发送到打印机".to_string() } else { "已打开PDF预览，请在阅读器中确认打印".to_string() },
+        message: msg,
         pdf_path: Some(output_path.to_string_lossy().to_string()),
     })
 }
@@ -81,6 +96,10 @@ fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 /// Render PDF pages to images using Windows native API
 #[command]
 fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPage>, String> {
+    use std::sync::atomic::Ordering;
+    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
     pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(pdf_engine::RENDER_DPI))
 }
 
@@ -97,7 +116,90 @@ fn open_url(url: String) -> Result<(), String> {
 /// OCR an image from base64 data URL, return recognized text
 #[command]
 fn ocr_image(data_url: String) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
     pdf_engine::ocr_image_from_data(&data_url)
+}
+
+/// Get backend configuration (for runtime DPI validation)
+#[command]
+fn get_config() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "renderDpi": pdf_engine::RENDER_DPI,
+    }))
+}
+
+// =====================================================
+// New Commands: Trim Image & Layout-based PDF Generation
+// =====================================================
+
+/// Trim white edges from an image (base64 data URL → trimmed base64 data URL)
+#[command]
+fn trim_image(data_url: String) -> Result<String, String> {
+    use base64::Engine;
+    use image::ImageOutputFormat;
+
+    let img = pdf_engine::decode_base64_image(&data_url)
+        .map_err(|e| format!("解码失败: {}", e))?;
+    let trimmed = pdf_engine::trim_white_edges(&img, 245);
+
+    // Encode back to PNG base64
+    let mut buf = Vec::new();
+    trimmed.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("PNG编码失败: {}", e))?;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+    Ok(format!("data:image/png;base64,{}", b64))
+}
+
+/// Generate PDF from layout request (files + pages + settings).
+/// Replaces JS `renderPageToCanvas` + `generate_pdf_from_pages`.
+#[command]
+fn generate_pdf_from_layout(
+    request: LayoutRenderRequest,
+    output_path: String,
+    direct_print: Option<bool>,
+    printer_name: Option<String>,
+) -> Result<pdf_engine::PdfResult, String> {
+    use std::sync::atomic::Ordering;
+
+    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
+
+    let output = std::path::Path::new(&output_path);
+    pdf_engine::generate_pdf_from_layout(&request, output)
+        .map_err(|e| format!("PDF生成失败: {}", e))?;
+
+    let is_direct = direct_print.unwrap_or(false);
+    let printer = printer_name.as_deref();
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_direct {
+            super::direct_print_pdf(output, printer)?;
+        } else {
+            super::shell_execute("open", &output.to_string_lossy())?;
+        }
+    }
+
+    let msg = if is_direct {
+        if let Some(name) = printer {
+            format!("已发送到打印机「{}」", name)
+        } else {
+            "已发送到默认打印机".to_string()
+        }
+    } else {
+        "已打开PDF预览，请在阅读器中确认打印".to_string()
+    };
+
+    Ok(pdf_engine::PdfResult {
+        success: true,
+        message: msg,
+        pdf_path: Some(output.to_string_lossy().to_string()),
+    })
 }
 
 // =====================================================
@@ -118,10 +220,9 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 
+    let _com = ComGuard::init();
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let v: HSTRING = verb.into();
         let f: HSTRING = file.into();
         let ret = ShellExecuteW(
@@ -136,6 +237,46 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
             return Err(format!("ShellExecute 失败，错误码: {}", ret.0 as isize));
         }
     }
+    Ok(())
+}
+
+/// Direct-print a PDF file to a specific printer (or system default) using winprint
+/// This bypasses PDF reader software entirely — sends directly to Windows Print Spooler
+#[cfg(target_os = "windows")]
+fn direct_print_pdf(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
+    use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
+    use winprint::ticket::PrintTicket;
+
+    // Find the target printer
+    let devices = PrinterDevice::all()
+        .map_err(|e| format!("获取打印机列表失败: {}", e))?;
+
+    let device = if let Some(name) = printer_name {
+        // User selected a specific printer
+        devices.into_iter()
+            .find(|d| d.name().eq_ignore_ascii_case(name))
+            .ok_or_else(|| format!("找不到打印机「{}」", name))?
+    } else {
+        // No specific printer selected: find the system default printer
+        let default_name = pdf_engine::get_default_printer_name();
+        if let Some(ref dn) = default_name {
+            devices.into_iter()
+                .find(|d| d.name().eq_ignore_ascii_case(dn))
+                .ok_or_else(|| format!("找不到默认打印机「{}」", dn))?
+        } else {
+            // Fallback: use first available printer
+            devices.into_iter()
+                .next()
+                .ok_or_else(|| "系统中没有可用的打印机".to_string())?
+        }
+    };
+
+    let printer = WinPdfPrinter::new(device);
+    let ticket = PrintTicket::default();
+
+    printer.print(pdf_path, ticket)
+        .map_err(|e| format!("打印失败: {:?}", e))?;
+
     Ok(())
 }
 
@@ -163,15 +304,39 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
-            // Listen for file drag-and-drop events
+            // Handle window events: close + drag-and-drop
             {
                 use tauri::Manager;
                 let window = app.get_webview_window("main").unwrap();
                 let win = window.clone();
+
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::DragDrop(drop_event) = event {
-                        match drop_event {
-                            tauri::DragDropEvent::Drop { paths, .. } => {
+                    match event {
+                        // --- Close event: two-phase shutdown ---
+                        // Phase 1: Set SHUTTING_DOWN flag to reject new OCR/COM requests
+                        // Phase 2: Spawn a thread that waits 300ms then calls TerminateProcess.
+                        //   - 300ms gives in-flight operations time to check the flag and return
+                        //   - TerminateProcess bypasses at-exit handlers (including CoUninitialize
+                        //     which can deadlock if COM async ops are still running)
+                        //   - Running in a separate thread avoids deadlocking in WebView2 callback
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            use std::sync::atomic::Ordering;
+                            pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                            std::thread::spawn(|| {
+                                std::thread::sleep(std::time::Duration::from_millis(300));
+                                #[cfg(target_os = "windows")]
+                                unsafe {
+                                    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                                    let handle = GetCurrentProcess();
+                                    let _ = TerminateProcess(handle, 0);
+                                }
+                                #[cfg(not(target_os = "windows"))]
+                                std::process::exit(0);
+                            });
+                        }
+                        // --- Drag-and-drop file handling ---
+                        tauri::WindowEvent::DragDrop(drop_event) => {
+                            if let tauri::DragDropEvent::Drop { paths, .. } = drop_event {
                                 let valid: Vec<String> = paths.iter()
                                     .filter_map(|p| {
                                         let valid_ext = p.extension()
@@ -187,8 +352,8 @@ pub fn run() {
                                     let _ = win.eval(&js);
                                 }
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
                 });
             }
@@ -202,6 +367,9 @@ pub fn run() {
             render_pdf_pages,
             open_url,
             ocr_image,
+            get_config,
+            trim_image,
+            generate_pdf_from_layout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

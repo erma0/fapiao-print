@@ -69,7 +69,7 @@
 | PDF 渲染 | WinRT + PDF.js | WinRT 优先（支持系统字体），PDF.js 回退 |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
 | PDF 生成 | printpdf | Rust 原生 PDF 生成 |
-| 打印 | Windows ShellExecuteW | 系统级打印，无弹窗 |
+| 打印 | winprint (Win32 Print Spooler) | 直接发送到打印机，可指定打印机 |
 | 图像处理 | image (Rust) | 高性能图像解码 |
 
 ## 📦 项目结构
@@ -102,7 +102,7 @@ fapiao-print/
 
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/tools/install) 1.77+
-- Windows 10/11（打印功能依赖 Windows Shell API）
+- Windows 10/11（打印功能依赖 Windows Print Spooler API）
 
 ### 安装依赖
 
@@ -137,7 +137,11 @@ npm run build
 | 模式 | 行为 |
 |------|------|
 | 弹出打印对话框 | 生成 PDF 并用系统默认阅读器打开，用户确认后打印 |
-| 直接打印 | 生成 PDF 并直接发送到默认打印机 |
+| 直接打印 | 生成 PDF 并直接发送到指定打印机（或系统默认打印机），无需 PDF 阅读器 |
+
+### 打印机选择
+
+在左侧「🖨 打印」面板中可选择特定打印机，未选择时使用系统默认打印机。支持点击「🔄 刷新打印机列表」更新可用打印机。
 
 ### 保存目录
 
@@ -175,6 +179,7 @@ npm run build
 - OFD 格式解析（ZIP + XML + 图片提取）
 - PDF 画质优化：300 DPI + PNG 无损输出 + 自适应渲染
 - 多发票排版边距独立计算（per-slot margin）
+- 打印机选择与直接打印（winprint + Win32 GetDefaultPrinterW，绕过 PDF 阅读器）
 
 ## 📄 许可证
 

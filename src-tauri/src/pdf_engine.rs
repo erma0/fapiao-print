@@ -1,9 +1,47 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufWriter;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Rendering DPI — must match frontend PDF_RENDER_DPI constant
 pub const RENDER_DPI: u32 = 300;
+
+/// Global shutdown flag — checked by long-running COM operations to abort early.
+/// Set to true when the user clicks the close button, before TerminateProcess.
+pub static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+// =====================================================
+// COM RAII Guard — ensures CoUninitialize is called on drop
+// =====================================================
+
+pub(crate) struct ComGuard;
+
+#[cfg(target_os = "windows")]
+impl ComGuard {
+    pub(crate) fn init() -> Self {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            );
+        }
+        ComGuard
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+impl ComGuard {
+    pub(crate) fn init() -> Self {
+        ComGuard
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe { windows::Win32::System::Com::CoUninitialize(); }
+    }
+}
 
 // =====================================================
 // Types
@@ -75,17 +113,16 @@ pub struct RenderedPage {
 /// This handles PDFs with system font references that PDF.js cannot render
 #[cfg(target_os = "windows")]
 pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedPage>, String> {
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
     use windows::core::HSTRING;
     use windows::Data::Pdf::{PdfDocument, PdfPageRenderOptions};
     use windows::Storage::StorageFile;
     use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use base64::Engine;
 
-    // Initialize COM for this thread
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
+    let _com = ComGuard::init();
 
     let path_h = HSTRING::from(pdf_path);
 
@@ -343,39 +380,52 @@ fn add_image_to_layer(
 
 #[cfg(target_os = "windows")]
 pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    use winprint::printer::PrinterDevice;
 
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command",
-            "Get-Printer | Select-Object Name, Default | ConvertTo-Json"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    // Get printer list from winprint (native API, no encoding issues)
+    let devices = PrinterDevice::all()
         .map_err(|e| format!("获取打印机列表失败: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().is_empty() {
-        return Ok(vec![]);
-    }
+    // Get default printer name via PowerShell (winprint doesn't expose is_default)
+    let default_name = get_default_printer_name();
 
-    #[derive(Deserialize)]
-    #[allow(non_snake_case)]
-    struct PsPrinter {
-        Name: String,
-        #[serde(default)]
-        Default: Option<bool>,
-    }
-
-    let printers: Vec<PsPrinter> = if stdout.trim().starts_with('[') {
-        serde_json::from_str(&stdout).unwrap_or_default()
-    } else {
-        serde_json::from_str::<PsPrinter>(&stdout).map(|p| vec![p]).unwrap_or_default()
-    };
-
-    Ok(printers.into_iter().map(|p| PrinterInfo {
-        name: p.Name,
-        is_default: p.Default.unwrap_or(false),
+    Ok(devices.into_iter().map(|d| {
+        let name = d.name().to_string();
+        let is_default = default_name.as_ref().map_or(false, |dn| dn.eq_ignore_ascii_case(&name));
+        PrinterInfo { name, is_default }
     }).collect())
+}
+
+/// Get the system default printer name via Win32 API (fast, no PowerShell needed)
+#[cfg(target_os = "windows")]
+pub fn get_default_printer_name() -> Option<String> {
+    use windows::Win32::Graphics::Printing::GetDefaultPrinterW;
+    use windows::core::PWSTR;
+
+    unsafe {
+        // Step 1: query required buffer size (pass null PWSTR)
+        let mut size: u32 = 0;
+        let _ = GetDefaultPrinterW(PWSTR::null(), &mut size);
+        if size == 0 {
+            return None;
+        }
+
+        // Step 2: allocate buffer and get the name
+        let mut buf = vec![0u16; size as usize];
+        let result = GetDefaultPrinterW(PWSTR(buf.as_mut_ptr()), &mut size);
+        if result.as_bool() && size > 0 {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(size as usize);
+            if len > 0 {
+                return Some(String::from_utf16_lossy(&buf[..len]));
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_default_printer_name() -> Option<String> {
+    None
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -410,13 +460,15 @@ fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage, String> {
 /// OCR an image from base64 data URL, return recognized text
 #[cfg(target_os = "windows")]
 pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
     use windows::Media::Ocr::OcrEngine;
     use windows::Graphics::Imaging::BitmapDecoder;
     use windows::Storage::Streams::InMemoryRandomAccessStream;
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use base64::Engine;
 
-    unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED); }
+    let _com = ComGuard::init();
 
     // Decode base64 data
     let base64_data = if data_url.contains(',') {
@@ -564,15 +616,13 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
         entry.read_to_end(&mut data)
             .map_err(|e| format!("读取OFD图片数据失败: {}", e))?;
 
-        // Determine MIME type and extension
-        // MIME uses actual image type (needed for Image loading), ext shows "ofd" for display
+        // Determine MIME type and extension based on actual image format
         let lower = entry_name.to_lowercase();
-        let mime = if lower.ends_with(".png") {
-            "image/png"
+        let (mime, img_ext) = if lower.ends_with(".png") {
+            ("image/png", "png")
         } else {
-            "image/jpeg"
+            ("image/jpeg", "jpg")
         };
-        let img_ext = "ofd";
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
         let data_url = format!("data:{};base64,{}", mime, b64);
@@ -581,4 +631,413 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
 
     log::info!("OFD extracted {} images from {}", results.len(), ofd_path);
     Ok(results)
+}
+
+// =====================================================
+// White Edge Trimming
+// =====================================================
+
+/// Trim white edges from an image.
+/// `threshold`: pixels where R, G, B are all >= threshold are considered "white".
+/// Returns the cropped image with 5px padding.
+pub fn trim_white_edges(img: &image::DynamicImage, threshold: u8) -> image::DynamicImage {
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    if w == 0 || h == 0 {
+        return img.clone();
+    }
+
+    // Find top
+    let mut top = 0u32;
+    'outer: for y in 0..h {
+        for x in 0..w {
+            let p = rgba.get_pixel(x, y);
+            if p[0] < threshold || p[1] < threshold || p[2] < threshold {
+                top = y;
+                break 'outer;
+            }
+        }
+    }
+
+    // Find bottom
+    let mut bottom = h - 1;
+    'outer2: for y in (0..h).rev() {
+        for x in 0..w {
+            let p = rgba.get_pixel(x, y);
+            if p[0] < threshold || p[1] < threshold || p[2] < threshold {
+                bottom = y;
+                break 'outer2;
+            }
+        }
+    }
+
+    // Find left
+    let mut left = 0u32;
+    'outer3: for x in 0..w {
+        for y in top..=bottom {
+            let p = rgba.get_pixel(x, y);
+            if p[0] < threshold || p[1] < threshold || p[2] < threshold {
+                left = x;
+                break 'outer3;
+            }
+        }
+    }
+
+    // Find right
+    let mut right = w - 1;
+    'outer4: for x in (0..w).rev() {
+        for y in top..=bottom {
+            let p = rgba.get_pixel(x, y);
+            if p[0] < threshold || p[1] < threshold || p[2] < threshold {
+                right = x;
+                break 'outer4;
+            }
+        }
+    }
+
+    if top >= bottom || left >= right {
+        return img.clone();
+    }
+
+    // Add 5px padding, clamp to image bounds
+    let p: u32 = 5;
+    let top    = top.saturating_sub(p);
+    let left   = left.saturating_sub(p);
+    let bottom = (bottom + p).min(h - 1);
+    let right  = (right + p).min(w - 1);
+
+    let cw = right - left + 1;
+    let ch = bottom - top + 1;
+    let cropped: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        rgba.crop_imm(left, top, cw, ch).to_image();
+    image::DynamicImage::ImageRgba8(cropped)
+}
+
+// =====================================================
+// Layout Rendering (JS canvas → Rust)
+// =====================================================
+
+use serde::{Deserialize, Serialize};
+
+/// Settings for layout rendering — mirrors JS getSettings() output.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderSettings {
+    pub paper_w: f32,
+    pub paper_h: f32,
+    pub cols: u32,
+    pub rows: u32,
+    pub margin_top: f32,
+    pub margin_bottom: f32,
+    pub margin_left: f32,
+    pub margin_right: f32,
+    pub gap_h: f32,
+    pub gap_v: f32,
+    pub fit_mode: String,
+    pub custom_scale: f32,
+    pub global_rotation: String,
+    pub color_mode: String,
+    pub border: bool,
+    pub number: bool,
+    pub cutline: bool,
+    pub watermark: bool,
+    pub watermark_text: Option<String>,
+    pub watermark_color: String,
+    pub watermark_opacity: f32,
+    pub watermark_angle: f32,
+    pub border_width: Option<f32>,
+    pub border_color: Option<String>,
+    pub trim_white: Option<bool>,
+}
+
+/// A file image with its metadata — sent from JS.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSpec {
+    pub data_url: String,
+    pub ow: u32,
+    pub oh: u32,
+    pub rotation: i32,
+}
+
+/// A slot on a page — which file (if any) goes here, and its rotation.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotSpec {
+    pub file_index: Option<usize>,
+    pub rotation: i32,
+}
+
+/// A page = array of slots.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageSpec {
+    pub slots: Vec<SlotSpec>,
+}
+
+/// Full request for layout-based PDF generation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutRenderRequest {
+    pub files: Vec<FileSpec>,
+    pub pages: Vec<PageSpec>,
+    pub settings: RenderSettings,
+}
+
+/// A layout slot in mm coordinates (bottom-left origin, for printpdf).
+struct LayoutSlotMm {
+    x_mm: f32,
+    y_mm: f32,
+    w_mm: f32,
+    h_mm: f32,
+}
+
+/// Calculate layout slot positions in mm (bottom-left origin for printpdf).
+fn calculate_layout_mm(settings: &RenderSettings) -> (Vec<LayoutSlotMm>, f32, f32) {
+    let pw = settings.paper_w;
+    let ph = settings.paper_h;
+    let mt = settings.margin_top;
+    let mb = settings.margin_bottom;
+    let ml = settings.margin_left;
+    let mr = settings.margin_right;
+    let gh = settings.gap_h;
+    let gv = settings.gap_v;
+    let cols = settings.cols as f32;
+    let rows = settings.rows as f32;
+
+    let sw = (pw - cols * (ml + mr) - (cols - 1.0) * gh) / cols;
+    let sh = (ph - rows * (mt + mb) - (rows - 1.0) * gv) / rows;
+
+    let mut slots = Vec::new();
+    for r in 0..settings.rows as usize {
+        for c in 0..settings.cols as usize {
+            // Convert row from JS (top-down) to printpdf (bottom-up)
+            let row_from_bottom = settings.rows as usize - 1 - r;
+            let x_mm = ml + c as f32 * (sw + ml + mr + gh);
+            let y_mm = mb + row_from_bottom as f32 * (sh + mt + mb + gv);
+            slots.push(LayoutSlotMm { x_mm, y_mm, w_mm: sw, h_mm: sh });
+        }
+    }
+
+    (slots, pw, ph)
+}
+
+/// Decode a base64 data URL to DynamicImage.
+fn decode_file_image(data_url: &str) -> Result<image::DynamicImage, String> {
+    decode_base64_image(data_url)
+}
+
+/// Apply grayscale or B&W conversion to an image.
+fn apply_color_mode(img: image::DynamicImage, mode: &str) -> image::DynamicImage {
+    match mode {
+        "grayscale" => {
+            let gray = img.to_luma8();
+            let rgba = image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
+                let p = gray.get_pixel(x, y);
+                image::Rgba([p[0], p[0], p[0], 255])
+            });
+            image::DynamicImage::ImageRgba8(rgba)
+        }
+        "bw" => {
+            let gray = img.to_luma8();
+            let rgba = image::ImageBuffer::from_fn(gray.width(), gray.height(), |x, y| {
+                let p = gray.get_pixel(x, y);
+                let v = if p[0] > 128 { 255 } else { 0 };
+                image::Rgba([v, v, v, 255])
+            });
+            image::DynamicImage::ImageRgba8(rgba)
+        }
+        _ => img,
+    }
+}
+
+/// Render a single page: add all slot images to the PDF page.
+fn render_one_page(
+    doc: &printpdf::PdfDocument,
+    page_idx: printpdf::indices::PdfPageIndex,
+    layer_idx: printpdf::indices::PdfLayerIndex,
+    page_spec: &PageSpec,
+    files: &[FileSpec],
+    settings: &RenderSettings,
+    slot_positions: &[LayoutSlotMm],
+) -> Result<(), String> {
+    use printpdf::*;
+
+    let layer = doc.get_page(page_idx).get_layer(layer_idx);
+
+    for (slot_idx, slot_spec) in page_spec.slots.iter().enumerate() {
+        let file_idx = match slot_spec.file_index {
+            Some(idx) if idx < files.len() => idx,
+            _ => continue,
+        };
+        let file_spec = &files[file_idx];
+
+        // Decode image
+        let mut img = decode_file_image(&file_spec.data_url)?;
+        let rot = slot_spec.rotation;
+
+        // Apply trim
+        if settings.trim_white.unwrap_or(false) {
+            img = trim_white_edges(&img, 245);
+        }
+
+        // Apply rotation (90° multiples)
+        img = match ((rot % 360) + 360) % 360 {
+            90  => image::DynamicImage::ImageRgba8(image::imageops::rotate90(&img.to_rgba8())),
+            180 => image::DynamicImage::ImageRgba8(image::imageops::rotate180(&img.to_rgba8())),
+            270 => image::DynamicImage::ImageRgba8(image::imageops::rotate270(&img.to_rgba8())),
+            _   => img,
+        };
+
+        // Apply color mode
+        img = apply_color_mode(img, &settings.color_mode);
+
+        let (iw, ih) = (img.width(), img.height());
+
+        // Compute draw dimensions in mm at RENDER_DPI
+        let iw_mm = iw as f32 * 25.4 / RENDER_DPI as f32;
+        let ih_mm = ih as f32 * 25.4 / RENDER_DPI as f32;
+
+        // Compute scale to fit in slot
+        let (scale_x, scale_y) = match settings.fit_mode.as_str() {
+            "fill" => {
+                let sx = slot_positions[slot_idx].w_mm / iw_mm;
+                let sy = slot_positions[slot_idx].h_mm / ih_mm;
+                (sx, sy)
+            }
+            "original" => (1.0, 1.0),
+            "custom" => {
+                let ref_dim = slot_positions[slot_idx].w_mm.min(slot_positions[slot_idx].h_mm);
+                let s = ref_dim / iw_mm * settings.custom_scale;
+                (s, s)
+            }
+            _ => {
+                // "contain"
+                let s = (slot_positions[slot_idx].w_mm / iw_mm)
+                    .min(slot_positions[slot_idx].h_mm / ih_mm);
+                (s, s)
+            }
+        };
+
+        // Centered position in slot (bottom-left origin)
+        let draw_w_mm = iw_mm * scale_x;
+        let draw_h_mm = ih_mm * scale_y;
+        let offset_x_mm = slot_positions[slot_idx].x_mm
+            + (slot_positions[slot_idx].w_mm - draw_w_mm) / 2.0;
+        let offset_y_mm = slot_positions[slot_idx].y_mm
+            + (slot_positions[slot_idx].h_mm - draw_h_mm) / 2.0;
+
+        // The image's natural size in PDF at RENDER_DPI:
+        //   iw_px → iw_mm = iw * 25.4 / RENDER_DPI
+        // We want to scale it to draw_w_mm:
+        //   scale_for_pdf = draw_w_mm / iw_mm
+        // But printpdf applies: natural_size * dpi_scale * transform_scale
+        // where natural_size at dpi=D: DPI_inches * 25.4 mm
+        // Actually, printpdf's ImageTransform with dpi=Some(d):
+        //   rendered_width_mm = img_width_px / d * 25.4 * scale_x
+        // So to get draw_w_mm: scale_x = draw_w_mm / (iw as f32 / RENDER_DPI as f32 * 25.4)
+        // Which is exactly: scale_x = draw_w_mm / iw_mm
+        // And we already computed that!
+
+        let pdf_image = Image::from_dynamic_image(&img);
+        pdf_image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(offset_x_mm)),
+                translate_y: Some(Mm(offset_y_mm)),
+                scale_x: Some(scale_x),
+                scale_y: Some(scale_y),
+                rotate: None,
+                dpi: Some(RENDER_DPI as f32),
+            },
+        );
+
+        // Number badge
+        if settings.number {
+            let num_str = (slot_idx + 1).to_string();
+            // Position at top-right of slot (convert to bottom-left)
+            let num_x_mm = slot_positions[slot_idx].x_mm + slot_positions[slot_idx].w_mm - 5.0;
+            let num_y_mm = slot_positions[slot_idx].y_mm + slot_positions[slot_idx].h_mm - 3.0;
+            layer.use_text(
+                num_str,
+                11.0,
+                Mm(num_x_mm),
+                Mm(num_y_mm),
+                printpdf::IndirectFontRef::default(),
+            );
+        }
+    }
+
+    // Watermark
+    if settings.watermark {
+        if let Some(ref text) = settings.watermark_text {
+            let center_x = settings.paper_w / 2.0;
+            let center_y = settings.paper_h / 2.0;
+            // Note: printpdf's use_text doesn't support rotation easily.
+            // For rotated text, we'd need to use a transformation matrix or
+            // accept un-rotated watermark text.
+            // For now, add un-rotated text at center.
+            layer.use_text(
+                text.clone(),
+                48.0,
+                Mm(center_x - 40.0),
+                Mm(center_y),
+                printpdf::IndirectFontRef::default(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate PDF from layout request (files + pages + settings).
+/// This replaces JS `renderPageToCanvas` + `generate_pdf_from_pages`.
+pub fn generate_pdf_from_layout(
+    request: &LayoutRenderRequest,
+    output_path: &std::path::Path,
+) -> Result<(), String> {
+    use printpdf::*;
+
+    if request.pages.is_empty() {
+        return Err("没有页面数据".to_string());
+    }
+
+    let (slot_positions, pw, ph) = calculate_layout_mm(&request.settings);
+
+    // Create PDF document
+    let (doc, page1_idx, layer1_idx) = PdfDocument::new(
+        "发票打印",
+        Mm(pw),
+        Mm(ph),
+        "Layer 1",
+    );
+
+    for (page_idx, page_spec) in request.pages.iter().enumerate() {
+        let (p_idx, l_idx) = if page_idx == 0 {
+            (page1_idx, layer1_idx)
+        } else {
+            let (pi, li) = doc.add_page(Mm(pw), Mm(ph), &format!("Layer {}", page_idx + 1));
+            (pi, li)
+        };
+
+        render_one_page(
+            &doc,
+            p_idx,
+            l_idx,
+            page_spec,
+            &request.files,
+            &request.settings,
+            &slot_positions,
+        )?;
+    }
+
+    // Save PDF
+    let mut out = std::io::BufWriter::new(
+        std::fs::File::create(output_path)
+            .map_err(|e| format!("创建文件失败: {}", e))?,
+    );
+    doc.save(&mut out)
+        .map_err(|e| format!("保存PDF失败: {}", e))?;
+
+    Ok(())
 }
