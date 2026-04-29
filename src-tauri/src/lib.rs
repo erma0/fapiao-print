@@ -78,6 +78,15 @@ fn get_temp_dir() -> Result<String, String> {
     Ok(temp.to_string_lossy().to_string())
 }
 
+/// Show the main window — called by frontend after splash screen renders
+#[command]
+fn show_window(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+    }
+}
+
 // =====================================================
 // New Commands: Trim Image & Layout-based PDF Generation
 // =====================================================
@@ -243,6 +252,13 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
+            // Hide window initially to prevent white flash on startup.
+            // The frontend splash screen will request the window to show once loaded.
+            {
+                use tauri::Manager;
+                let window = app.get_webview_window("main").unwrap();
+                let _ = window.hide();
+            }
             // Handle window events: close + drag-and-drop
             {
                 use tauri::Manager;
@@ -312,6 +328,7 @@ pub fn run() {
             ocr_image,
             get_config,
             get_temp_dir,
+            show_window,
             trim_image,
             generate_pdf_from_layout,
         ])

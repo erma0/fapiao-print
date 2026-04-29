@@ -17,7 +17,7 @@ function parseAmt(s) {
  */
 function isTicketText(text) {
   var t = text.substring(0, 500);
-  return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t);
+  return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位|出\s*租|打\s*车|网\s*约|滴\s*滴)/.test(t);
 }
 
 /**
@@ -51,7 +51,7 @@ function extractInvoiceInfo(textContent) {
     // === Extract seller info BEFORE normalization (uses raw text with line breaks) ===
 
     // Credit code: find ALL matches, take the LAST one (seller's in standard invoices where buyer comes first)
-    var ccRe = /(?:统一社会信用代码|纳税人识别号)\s*[:：／/]?\s*([A-Z0-9]{15,20})/gi;
+    var ccRe = /(?:统一社会信用代码|纳税人识别号)\s*[:：／/]\s*([A-Z0-9]{15,20})/gi;
     var ccM, lastCcCode = '', lastCcPos = -1;
     var firstCcPos = -1;
     while ((ccM = ccRe.exec(fullText)) !== null) {
@@ -60,6 +60,20 @@ function extractInvoiceInfo(textContent) {
       lastCcPos = ccM.index;
     }
     if (lastCcCode) sellerCreditCode = lastCcCode.toUpperCase();
+
+    // Also try standalone credit codes without the prefix label (some OCR misses the label)
+    if (!lastCcCode) {
+      var standaloneCcRe = /([0-9][A-Z0-9]{17})\b/g;
+      var sccM;
+      while ((sccM = standaloneCcRe.exec(fullText)) !== null) {
+        if (/^[0-9]/.test(sccM[1]) && /[A-Z]/.test(sccM[1]) && /\d{6,}/.test(sccM[1])) {
+          lastCcCode = sccM[1];
+          lastCcPos = sccM.index;
+          if (firstCcPos < 0) firstCcPos = sccM.index;
+        }
+      }
+      if (lastCcCode) sellerCreditCode = lastCcCode.toUpperCase();
+    }
 
     // Seller name — multiple strategies in priority order:
     // Strategy 1: Direct "销售方(+信息)" + "名称:" pattern (most specific)
@@ -123,6 +137,61 @@ function extractInvoiceInfo(textContent) {
       if (allNames.length > 0) sellerName = allNames[allNames.length - 1];
     }
 
+    // Strategy 6: "收款单位"/"销货单位"/"开票方" pattern (some invoice formats use these)
+    if (!sellerName) {
+      var altSellerMatch = fullText.match(/(?:收款单位|销货单位|开票方|销售单位|开票人)[^\n]{0,30}?[:：]?\s*([^\n]{2,60}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[a-zA-Z0-9]{15,20})|\n|$)/i);
+      if (altSellerMatch) {
+        var altCand = altSellerMatch[1].trim();
+        if (altCand.length > 1 && !/^(?:购买方|信息|名称|地址|电话)/.test(altCand)) {
+          sellerName = altCand;
+        }
+      }
+    }
+
+    // Strategy 7: Use credit code position — find company name near the last credit code
+    // Some OCR outputs have: "91440300xxxxxxxxx  深圳市某某科技有限公司"
+    if (!sellerName && lastCcPos >= 0) {
+      var afterLastCc = fullText.substring(lastCcPos);
+      // Look for Chinese company name pattern near credit code
+      var companyRe = /(?:[A-Z0-9]{15,20})\s*[:：]?\s*([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]+(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|室|坊|铺))/;
+      var compMatch = afterLastCc.match(companyRe);
+      if (compMatch) {
+        sellerName = compMatch[1].trim();
+      }
+    }
+
+    // Strategy 8: Find any Chinese company name after "销售方" keyword
+    if (!sellerName) {
+      var sellerRegionMatch = fullText.match(/销售方[^\n]{0,200}/i);
+      if (sellerRegionMatch) {
+        var region = sellerRegionMatch[0];
+        var companyInRegion = region.match(/([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]+(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处))/);
+        if (companyInRegion) {
+          sellerName = companyInRegion[1].trim();
+        }
+      }
+    }
+
+    // Strategy 9: Last resort — find the LAST company name pattern in text
+    // If text contains "购买方" section before "销售方" section, the last company name is usually the seller
+    if (!sellerName) {
+      var allCompanies = [];
+      var companyGlobalRe = /([\u4e00-\u9fff][\u4e00-\u9fff\w（）()·\-\.]{2,25}(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处))/g;
+      var cm2;
+      while ((cm2 = companyGlobalRe.exec(fullText)) !== null) {
+        var cname = cm2[1].trim();
+        // Filter out common non-seller company names
+        if (cname.length > 3 && !/^(?:购买方|销售方|信息|名称|地址)/.test(cname)) {
+          allCompanies.push(cname);
+        }
+      }
+      // In standard invoices, the last company name is often the seller
+      // But only use this if we have at least 2 company names (buyer + seller pattern)
+      if (allCompanies.length >= 2) {
+        sellerName = allCompanies[allCompanies.length - 1];
+      }
+    }
+
     // Final cleanup: remove common OCR artifacts and section labels
     if (sellerName) {
       sellerName = sellerName.replace(/^[\s:：]+/, '').replace(/[\s:：]+$/, '');
@@ -130,6 +199,13 @@ function extractInvoiceInfo(textContent) {
       if (/^(?:购买方信息|销售方信息|购买方|销售方|名称|信息|纳税人|地址|电话|开户行|账号)$/.test(sellerName)) {
         sellerName = '';
       }
+      // Remove trailing punctuation artifacts
+      sellerName = sellerName.replace(/[，,。.、：:；;！!？?]+$/, '');
+      // Remove trailing digits that are likely OCR noise
+      sellerName = sellerName.replace(/\d{6,}$/, '');
+      sellerName = sellerName.trim();
+      // Remove if too short after cleanup
+      if (sellerName.length < 2) sellerName = '';
     }
   }
 
@@ -158,8 +234,13 @@ function extractInvoiceInfo(textContent) {
   amountTax = findFirstNum('价\\s*税\\s*合\\s*计\\s*[（(]\\s*大\\s*写\\s*[）)][^\\d]*?[（(]\\s*小\\s*写\\s*[）)]', fullText);
   if (!amountTax) amountTax = findFirstNum('价\\s*税\\s*合\\s*计\\s*[（(]\\s*小\\s*写\\s*[）)]', fullText);
   if (!amountTax) amountTax = findFirstNum('价\\s*税\\s*合\\s*计', fullText);
+  // Variant: 价税合计 without explicit 小写/大写, just ¥ directly
+  if (!amountTax) {
+    var pthMatch = fullText.match(/价\s*税\s*合\s*计[^\d]*?¥\s*(\d+(?:,\d{3})*\.\d{2})/);
+    if (pthMatch) amountTax = parseAmt(pthMatch[1]);
+  }
 
-  // === Step 1.5: 电车票/打车电子发票 ===
+  // === Step 1.5: 电子发票/打车发票/网约车发票 ===
   if (!amountTax && !amountNoTax) {
     amountTax = findFirstNum('实\\s*付\\s*金\\s*额', fullText);
     if (amountTax > 0) amountNoTax = amountTax;
@@ -169,10 +250,32 @@ function extractInvoiceInfo(textContent) {
     if (amountTax > 0) amountNoTax = amountTax;
   }
   if (!amountTax && !amountNoTax) {
+    amountTax = findFirstNum('合\\s*计\\s*金\\s*额', fullText);
+    if (amountTax > 0) amountNoTax = amountTax;
+  }
+  if (!amountTax && !amountNoTax) {
+    amountTax = findFirstNum('金\\s*额\\s*合\\s*计', fullText);
+    if (amountTax > 0) amountNoTax = amountTax;
+  }
+  if (!amountTax && !amountNoTax) {
     var amtLineMatch = fullText.match(/(?:合\s*计|总\s*计|计\s*费)[^\n]*?金\s*额[^\d]*?(\d+(?:,\d{3})*\.\d{2})/);
     if (amtLineMatch) {
       var val3 = parseAmt(amtLineMatch[1]);
       if (val3 > 0) { amountTax = val3; amountNoTax = val3; }
+    }
+  }
+  // 电子发票: "税价合计" (OCR sometimes swaps characters)
+  if (!amountTax && !amountNoTax) {
+    amountTax = findFirstNum('税\\s*价\\s*合\\s*计', fullText);
+    if (amountTax > 0) amountNoTax = amountTax;
+  }
+  // 电子发票: amount after "¥" near "合计" in any order
+  if (!amountTax && !amountNoTax) {
+    var amtNearTotal = fullText.match(/合\s*计[^\n]{0,30}?¥\s*(\d+(?:,\d{3})*\.\d{2})/);
+    if (!amtNearTotal) amtNearTotal = fullText.match(/¥\s*(\d+(?:,\d{3})*\.\d{2})[^\n]{0,30}?合\s*计/);
+    if (amtNearTotal) {
+      var amtVal = parseAmt(amtNearTotal[1]);
+      if (amtVal > 0 && amtVal < 100000) { amountTax = amtVal; amountNoTax = amtVal; }
     }
   }
 
@@ -235,6 +338,14 @@ function extractInvoiceInfo(textContent) {
       if (dval > 0 && dval < 10000) { amountTax = dval; amountNoTax = dval; }
     }
   }
+  // 车票: "￥" (full-width yen sign) pattern
+  if (!amountTax && !amountNoTax) {
+    var fwyMatch = fullText.match(/￥\s*(\d+(?:,\d{3})*\.\d{2})/);
+    if (fwyMatch) {
+      var fyVal = parseAmt(fwyMatch[1]);
+      if (fyVal > 0 && fyVal < 10000) { amountTax = fyVal; amountNoTax = fyVal; }
+    }
+  }
   if (!amountTax && !amountNoTax) {
     var trainKwRe = /(?:车\s*次|车\s*站|号\s*车|检\s*票|铺\s*位|卧\s*铺|二\s*等|一\s*等|动\s*车|高\s*铁|特\s*等|进\s*站|出\s*站|乘\s*车|站\s*台)/;
     if (trainKwRe.test(fullText)) {
@@ -244,6 +355,12 @@ function extractInvoiceInfo(textContent) {
       while ((ym = yenRe.exec(fullText)) !== null) {
         var yv = parseAmt(ym[1]);
         if (yv > 0 && yv < 5000) allYen.push(yv);
+      }
+      // Also check ￥ (full-width)
+      var yenRe2 = /￥\s*(\d+(?:,\d{3})*\.\d{2})/g;
+      while ((ym = yenRe2.exec(fullText)) !== null) {
+        var yv2 = parseAmt(ym[1]);
+        if (yv2 > 0 && yv2 < 5000) allYen.push(yv2);
       }
       // Also look for amounts without ¥ symbol — pattern: "票价 553.00" or standalone amounts after keywords
       if (allYen.length === 0) {
@@ -273,13 +390,31 @@ function extractInvoiceInfo(textContent) {
     }
   }
 
+  // === Step 6.7: 定额发票 — amount right after "¥" in short texts ===
+  if (!amountTax && !amountNoTax) {
+    // 定额发票 usually very short, contains just "金额 ¥X.00"
+    if (fullText.length < 500) {
+      var dingEMatch = fullText.match(/金\s*额[^\d]*?¥?\s*(\d+\.\d{2})/);
+      if (dingEMatch) {
+        var deVal = parseAmt(dingEMatch[1]);
+        if (deVal > 0 && deVal < 100000) { amountTax = deVal; amountNoTax = deVal; }
+      }
+    }
+  }
+
   // === Step 6.5: Super fallback — any ¥ amount ===
   if (!amountTax && !amountNoTax) {
-    var yenRe2 = /¥\s*(\d+(?:,\d{3})*\.\d{2})/g;
+    var yenRe2a = /¥\s*(\d+(?:,\d{3})*\.\d{2})/g;
     var amounts = [], ym2;
-    while ((ym2 = yenRe2.exec(fullText)) !== null) {
-      var yv2 = parseAmt(ym2[1]);
-      if (yv2 > 0 && yv2 < 50000) amounts.push(yv2);
+    while ((ym2 = yenRe2a.exec(fullText)) !== null) {
+      var yv2a = parseAmt(ym2[1]);
+      if (yv2a > 0 && yv2a < 50000) amounts.push(yv2a);
+    }
+    // Also check ￥ (full-width yen sign)
+    var yenRe2b = /￥\s*(\d+(?:,\d{3})*\.\d{2})/g;
+    while ((ym2 = yenRe2b.exec(fullText)) !== null) {
+      var yv2b = parseAmt(ym2[1]);
+      if (yv2b > 0 && yv2b < 50000) amounts.push(yv2b);
     }
     if (amounts.length > 0) {
       var maxAmt = Math.max.apply(Math, amounts);
@@ -295,6 +430,15 @@ function extractInvoiceInfo(textContent) {
   if (!amountTax && !amountNoTax) {
     var fb2 = findFirstNum('应\\s*收', fullText);
     if (fb2 > 0) { amountTax = fb2; amountNoTax = fb2; }
+  }
+  // Fallback: try "开票金额"/"开票金额(含税)"/"发票金额"
+  if (!amountTax && !amountNoTax) {
+    amountTax = findFirstNum('开\\s*票\\s*金\\s*额', fullText);
+    if (amountTax > 0) amountNoTax = amountTax;
+  }
+  if (!amountTax && !amountNoTax) {
+    amountTax = findFirstNum('发\\s*票\\s*金\\s*额', fullText);
+    if (amountTax > 0) amountNoTax = amountTax;
   }
 
   // AUTO-FALLBACK: if only amountNoTax found, auto-assign to amountTax

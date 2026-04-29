@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.5.0 | isTauri:', isTauri);
+console.log('发票批量打印 v1.5.1 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -131,15 +131,21 @@ async function handleFileInput(fl) {
 
 // Process FileData array from Rust backend — fast mode: show preview first, OCR in background
 async function processFileDataList(fileDataList) {
-  showLoading('载入 ' + fileDataList.length + ' 个文件...');
   var added = 0;
   var total = fileDataList.length;
   var completed = 0;
 
+  // Use lightweight progress indicator instead of blocking overlay
+  var progressEl = document.getElementById('importProgress');
+  if (progressEl) {
+    progressEl.style.display = 'flex';
+    updateImportProgress(0, total);
+  }
+
   var promises = fileDataList.map(function(fd) {
     return loadFileFromDataUrlFast(fd.name, fd.dataUrl, fd.size, fd.ext, fd.path).then(function(r) {
       completed++;
-      document.getElementById('loadingText').textContent = '载入 ' + completed + '/' + total + '...';
+      updateImportProgress(completed, total);
       if (r) {
         var items = Array.isArray(r) ? r : [r];
         items.forEach(function(item) {
@@ -149,13 +155,21 @@ async function processFileDataList(fileDataList) {
       }
     }).catch(function(err) {
       completed++;
+      updateImportProgress(completed, total);
       console.error('Load file error:', fd.name, err);
     });
   });
 
   await Promise.all(promises);
-  hideLoading();
+  if (progressEl) progressEl.style.display = 'none';
   if (added > 0) toast('已添加 ' + added + ' 张发票，识别中...');
+}
+
+function updateImportProgress(done, total) {
+  var bar = document.getElementById('importProgressBar');
+  var text = document.getElementById('importProgressText');
+  if (bar) bar.style.width = Math.round(done / total * 100) + '%';
+  if (text) text.textContent = done + '/' + total;
 }
 
 // Process an array of File objects (browser fallback) — fast mode
@@ -270,7 +284,8 @@ function backgroundOcrPdf(results, dataUrl) {
 
   // Tauri: use throttled OCR queue for pages missing info
   for (var p = 0; p < results.length; p++) {
-    if (results[p].amount > 0 && results[p].sellerName) continue;
+    // Queue OCR for pages that are missing either amount OR seller info
+    if (results[p].amount > 0 && results[p].sellerName && !results[p]._isTicket) continue;
     (function(idx) {
       _ocrQueue.push(function() {
         return applyOcr(results[idx], results[idx].previewUrl).then(function() {
@@ -284,32 +299,29 @@ function backgroundOcrPdf(results, dataUrl) {
   }
   _drainOcrQueue();
 
-  // Also try PDF.js text extraction for seller info (WinRT rendering doesn't extract text)
+  // Always try PDF.js text extraction for seller info — OCR on rendered images
+  // often misses the seller section, but PDF.js text extraction preserves layout better
   if (dataUrl) {
-    var noAmtPages = results.filter(function(r) { return r.amount <= 0; });
-    var noSellerPages = results.filter(function(r) { return !r.sellerName && !r._isTicket; });
-    if (noAmtPages.length > 0 || noSellerPages.length > 0) {
-      tryExtractPdfInfo(dataUrl, results.length).then(function(pdfInfoList) {
-        var updated = false;
-        for (var k = 0; k < pdfInfoList.length && k < results.length; k++) {
-          var pi = pdfInfoList[k];
-          var piEffAmt = pi.amountTax > 0 ? pi.amountTax : pi.amountNoTax;
-          if (piEffAmt > 0 && results[k].amount <= 0) {
-            results[k].amount = piEffAmt;
-            results[k].amountTax = pi.amountTax;
-            results[k].amountNoTax = pi.amountNoTax;
-            updated = true;
-          }
-          // Skip seller info for tickets
-          if (!pi.isTicket && !results[k]._isTicket) {
-            if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
-            if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
-          }
-          if (pi.isTicket) { results[k]._isTicket = true; }
+    tryExtractPdfInfo(dataUrl, results.length).then(function(pdfInfoList) {
+      var updated = false;
+      for (var k = 0; k < pdfInfoList.length && k < results.length; k++) {
+        var pi = pdfInfoList[k];
+        var piEffAmt = pi.amountTax > 0 ? pi.amountTax : pi.amountNoTax;
+        if (piEffAmt > 0 && results[k].amount <= 0) {
+          results[k].amount = piEffAmt;
+          results[k].amountTax = pi.amountTax;
+          results[k].amountNoTax = pi.amountNoTax;
+          updated = true;
         }
-        if (updated) { renderFileList(); updateAmountSummary(); }
-      }).catch(function(e) { console.warn('[信息提取] PDF.js提取失败:', e); });
-    }
+        // Skip seller info for tickets
+        if (!pi.isTicket && !results[k]._isTicket) {
+          if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
+          if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
+        }
+        if (pi.isTicket) { results[k]._isTicket = true; }
+      }
+      if (updated) { renderFileList(); updateAmountSummary(); }
+    }).catch(function(e) { console.warn('[信息提取] PDF.js提取失败:', e); });
   }
 }
 
@@ -1095,8 +1107,8 @@ window._tauriFileDrop = function(paths) {
   document.head.appendChild(s);
 })();
 
-// Auto-refresh printers in Tauri
-if (isTauri) refreshPrinters();
+// Auto-refresh printers in Tauri — delayed to avoid blocking startup
+if (isTauri) setTimeout(function() { refreshPrinters(); }, 800);
 
 // =====================================================
 // DPI Runtime Validation — verify frontend matches Rust
@@ -1153,4 +1165,29 @@ document.getElementById('orientation').value = 'landscape';
       document.getElementById('printMode').value = pm;
     }
   } catch(e) {}
+})();
+
+// =====================================================
+// Remove splash screen after everything is loaded
+// =====================================================
+(function() {
+  function removeSplash() {
+    var splash = document.getElementById('splash');
+    if (splash) {
+      splash.classList.add('hide');
+      setTimeout(function() { splash.remove(); }, 350);
+    }
+    // Tell Rust to show the window now that content is rendered (prevents white flash)
+    if (isTauri && invoke) {
+      try { invoke('show_window'); } catch(e) {}
+    }
+  }
+  // Remove splash after a minimum display time (prevents flash) or when DOM is ready
+  if (document.readyState === 'complete') {
+    setTimeout(removeSplash, 300);
+  } else {
+    window.addEventListener('load', function() { setTimeout(removeSplash, 300); });
+    // Fallback: remove after 2s no matter what
+    setTimeout(removeSplash, 2000);
+  }
 })();
