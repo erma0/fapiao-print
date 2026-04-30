@@ -332,20 +332,54 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
 
 #[cfg(target_os = "windows")]
 pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
-    use winprint::printer::PrinterDevice;
+    use windows::Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_ENUM_CONNECTIONS, PRINTER_INFO_4W};
+    use windows::core::PCWSTR;
 
-    // Get printer list from winprint (native API, no encoding issues)
-    let devices = PrinterDevice::all()
-        .map_err(|e| format!("获取打印机列表失败: {}", e))?;
-
-    // Get default printer name via PowerShell (winprint doesn't expose is_default)
     let default_name = get_default_printer_name();
 
-    Ok(devices.into_iter().map(|d| {
-        let name = d.name().to_string();
-        let is_default = default_name.as_ref().map_or(false, |dn| dn.eq_ignore_ascii_case(&name));
-        PrinterInfo { name, is_default }
-    }).collect())
+    unsafe {
+        let mut bytes_needed: u32 = 0;
+        let mut count_returned: u32 = 0;
+        let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+        let null_name = PCWSTR::null();
+
+        // Step 1: query required buffer size
+        let _ = EnumPrintersW(flags, null_name, 4, None, &mut bytes_needed, &mut count_returned);
+        if bytes_needed == 0 {
+            return Ok(vec![]);
+        }
+
+        // Step 2: allocate buffer and enumerate
+        let mut buffer: Vec<u8> = vec![0u8; bytes_needed as usize];
+        EnumPrintersW(
+            flags,
+            null_name,
+            4,
+            Some(&mut buffer),
+            &mut bytes_needed,
+            &mut count_returned,
+        ).map_err(|e| format!("获取打印机列表失败: {}", e))?;
+
+        let ptr = buffer.as_ptr() as *const PRINTER_INFO_4W;
+        let mut result = Vec::with_capacity(count_returned as usize);
+
+        for i in 0..count_returned {
+            let info = &*ptr.offset(i as isize);
+            // pPrinterName is PWSTR — convert from UTF-16 to Rust String
+            let name = if info.pPrinterName.is_null() {
+                continue;
+            } else {
+                let ptr = info.pPrinterName.0;
+                let len = (0..).take_while(|&j| *ptr.offset(j) != 0).count();
+                String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
+            };
+
+            let is_default = default_name.as_ref().map_or(false, |dn| dn.eq_ignore_ascii_case(&name));
+            result.push(PrinterInfo { name, is_default });
+        }
+
+        Ok(result)
+    }
 }
 
 /// Get the system default printer name via Win32 API (fast, no PowerShell needed)

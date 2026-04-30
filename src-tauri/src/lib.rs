@@ -195,6 +195,14 @@ fn direct_print_pdf(pdf_path: &std::path::Path, printer_name: Option<&str>) -> R
     use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
     use winprint::ticket::PrintTicket;
 
+    // Helper: case-insensitive comparison that works with Chinese characters.
+    // eq_ignore_ascii_case() only handles ASCII letters and treats all non-ASCII
+    // (including Chinese) as equal, causing wrong matches. Use Unicode-aware
+    // comparison instead (foldcase handles CJK + ASCII correctly).
+    fn name_match(device_name: &str, target: &str) -> bool {
+        device_name.to_lowercase() == target.to_lowercase()
+    }
+
     // Find the target printer
     let devices = PrinterDevice::all()
         .map_err(|e| format!("获取打印机列表失败: {}", e))?;
@@ -202,14 +210,14 @@ fn direct_print_pdf(pdf_path: &std::path::Path, printer_name: Option<&str>) -> R
     let device = if let Some(name) = printer_name {
         // User selected a specific printer
         devices.into_iter()
-            .find(|d| d.name().eq_ignore_ascii_case(name))
+            .find(|d| name_match(d.name(), name))
             .ok_or_else(|| format!("找不到打印机「{}」", name))?
     } else {
         // No specific printer selected: find the system default printer
         let default_name = pdf_engine::get_default_printer_name();
         if let Some(ref dn) = default_name {
             devices.into_iter()
-                .find(|d| d.name().eq_ignore_ascii_case(dn))
+                .find(|d| name_match(d.name(), dn))
                 .ok_or_else(|| format!("找不到默认打印机「{}」", dn))?
         } else {
             // Fallback: use first available printer

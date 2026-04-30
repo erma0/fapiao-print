@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "fapiao-print"
-version = "1.6.5"
+version = "1.6.6"
 dependencies = [
  "base64 0.22.1",
  "image",

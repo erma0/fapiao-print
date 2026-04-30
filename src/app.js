@@ -1105,7 +1105,8 @@ async function pickSaveDir() {
 function clearSaveDir() { setSaveDir(''); toast('已清除保存目录'); }
 
 async function verifyInvoice() {
-  var url = 'https://inv-veri.chinatax.gov.cn/';
+  // 官方平台 inv-veri.chinatax.gov.cn 证书已失效，改用仿真平台（证书有效）
+  var url = 'https://fz.chinaive.com/fpcy/';
   if (isTauri && invoke) {
     try { await invoke('open_url', { url: url }); } catch(e) { toast('打开查验网站失败: ' + String(e)); }
   } else { window.open(url, '_blank'); }
