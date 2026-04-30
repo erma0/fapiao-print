@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.7.1 | isTauri:', isTauri);
+console.log('发票批量打印 v1.7.4 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -58,14 +58,28 @@ function createFileObj(opts) {
     amountNoTax: opts.amountNoTax || 0,
     taxAmount: opts.taxAmount || 0,
     img: opts.img || null,
-    ow: opts.img ? opts.img.naturalWidth : (opts.ow || 0),
-    oh: opts.img ? opts.img.naturalHeight : (opts.oh || 0),
+    // Original dimensions: prefer explicit ow/oh (from Rust FileData.origW/origH for thumbnails),
+    // fall back to img.naturalWidth/naturalHeight (full-size images and rendered PDF pages).
+    ow: opts.ow || (opts.img ? opts.img.naturalWidth : 0),
+    oh: opts.oh || (opts.img ? opts.img.naturalHeight : 0),
     renderDpi: opts.renderDpi || PDF_RENDER_DPI,
     sellerName: opts.sellerName || '',
     sellerCreditCode: opts.sellerCreditCode || '',
+    invoiceNo: opts.invoiceNo || '',
+    invoiceDate: opts.invoiceDate || '',
+    buyerName: opts.buyerName || '',
+    buyerCreditCode: opts.buyerCreditCode || '',
     _ocrText: opts._ocrText || '',
     _isTicket: opts._isTicket || false,
-    _loading: opts._loading || false
+    _loading: opts._loading || false,
+    _ocrPending: false,
+    // Disk path for the original file (when available).
+    // Used by Rust to read bytes directly, skipping base64 encode/decode.
+    _filePath: opts.filePath || '',
+    // PDF source info for ocr_pdf_page command (zero IPC round-trip OCR).
+    // Set when this fileObj represents a PDF page rendered via render_pdf_pages.
+    _pdfPath: opts.pdfPath || '',
+    _pdfPageIdx: opts.pdfPageIdx != null ? opts.pdfPageIdx : -1
   };
 }
 
@@ -114,6 +128,32 @@ function dataUrlToUint8Array(dataUrl) {
   var bytes = new Uint8Array(binaryStr.length);
   for (var i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
   return bytes;
+}
+
+// Downsample a data URL image for faster OCR IPC transfer.
+// Renders to a canvas at max `maxDim` pixels on the longest side, exports as JPEG.
+// Returns a Promise<string> with the downsampled data URL.
+function downsampleForOcr(dataUrl, maxDim) {
+  return new Promise(function(resolve) {
+    if (!dataUrl || dataUrl.length < 100000) { resolve(dataUrl); return; }
+    try {
+      var img = new Image();
+      img.onload = function() {
+        var longest = Math.max(img.naturalWidth, img.naturalHeight);
+        if (longest <= maxDim) { resolve(dataUrl); return; }
+        var scale = maxDim / longest;
+        var w = Math.round(img.naturalWidth * scale);
+        var h = Math.round(img.naturalHeight * scale);
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = function() { resolve(dataUrl); };
+      img.src = dataUrl;
+    } catch(e) { resolve(dataUrl); }
+  });
 }
 
 // =====================================================
@@ -184,7 +224,7 @@ async function processFileDataList(fileDataList) {
 
   // 2. Load files and replace placeholders incrementally
   var promises = fileDataList.map(function(fd) {
-    return loadFileFromDataUrlFast(fd.name, fd.dataUrl, fd.size, fd.ext, fd.path).then(function(r) {
+    return loadFileFromDataUrlFast(fd).then(function(r) {
       completed++;
 
       // Find placeholder by key
@@ -307,20 +347,26 @@ window._tauriCleanup = function() {
 };
 var _ocrQueue = [];
 var _ocrRunning = 0;
-var _ocrMaxConcurrent = 2;
+var _ocrMaxConcurrent = 1; // OCR引擎是Mutex，同时只有1个请求能执行
 var _ocrToastActive = false; // track if "识别中" toast is showing
+var _lastPdfPath = null;   // Path of last generated/saved PDF (for print cache)
+var _pdfDirty = true;      // Whether PDF content has changed since last generation
+var _activeFileIdx = -1;   // Index of currently active/highlighted file in sidebar
+
+function _onOcrTaskDone() {
+  _ocrRunning--;
+  var remaining = _ocrQueue.length + _ocrRunning;
+  if (remaining > 0 && _ocrToastActive) {
+    toastLoading('识别中，剩余 ' + remaining + ' 张...');
+  }
+  if (!window.__TAURI_CLOSING__) _drainOcrQueue();
+}
 
 function _drainOcrQueue() {
   while (_ocrRunning < _ocrMaxConcurrent && _ocrQueue.length > 0) {
     var task = _ocrQueue.shift();
     _ocrRunning++;
-    task().then(function() {
-      _ocrRunning--;
-      if (!window.__TAURI_CLOSING__) _drainOcrQueue();
-    }).catch(function() {
-      _ocrRunning--;
-      if (!window.__TAURI_CLOSING__) _drainOcrQueue();
-    });
+    task().then(_onOcrTaskDone).catch(_onOcrTaskDone);
   }
   // All OCR done — dismiss loading toast
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
@@ -331,37 +377,36 @@ function _drainOcrQueue() {
 
 function applyOcrAsync(fileObj, dataUrl) {
   if (!isTauri || !invoke || window.__TAURI_CLOSING__) return;
+  fileObj._ocrPending = true;
+  var hasFilePath = !!(fileObj._filePath);
+  var isPdfPage = !!(fileObj._pdfPath && fileObj._pdfPageIdx >= 0);
   _ocrQueue.push(function() {
-    return applyOcr(fileObj, dataUrl).then(function() {
+    var ocrPromise;
+    if (isPdfPage) {
+      // PDF page: use ocr_pdf_page — Rust renders + OCRs in one pass (zero IPC round-trip)
+      ocrPromise = applyOcrPdfPage(fileObj);
+    } else if (hasFilePath) {
+      // Image file: Rust reads from disk directly — fast, no base64 round-trip
+      ocrPromise = applyOcr(fileObj, '', fileObj._filePath);
+    } else {
+      // No file path (e.g. browser-mode image) — downsample for faster IPC
+      ocrPromise = downsampleForOcr(dataUrl, 720).then(function(ocrDataUrl) {
+        return applyOcr(fileObj, ocrDataUrl);
+      });
+    }
+    return ocrPromise.then(function() {
+      fileObj._ocrPending = false;
       updateFileItem(fileObj);
       updateAmountSummary();
     }).catch(function(e) {
+      fileObj._ocrPending = false;
       console.warn('[OCR] 后台识别失败:', e);
     });
   });
-  _drainOcrQueue();
-}
-
-/**
- * Background OCR for PDF pages.
- * Uses OCR queue for throttling. Updates UI incrementally.
- */
-function backgroundOcrPdf(results) {
-  if (window.__TAURI_CLOSING__) return;
-  if (!isTauri || !invoke) return;
-
-  // Tauri: use throttled OCR queue — always queue ALL pages so _ocrText is populated
-  for (var p = 0; p < results.length; p++) {
-    (function(idx) {
-      _ocrQueue.push(function() {
-        return applyOcr(results[idx], results[idx].previewUrl).then(function() {
-          updateFileItem(results[idx]);
-          updateAmountSummary();
-        }).catch(function(e) {
-          console.warn('[OCR] PDF页后台识别失败:', e);
-        });
-      });
-    })(p);
+  // Show toast with remaining count
+  var remaining = _ocrQueue.length + _ocrRunning;
+  if (_ocrToastActive) {
+    toastLoading('识别中，剩余 ' + remaining + ' 张...');
   }
   _drainOcrQueue();
 }
@@ -378,7 +423,7 @@ function updateFileItem(fileObj) {
   var f = fileObj;
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
-  var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : '';
+  var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : (f._ocrPending ? '<span class="ocr-spinner" title="识别中"></span>' : '');
   var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || '') + '">' + escHtml(f.sellerName.length > 16 ? f.sellerName.substring(0, 16) + '\u2026' : f.sellerName) + '</span>' : '';
   var metaEl = items[idx].querySelector('.file-meta');
   var sellerEl = items[idx].querySelector('.file-seller');
@@ -390,14 +435,18 @@ function updateFileItem(fileObj) {
 }
 
 /**
- * Fast load from data URL — show preview immediately, OCR in background
+ * Fast load from FileData — show preview immediately, OCR in background.
+ * @param {Object} fd - FileData from Rust: { name, dataUrl, size, ext, path, origW, origH }
  */
-function loadFileFromDataUrlFast(name, dataUrl, size, ext, filePath) {
+function loadFileFromDataUrlFast(fd) {
+  var name = fd.name, dataUrl = fd.dataUrl, size = fd.size, ext = fd.ext, filePath = fd.path;
   return new Promise(function(resolve) {
     var id = 'f' + Date.now() + Math.random().toString(36).slice(2);
 
     if (ext === 'pdf') {
       if (isTauri && invoke && filePath) {
+        // Render PDF pages only (fast, no OCR) — preview appears immediately.
+        // OCR runs in background queue, so the user sees previews right away.
         invoke('render_pdf_pages', { pdfPath: filePath, dpi: PDF_RENDER_DPI }).then(async function(pages) {
           if (pages && pages.length > 0) {
             var results = [];
@@ -405,16 +454,20 @@ function loadFileFromDataUrlFast(name, dataUrl, size, ext, filePath) {
               var pg = pages[p];
               var img = new Image(); img.src = pg.imageDataUrl;
               await new Promise(function(r) { img.onload = r; });
-              results.push(createFileObj({
+              var fileObj = createFileObj({
                 id: id + '_p' + (p + 1),
                 name: pages.length > 1 ? name.replace(/\.pdf$/i, '') + '_第' + (p + 1) + '页.pdf' : name,
                 size: size, type: 'pdf', previewUrl: pg.imageDataUrl,
-                img: img, renderDpi: pg.renderDpi || PDF_RENDER_DPI
-              }));
+                img: img, renderDpi: pg.renderDpi || PDF_RENDER_DPI,
+                pdfPath: filePath, pdfPageIdx: p
+              });
+              results.push(fileObj);
             }
             resolve(results.length === 1 ? results[0] : results);
-            // Background: OCR
-            backgroundOcrPdf(results);
+            // Queue OCR for each page in background — no blocking!
+            results.forEach(function(r) {
+              applyOcrAsync(r, r.previewUrl);
+            });
             return;
           }
           toast('PDF 渲染结果为空: ' + name);
@@ -435,10 +488,15 @@ function loadFileFromDataUrlFast(name, dataUrl, size, ext, filePath) {
       img.onload = function() {
         var result = createFileObj({
           id: id, name: name, size: size, type: ext,
-          previewUrl: dataUrl, img: img
+          previewUrl: dataUrl, img: img, filePath: filePath || '',
+          // When Rust provides original dimensions (thumbnail mode), use them
+          // instead of the thumbnail's naturalWidth/naturalHeight.
+          // This ensures correct layout rotation and PDF sizing.
+          ow: fd.origW || 0,
+          oh: fd.origH || 0
         });
         resolve(result);
-        // Background OCR
+        // Background OCR — pass filePath to skip base64 round-trip
         applyOcrAsync(result, dataUrl);
       };
       img.onerror = function() { toast('图片加载失败: ' + name); resolve(null); };
@@ -516,9 +574,10 @@ function renderFileList() {
     var cls = 'file-item';
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
+    if (i === _activeFileIdx) cls += ' active-item';
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
-    var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : '';
+    var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : (f._ocrPending ? '<span class="ocr-spinner" title="识别中"></span>' : '');
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || '') + '">' + escHtml(f.sellerName.length > 16 ? f.sellerName.substring(0, 16) + '\u2026' : f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
@@ -528,7 +587,7 @@ function renderFileList() {
     var actionBtns = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
       : '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
-    return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" ondblclick="openInvModal(' + i + ')">' +
+    return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
       '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + '</div>' + (sb ? '<div class="file-seller">' + sb + '</div>' : '<div class="file-seller" style="display:none"></div>') + '</div>' +
@@ -549,9 +608,64 @@ function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(
 function selectAll() { S.files.forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); }
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); }
-function rmFile(i) { S.files.splice(i, 1); renderFileList(); updatePreview(); updatePrintBtn(); }
+function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
-function clearAll() { if (!S.files.length) return; if (!confirm('确认清除所有发票？')) return; S.files = []; renderFileList(); updatePreview(); updatePrintBtn(); }
+function clearAll() { if (!S.files.length) return; if (!confirm('确认清除所有发票？')) return; S.files = []; _activeFileIdx = -1; renderFileList(); updatePreview(); updatePrintBtn(); }
+
+// Click file item → navigate preview to the page containing this invoice
+function clickFileItem(idx, event) {
+  // Ignore clicks on checkbox and action buttons
+  if (event && (event.target.closest('.file-check') || event.target.closest('button'))) return;
+  var f = S.files[idx];
+  if (f._loading) return;
+
+  _activeFileIdx = idx;
+
+  // Auto-check if unchecked so the file appears in preview
+  if (!f.checked) {
+    f.checked = true;
+  }
+
+  // Find which page this file is on
+  var activeFiles = getActiveFiles();
+  var perPage = S.layout.cols * S.layout.rows;
+  var activeIdx = -1;
+  for (var i = 0; i < activeFiles.length; i++) {
+    if (activeFiles[i].id === f.id) { activeIdx = i; break; }
+  }
+  if (activeIdx >= 0) {
+    S.currentPage = Math.floor(activeIdx / perPage);
+    updatePreview();
+  }
+
+  updateActiveFileHighlight();
+  renderFileList();
+}
+
+// Update sidebar highlight to match _activeFileIdx
+function updateActiveFileHighlight() {
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var items = list.querySelectorAll('.file-item');
+  items.forEach(function(el, i) {
+    el.classList.toggle('active-item', i === _activeFileIdx);
+  });
+}
+
+// Sync _activeFileIdx with current preview page (called from updatePreview)
+function syncActiveFileFromPage() {
+  var activeFiles = getActiveFiles();
+  var perPage = S.layout.cols * S.layout.rows;
+  var pageStart = S.currentPage * perPage;
+  if (pageStart < activeFiles.length) {
+    var firstFileOnPage = activeFiles[pageStart];
+    var newIdx = S.files.indexOf(firstFileOnPage);
+    if (newIdx !== _activeFileIdx) {
+      _activeFileIdx = newIdx;
+      updateActiveFileHighlight();
+    }
+  }
+}
 var dSrc = null;
 function dStart(e, i) { dSrc = i; e.dataTransfer.effectAllowed = 'move'; }
 function dOver(e) { e.preventDefault(); }
@@ -603,13 +717,17 @@ function openInvModal(i) {
   if (S.files[i]._loading) return; // Don't open modal for loading placeholders
   S.editIdx = i; var f = S.files[i];
   var ocrText = f._ocrText || '';
-  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><pre class="hidden" style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
+  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
   document.getElementById('invModalBody').innerHTML =
     '<div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px">\uD83D\uDCC4 ' + escHtml(f.name) + '</div>' +
     '<div class="row"><label class="lbl">份数</label><div style="display:flex;gap:4px;align-items:center"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(-1)">\u2212</button><input type="number" id="mCopies" value="' + f.copies + '" min="1" max="99" style="width:52px;text-align:center"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(1)">+</button></div></div>' +
     '<div class="row"><label class="lbl">含税价</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--success)">\u00A5</span><input type="number" id="mAmountTax" value="' + (f.amountTax || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
     '<div class="row"><label class="lbl">不含税</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--text-muted)">\u00A5</span><input type="number" id="mAmountNoTax" value="' + (f.amountNoTax || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
     '<div class="row"><label class="lbl">税额</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--warning,orange)">\u00A5</span><input type="number" id="mTaxAmount" value="' + (f.taxAmount || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
+    '<div class="row"><label class="lbl">发票号码</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mInvoiceNo" value="' + escHtml(f.invoiceNo || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0;font-family:monospace"></div></div>' +
+    '<div class="row"><label class="lbl">开票日期</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mInvoiceDate" value="' + escHtml(f.invoiceDate || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0"></div></div>' +
+    '<div class="row"><label class="lbl">购买方</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mBuyer" value="' + escHtml(f.buyerName || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0"></div></div>' +
+    '<div class="row"><label class="lbl">购方代码</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mBuyerCreditCode" value="' + escHtml(f.buyerCreditCode || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0;font-family:monospace"></div></div>' +
     '<div class="row"><label class="lbl">销售方</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mSeller" value="' + escHtml(f.sellerName || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0"></div></div>' +
     '<div class="row"><label class="lbl">信用代码</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mCreditCode" value="' + escHtml(f.sellerCreditCode || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0;font-family:monospace"></div></div>' +
     '<div class="row"><label class="lbl">旋转</label><div class="ctrl"><select id="mRot"><option value="0" ' + (f.rotation === 0 ? 'selected' : '') + '>不旋转</option><option value="90" ' + (f.rotation === 90 ? 'selected' : '') + '>90\u00B0</option><option value="180" ' + (f.rotation === 180 ? 'selected' : '') + '>180\u00B0</option><option value="270" ' + (f.rotation === 270 ? 'selected' : '') + '>270\u00B0</option></select></div></div>' +
@@ -632,7 +750,33 @@ function confirmInvModal() {
   f.amount = f.amountTax || f.amountNoTax;
   f.sellerName = document.getElementById('mSeller').value;
   f.sellerCreditCode = document.getElementById('mCreditCode').value;
+  f.invoiceNo = document.getElementById('mInvoiceNo').value;
+  f.invoiceDate = document.getElementById('mInvoiceDate').value;
+  f.buyerName = document.getElementById('mBuyer').value;
+  f.buyerCreditCode = document.getElementById('mBuyerCreditCode').value;
   closeInvModal(); renderFileList(); updatePreview(); updateAmountSummary();
+}
+
+function copyOcrText(btn) {
+  var pre = btn.parentElement.querySelector('pre');
+  if (!pre) return;
+  var text = pre.textContent || pre.innerText;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      btn.textContent = '✓ 已复制';
+      setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500);
+    }).catch(function() { fallbackCopy(text, btn); });
+  } else {
+    fallbackCopy(text, btn);
+  }
+}
+function fallbackCopy(text, btn) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); }
+  catch(e) { toast('复制失败'); }
+  document.body.removeChild(ta);
 }
 
 // =====================================================
@@ -822,6 +966,7 @@ function buildPages(files, settings) {
 // Preview & Navigation
 // =====================================================
 function updatePreview() {
+  _pdfDirty = true;
   var files = getActiveFiles();
   document.getElementById('stFiles').textContent = S.files.filter(function(f) { return f.checked; }).length + ' 张';
   document.getElementById('stLayout').textContent = S.layout.rows + '\u00D7' + S.layout.cols;
@@ -843,6 +988,7 @@ function updatePreview() {
   document.getElementById('stPages').textContent = pages.length + ' 页';
   renderPage(pages[S.currentPage], S.currentPage, pages.length, settings);
   updatePageDots(pages.length);
+  syncActiveFileFromPage();
 }
 
 function updatePageDots(t) {

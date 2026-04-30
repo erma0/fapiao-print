@@ -39,6 +39,8 @@ html.dark select option { background: #16213e; color: #e2e8f0; }
 html.dark .upload-zone { background: #1a1a2e; }
 html.dark .file-item { border-bottom-color: #2a2a4a; }
 html.dark .file-item:hover { background: #1e2a4a; }
+html.dark .file-item.active-item { background: #1e2a4a; border-left-color: #5b8def; }
+html.dark .file-item.active-item .file-name { color: #5b8def; }
 html.dark .file-check { background: #1a1a2e; border-color: #3a3a5a; }
 html.dark .file-check.checked { background: #5b8def; border-color: #5b8def; }
 html.dark .file-header { background: #16213e; border-bottom-color: #2a2a4a; }
@@ -126,6 +128,8 @@ body {
   cursor: pointer; transition: all 0.15s; gap: 8px;
 }
 .file-item:hover { background: var(--surface2); }
+.file-item.active-item { background: var(--accent-light); border-left: 3px solid var(--accent); }
+.file-item.active-item .file-name { color: var(--accent); }
 .file-check {
   width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
   cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: white;
@@ -274,9 +278,10 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 /* ===== Modal ===== */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
 .modal-bg.hidden { display: none; }
-.modal { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 20px; width: 460px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
-.modal-title { font-size: 17px; font-weight: 700; margin-bottom: 14px; }
-.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.modal { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 20px; width: 460px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal-title { font-size: 17px; font-weight: 700; margin-bottom: 14px; flex-shrink: 0; }
+.modal-body { flex: 1; overflow-y: auto; min-height: 0; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
 
 /* ===== Loading ===== */
 .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.88); z-index: 300; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 15px; color: var(--accent); transition: opacity 0.2s; }
@@ -331,6 +336,7 @@ html.dark .file-item.loading-item .file-thumb::after {
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: toast-spin 0.6s linear infinite; flex-shrink: 0; }
 @keyframes toast-spin { to { transform: rotate(360deg); } }
+.ocr-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 4px; }
 html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #1a1a2e; }
 
 /* ===== Scrollbar ===== */

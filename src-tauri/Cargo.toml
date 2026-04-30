@@ -1,6 +1,6 @@
 [package]
 name = "fapiao-print"
-version = "1.7.1"
+version = "1.7.4"
 description = "电子发票批量打印工具"
 authors = ["fapiao-print"]
 license = "MIT"
@@ -43,11 +43,10 @@ windows = { version = "0.58", features = [
     "Foundation",
     "Foundation_Collections",
 ] }
-winprint = { version = "0.2", default-features = false }
 
 
 [profile.release]
-opt-level = "z"     # 最小体积优化
+opt-level = 3       # 速度优先优化（MNN推理等计算密集路径获益显著）
 lto = true          # 链接时优化，消除未使用代码
 strip = true        # 剥离调试符号
 codegen-units = 1   # 单编译单元，更好的优化

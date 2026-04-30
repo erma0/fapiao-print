@@ -3,7 +3,7 @@ use tauri::{command, Emitter};
 // v1.7.0: ocr-rs (PP-OCRv5 + MNN) replaces WinRT OCR, coordinate-first extraction
 
 mod pdf_engine;
-use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
+use pdf_engine::{PrinterInfo, FileData, RenderedPage, RenderedOcrPage, ComGuard, LayoutRenderRequest, OcrResult};
 
 // =====================================================
 // Tauri Commands
@@ -31,6 +31,17 @@ fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPa
     pdf_engine::render_pdf_pages(&pdf_path, dpi.unwrap_or(pdf_engine::RENDER_DPI))
 }
 
+/// Render PDF pages AND run OCR in one pass — avoids IPC round-trip.
+/// Returns preview images + OCR results together.
+#[command]
+fn render_and_ocr_pdf(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedOcrPage>, String> {
+    use std::sync::atomic::Ordering;
+    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
+    pdf_engine::render_and_ocr_pdf(&pdf_path, dpi.unwrap_or(pdf_engine::RENDER_DPI))
+}
+
 /// Open a file with the default application (for auto-opening saved PDFs)
 #[command]
 fn open_file(path: String) -> Result<(), String> {
@@ -51,14 +62,29 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-/// OCR an image from base64 data URL, return structured JSON with text + word coordinates
+/// OCR an image from base64 data URL or file path, return structured result with text + word coordinates.
+/// When `filePath` is provided, Rust reads the image directly from disk — skipping the
+/// expensive base64 encode→IPC→decode round-trip (saves ~30% data + CPU for large images).
+/// Falls back to `dataUrl` when `filePath` is None or file read fails.
 #[command]
-fn ocr_image(data_url: String) -> Result<String, String> {
+fn ocr_image(data_url: String, file_path: Option<String>) -> Result<OcrResult, String> {
     use std::sync::atomic::Ordering;
     if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
     }
-    pdf_engine::ocr_image_from_data(&data_url)
+    pdf_engine::ocr_image(&data_url, file_path.as_deref())
+}
+
+/// Render a single PDF page and run OCR on it — zero IPC round-trip.
+/// The frontend calls this instead of `render_pdf_pages` + `ocr_image` for PDF pages,
+/// avoiding the expensive Rust→base64→IPC→frontend→downsample→base64→IPC→Rust cycle.
+#[command]
+fn ocr_pdf_page(pdf_path: String, page_index: u32, dpi: Option<u32>) -> Result<OcrResult, String> {
+    use std::sync::atomic::Ordering;
+    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
+    pdf_engine::ocr_pdf_page(&pdf_path, page_index, dpi)
 }
 
 /// Get backend configuration (for runtime DPI validation)
@@ -113,13 +139,21 @@ fn trim_image(data_url: String) -> Result<String, String> {
 /// Generate PDF from layout request (files + pages + settings).
 /// Replaces JS `renderPageToCanvas` + `generate_pdf_from_pages`.
 /// Emits `pdf-progress` events to the frontend with { phase, current, total }.
+///
+/// **Async command**: runs PDF generation on tokio::task::spawn_blocking so
+/// the IPC thread is freed immediately. This ensures the frontend JS thread
+/// can process pdf-progress events and update the UI (progress bar) while
+/// the CPU-heavy work proceeds in the background — no UI freeze.
+///
+/// - `print_after`: if `Some(true)` (default), print after generating; if `Some(false)`, skip print.
 #[command]
-fn generate_pdf_from_layout(
+async fn generate_pdf_from_layout(
     app: tauri::AppHandle,
     request: LayoutRenderRequest,
     output_path: String,
     direct_print: Option<bool>,
     printer_name: Option<String>,
+    print_after: Option<bool>,
 ) -> Result<pdf_engine::PdfResult, String> {
     use std::sync::atomic::Ordering;
 
@@ -127,7 +161,7 @@ fn generate_pdf_from_layout(
         return Err("应用正在关闭".to_string());
     }
 
-    let output = std::path::Path::new(&output_path);
+    let output = std::path::PathBuf::from(&output_path);
     let app_handle = app.clone();
 
     let progress_cb: pdf_engine::ProgressFn = Box::new(move |phase, current, total| {
@@ -138,29 +172,81 @@ fn generate_pdf_from_layout(
         }));
     });
 
-    pdf_engine::generate_pdf_from_layout(&request, output, Some(progress_cb))
-        .map_err(|e| format!("PDF生成失败: {}", e))?;
+    let output_for_print = output.clone();
+    // Move the CPU-heavy PDF generation onto a blocking thread.
+    // The async fn returns immediately, freeing the IPC thread so
+    // frontend can receive progress events and repaint the UI.
+    let request = request;
+    tauri::async_runtime::spawn_blocking(move || {
+        pdf_engine::generate_pdf_from_layout(&request, &output, Some(progress_cb))
+    })
+    .await
+    .map_err(|e| format!("PDF生成任务失败: {}", e))?
+    .map_err(|e| format!("PDF生成失败: {}", e))?;
 
+    let should_print = print_after.unwrap_or(true);
     let is_direct = direct_print.unwrap_or(false);
-    let printer = printer_name.as_deref();
 
     #[cfg(target_os = "windows")]
-    {
+    if should_print {
         if is_direct {
-            direct_print_pdf(output, printer)?;
+            shell_execute_print(&output_for_print, printer_name.as_deref())?;
         } else {
-            shell_execute("open", &output.to_string_lossy())?;
+            shell_execute("print", &output_for_print.to_string_lossy())?;
         }
     }
 
-    let msg = if is_direct {
-        if let Some(name) = printer {
+    let msg = if !should_print {
+        "PDF已生成".to_string()
+    } else if is_direct {
+        if let Some(name) = printer_name {
             format!("已发送到打印机「{}」", name)
         } else {
             "已发送到默认打印机".to_string()
         }
     } else {
-        "已打开PDF预览，请在阅读器中确认打印".to_string()
+        "已弹出打印对话框".to_string()
+    };
+
+    Ok(pdf_engine::PdfResult {
+        success: true,
+        message: msg,
+        pdf_path: Some(output_for_print.to_string_lossy().to_string()),
+    })
+}
+
+/// Print or open an existing PDF file (skip PDF generation).
+/// Used when the PDF hasn't changed since the last save/print.
+#[command]
+fn print_pdf_file(
+    pdf_path: String,
+    direct_print: Option<bool>,
+    printer_name: Option<String>,
+) -> Result<pdf_engine::PdfResult, String> {
+    let output = std::path::Path::new(&pdf_path);
+    if !output.exists() {
+        return Err("PDF文件不存在".to_string());
+    }
+
+    let is_direct = direct_print.unwrap_or(false);
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_direct {
+            shell_execute_print(output, printer_name.as_deref())?;
+        } else {
+            shell_execute("print", &output.to_string_lossy())?;
+        }
+    }
+
+    let msg = if is_direct {
+        if let Some(name) = printer_name {
+            format!("已直接打印 → {}", name)
+        } else {
+            "已直接打印 → 默认打印机".to_string()
+        }
+    } else {
+        "已弹出打印对话框".to_string()
     };
 
     Ok(pdf_engine::PdfResult {
@@ -200,51 +286,41 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Direct-print a PDF file to a specific printer (or system default) using winprint
-/// This bypasses PDF reader software entirely — sends directly to Windows Print Spooler
+/// Print a PDF file via ShellExecuteW.
+/// - Direct mode with specific printer: uses "printto" verb (prints silently)
+/// - Direct mode without printer: uses "print" verb with SW_HIDE (prints to default)
+/// - Dialog mode: uses "print" verb with SW_SHOWNORMAL (shows print dialog)
 #[cfg(target_os = "windows")]
-fn direct_print_pdf(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
-    use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
-    use winprint::ticket::PrintTicket;
+fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-    // Helper: case-insensitive comparison that works with Chinese characters.
-    // eq_ignore_ascii_case() only handles ASCII letters and treats all non-ASCII
-    // (including Chinese) as equal, causing wrong matches. Use Unicode-aware
-    // comparison instead (foldcase handles CJK + ASCII correctly).
-    fn name_match(device_name: &str, target: &str) -> bool {
-        device_name.to_lowercase() == target.to_lowercase()
-    }
+    let _com = ComGuard::init();
+    unsafe {
+        // "printto" verb: prints to a specific printer without dialog
+        // "print" verb with SW_HIDE: prints to default printer without dialog
+        let verb: HSTRING = if printer_name.is_some() { "printto" } else { "print" }.into();
+        let file: HSTRING = pdf_path.to_string_lossy().to_string().into();
 
-    // Find the target printer
-    let devices = PrinterDevice::all()
-        .map_err(|e| format!("获取打印机列表失败: {}", e))?;
+        // Printer name goes into lpParameters for "printto" verb
+        let printer_hstring: Option<HSTRING> = printer_name.map(|n| n.into());
+        let params = printer_hstring.as_ref()
+            .map(|h| windows::core::PCWSTR::from_raw(h.as_ptr()))
+            .unwrap_or(windows::core::PCWSTR::null());
 
-    let device = if let Some(name) = printer_name {
-        // User selected a specific printer
-        devices.into_iter()
-            .find(|d| name_match(d.name(), name))
-            .ok_or_else(|| format!("找不到打印机「{}」", name))?
-    } else {
-        // No specific printer selected: find the system default printer
-        let default_name = pdf_engine::get_default_printer_name();
-        if let Some(ref dn) = default_name {
-            devices.into_iter()
-                .find(|d| name_match(d.name(), dn))
-                .ok_or_else(|| format!("找不到默认打印机「{}」", dn))?
-        } else {
-            // Fallback: use first available printer
-            devices.into_iter()
-                .next()
-                .ok_or_else(|| "系统中没有可用的打印机".to_string())?
+        let ret = ShellExecuteW(
+            None,
+            &verb,
+            &file,
+            params,
+            windows::core::PCWSTR::null(),
+            SW_HIDE,
+        );
+        if ret.0 as isize <= 32 {
+            return Err(format!("打印失败，错误码: {}。请确认已安装PDF阅读器且关联了打印功能。", ret.0 as isize));
         }
-    };
-
-    let printer = WinPdfPrinter::new(device);
-    let ticket = PrintTicket::default();
-
-    printer.print(pdf_path, ticket)
-        .map_err(|e| format!("打印失败: {:?}", e))?;
-
+    }
     Ok(())
 }
 
@@ -347,14 +423,17 @@ pub fn run() {
             open_invoice_files,
             get_printers,
             render_pdf_pages,
+            render_and_ocr_pdf,
             open_url,
             open_file,
             ocr_image,
+            ocr_pdf_page,
             get_config,
             get_temp_dir,
             show_window,
             trim_image,
             generate_pdf_from_layout,
+            print_pdf_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

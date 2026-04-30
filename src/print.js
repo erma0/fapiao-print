@@ -6,6 +6,11 @@
 /**
  * Build a LayoutRenderRequest for the new Rust backend.
  * Replaces the old approach of renderPageToCanvas + generate_and_print/save_pdf.
+ *
+ * **Optimization**: When a file has a disk path (_filePath), we pass the path
+ * instead of the base64 dataUrl. Rust reads the file directly from disk,
+ * skipping the expensive base64 encode→IPC→decode round-trip.
+ * For rendered PDF pages and OFD images (no disk path), dataUrl is used.
  */
 function buildLayoutRequest(files, settings) {
   // 1. Collect unique file specs
@@ -14,16 +19,27 @@ function buildLayoutRequest(files, settings) {
 
   function getFileIndex(fileObj) {
     if (!fileObj) return null;
-    var key = fileObj.previewUrl || '';
+    // Use _filePath as dedup key when available (more stable than previewUrl),
+    // otherwise fall back to previewUrl
+    var key = fileObj._filePath || fileObj.previewUrl || '';
     if (!key) return null;
     if (!fileMap[key]) {
       fileMap[key] = fileSpecs.length;
-      fileSpecs.push({
-        dataUrl: key,
+      var spec = {
         ow: fileObj.ow || 0,
         oh: fileObj.oh || 0,
         rotation: fileObj.rotation || 0,
-      });
+      };
+      // If the file has a disk path, pass it so Rust can read directly
+      // (skip base64 overhead). Otherwise, pass the base64 dataUrl.
+      if (fileObj._filePath) {
+        spec.filePath = fileObj._filePath;
+        spec.dataUrl = ''; // not needed — Rust reads from file
+      } else {
+        spec.dataUrl = fileObj.previewUrl || '';
+        spec.filePath = null;
+      }
+      fileSpecs.push(spec);
     }
     return fileMap[key];
   }
@@ -106,15 +122,36 @@ async function listenPdfProgress() {
 
 /**
  * Print invoices — Rust does layout + PDF generation.
+ * If PDF hasn't changed since last save/print, reuse it directly.
  */
 async function doPrint() {
   var files = getActiveFiles();
   if (!files.length) { toast('请先添加发票！'); return; }
+  var s = getSettings();
+  var printMode = document.getElementById('printMode').value;
+
+  // Cache hit: PDF unchanged since last generation, reuse directly
+  if (!_pdfDirty && _lastPdfPath && isTauri && invoke) {
+    try {
+      var cacheResult = await invoke('print_pdf_file', {
+        pdfPath: _lastPdfPath,
+        directPrint: printMode === 'direct',
+        printerName: s.printerName || null
+      });
+      if (cacheResult.success) {
+        toast('\uD83D\uDCC4 ' + cacheResult.message);
+        return;
+      }
+      // If cache result is not success, fall through to regeneration
+    } catch(e) {
+      // Cached PDF may have been deleted — fall through to regeneration
+      console.warn('Cached PDF reuse failed, regenerating:', e);
+    }
+  }
 
   showLoading('正在准备打印...');
   var unlisten = await listenPdfProgress();
   try {
-    var s = getSettings();
     var layoutReq = buildLayoutRequest(files, s);
 
     if (isTauri && invoke) {
@@ -122,7 +159,6 @@ async function doPrint() {
       // Get system temp directory instead of hardcoded path
       var tempDir = await invoke('get_temp_dir');
       var outputPath = tempDir + '\\fapiao_print_output.pdf';
-      var printMode = document.getElementById('printMode').value;
       var result = await invoke('generate_pdf_from_layout', {
         request: layoutReq,
         outputPath: outputPath,
@@ -132,6 +168,8 @@ async function doPrint() {
       if (unlisten) unlisten();
       hideLoading();
       if (result.success) {
+        _lastPdfPath = result.pdfPath;
+        _pdfDirty = false;
         toast('\uD83D\uDCA8 ' + result.message);
       } else {
         toast('打印失败：' + result.message);
@@ -193,11 +231,14 @@ async function savePdf() {
         request: layoutReq,
         outputPath: savePath,
         directPrint: false,
-        printerName: null
+        printerName: null,
+        printAfter: false
       });
       if (unlisten) unlisten();
       hideLoading();
       if (result.success) {
+        _lastPdfPath = result.pdfPath;
+        _pdfDirty = false;
         toast('\u2705 PDF已保存: ' + result.pdfPath);
         // Auto-open using ShellExecute (more reliable than open_url + file:///)
         if (S.feat.autoOpenPdf && result.pdfPath) {

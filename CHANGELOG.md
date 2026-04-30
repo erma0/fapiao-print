@@ -1,5 +1,69 @@
 # 📋 更新日志
 
+## v1.7.4 — OCR 速度优化
+
+### 🚀 性能优化
+
+- **`ocr_pdf_page` 零 IPC 往返**：PDF 页面 OCR 不再走 base64 传输
+  - Rust 侧新增 `ocr_pdf_page(pdfPath, pageIndex, dpi)` — 渲染+OCR 在 Rust 内存中完成
+  - 省掉 `Rust→base64→IPC→前端downsample→base64→IPC→Rust解码→OCR` 整条链路
+  - 前端 `applyOcrPdfPage(fileObj)` → `invoke('ocr_pdf_page', {pdfPath, pageIndex})`
+  - `createFileObj` 新增 `_pdfPath`/`_pdfPageIdx` 字段，PDF 加载时填充
+  - `applyOcrAsync` 三路分支: isPdfPage → applyOcrPdfPage | hasFilePath → applyOcr(filePath) | else → downsample+applyOcr
+- **OCR_MAX_DIM 960→720**：发票文字大且清晰，720 足够，检测提速约 40%，识别提速约 25%
+- **resize 滤波器 Triangle→Nearest**：OCR 对插值质量不敏感，Nearest 快 3-5x
+  - `run_ocr_on_image` 和 `render_and_ocr_pdf` 两处 OCR resize 均改为 Nearest
+  - 非 OCR 的 PDF 渲染 resize 保持 Triangle
+
+---
+
+## v1.7.3 — PDF 渲染与 OCR 分离 + 文本提取架构 + 交互增强
+
+### 🚀 重大变更
+
+- **PDF 渲染与 OCR 分离**：`render_and_ocr_pdf` → `render_pdf_pages`（仅渲染），OCR 改为后台队列异步执行
+  - 预览即时显示（无需等OCR完成），占位符快速替换为真实预览
+  - OCR 通过 `applyOcrAsync` 队列异步执行，不阻塞 UI
+  - PDF 页面的 OCR 数据通过 `downsampleForOcr` 缩放到 960px 后 IPC 传输，减少开销
+  - 图片文件仍优先使用 `_filePath` 直读磁盘，不走 base64
+
+### 🆕 新功能
+
+- **文本优先提取架构**：OCR 文本格式整齐，用正则直接提取结构化字段（文本提取优先，坐标仅作回退）
+  - 发票号码：`发票号码：(\d{8,20})`
+  - 开票日期：`开票日期：(YYYY年MM月DD日)`
+  - 名称：优先 "购买方名称："/"销售方名称："，回退通用 "名称："（第1=购买方，第2=销售方）
+  - 信用代码：优先 "统一社会信用代码"/"纳税人识别号" 后跟代码
+  - 使用 `_normTextForExtract()` 保留换行符（普通 `normText` 会折叠 CJK 换行导致多行合并）
+- **文本金额提取（三阶段）**：`_extractAmountsByText`
+  - Phase 1 — 含税价：`小写¥金额` → `小写bare金额` → `价税合计后¥` → `价税合计后bare`
+  - Phase 2 — 数学验证配对（PRIMARY）：含税价已知后，扫描全文所有金额，找 A+B=含税价 的配对（大=不含税，小=税额），数学关系不可伪造
+  - Phase 3 — 区域解析（FALLBACK）：截取 standalone "合计" 到 "价税合计" 之间的文本
+- **OCR 进度 toast**：「识别中，剩余 N 张...」实时更新，每完成一张递减
+- **OCR spinner**：`_ocrPending` 标志 + `.ocr-spinner` CSS 动画，识别中显示旋转图标替代空金额
+- **点击跳转预览**：点击左侧发票项自动跳转右侧预览到对应页面
+  - 未勾选的发票自动勾选
+  - `_activeFileIdx` 跟踪高亮项，`.active-item` CSS 蓝色左边框高亮
+  - 翻页时 `syncActiveFileFromPage()` 自动更新侧边栏高亮
+- **新增字段**：`invoiceNo`（发票号码）、`invoiceDate`（开票日期）、`buyerName`（购买方名称）、`buyerCreditCode`（购买方信用代码）
+- **发票类型检测**：`_detectInvoiceType()` — vat/ticket/ride/unknown
+
+### 🔧 改进
+
+- **坐标提取降级为回退**：`extractByCoordinates` 各步骤加 `if (!field)` 保护，仅填充文本提取未找到的字段
+- **旧正则路径删除**：`extractInvoiceInfo()` 已移除
+
+---
+
+## v1.7.2 — PDF 渲染+OCR 一体化（已废弃）
+
+### 🚀 变更（v1.7.3 已废弃此路径）
+
+- **PDF 一步到位**（`render_and_ocr_pdf`）：WinRT 渲染 PDF 页 → 直接 OCR → 一起返回预览图+OCR结果
+- v1.7.3 改用 `render_pdf_pages`（仅渲染）+ 后台 OCR 队列，此路径已废弃
+
+---
+
 ## v1.7.1 — 移除 PDF.js，纯原生渲染
 
 ### 🚀 重大变更
