@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "release": "tauri build -- --config src-tauri/Cargo.toml",
     "tauri": "tauri"
   },
   "devDependencies": {
