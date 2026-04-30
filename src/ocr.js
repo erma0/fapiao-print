@@ -20,6 +20,17 @@ function isTicketText(text) {
   return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位|出\s*租|打\s*车|网\s*约|滴\s*滴)/.test(t);
 }
 
+/**
+ * Get a descriptive label for ticket type (shown as sellerName for tickets)
+ */
+function getTicketTypeLabel(text) {
+  var t = text.substring(0, 500);
+  if (/(?:铁\s*路|动\s*车|高\s*铁|火\s*车|车\s*次|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '铁路电子客票';
+  if (/(?:出\s*租|打\s*车|的\s*士)/.test(t)) return '出租车票';
+  if (/(?:网\s*约|滴\s*滴|专\s*车|快\s*车)/.test(t)) return '网约车票';
+  return '车票';
+}
+
 // =====================================================
 // Coordinate-aware region analysis
 // =====================================================
@@ -454,6 +465,9 @@ function extractInvoiceInfo(textContent) {
       // Remove if too short after cleanup
       if (sellerName.length < 2) sellerName = '';
     }
+  } else {
+    // Ticket: set a descriptive type label instead of leaving seller blank
+    sellerName = getTicketTypeLabel(fullText);
   }
 
   // === Normalize text for amount extraction ===
@@ -643,6 +657,26 @@ function extractInvoiceInfo(textContent) {
 
     if (amountTax > 0 || amountNoTax > 0 || taxAmount > 0) {
       console.log('[OCR坐标] 金额区域提取:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount, taxRate: taxRate || '-' });
+    }
+  }
+
+  // === Step 0.5: Ticket-specific coordinate extraction ===
+  // Train/ride tickets have a completely different layout from VAT invoices.
+  // Use proximity matching (find amount near "票价"/"全价"/"优惠价" keywords)
+  // with 'any' region — this is more accurate than pure regex when multiple ¥ amounts exist.
+  if (isTicket && !amountTax && !amountNoTax && wordMap && imgW > 0 && imgH > 0) {
+    amountTax = findAmountNearKeyword(/票\s*价/, 'any');
+    if (amountTax > 0) amountNoTax = amountTax;
+    if (!amountTax) {
+      amountTax = findAmountNearKeyword(/全\s*价/, 'any');
+      if (amountTax > 0) amountNoTax = amountTax;
+    }
+    if (!amountTax) {
+      amountTax = findAmountNearKeyword(/优\s*惠\s*价/, 'any');
+      if (amountTax > 0) amountNoTax = amountTax;
+    }
+    if (amountTax > 0) {
+      console.log('[OCR坐标] 车票票价提取:', { amountTax: amountTax });
     }
   }
 
@@ -979,9 +1013,9 @@ async function applyOcr(fileObj, dataUrl) {
     } else if (info.taxAmount > 0 && !fileObj.taxAmount) {
       fileObj.taxAmount = info.taxAmount;
     }
-    // Skip seller info for tickets
+    // Set seller info — for tickets, sellerName is the ticket type label
+    if (info.sellerName) fileObj.sellerName = info.sellerName;
     if (!info.isTicket) {
-      if (info.sellerName) fileObj.sellerName = info.sellerName;
       if (info.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
     }
   } catch(e) {

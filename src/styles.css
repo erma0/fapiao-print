@@ -61,6 +61,7 @@ html.dark .file-thumb { background: #1a1a2e; border-color: #2a2a4a; }
 html.dark .copy-badge { background: #3a3520; color: #d69e2e; }
 html.dark .amt-badge { background: #1a3a36; color: #38b2ac; }
 html.dark .seller-badge { background: #1e2a4a; color: #a0aec0; }
+html.dark .ticket-badge { background: #1a2a4a; color: #64b5f6; }
 html.dark .file-summary { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .sec { border-bottom-color: #2a2a4a; }
 html.dark .tgl { background: #3a3a5a; }
@@ -145,6 +146,7 @@ body {
 .amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
 .seller-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
+.ticket-badge { font-size: 10px; color: #1976d2; padding: 1px 4px; border-radius: 3px; background: #e3f2fd; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 .file-seller { margin-top: 1px; line-height: 1.3; overflow: hidden; }
 .file-summary {
   padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface2);

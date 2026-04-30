@@ -289,16 +289,30 @@ pub fn run() {
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
                             // Notify frontend to clear OCR queues and stop new work (best-effort)
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
-                            // Spawn force-exit watchdog as safety net
+                            // Spawn force-exit watchdog as safety net.
+                            // CRITICAL: app.exit(0) and std::process::exit(0) must run in
+                            // SEPARATE threads. If app.exit() blocks waiting for tokio's
+                            // spawn_blocking tasks, a single-threaded watchdog would never
+                            // reach std::process::exit(0) and the process would hang forever.
                             {
                                 use tauri::Manager;
-                                let app = win.app_handle().clone();
+                                let app1 = win.app_handle().clone();
+                                let app2 = win.app_handle().clone();
+
+                                // Tier 1: graceful exit (allows WebView2 cleanup)
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_secs(3));
+                                    let _ = app1.exit(0);
+                                });
+
+                                // Tier 2: hard exit — absolutely guaranteed, separate thread
                                 std::thread::spawn(move || {
                                     std::thread::sleep(std::time::Duration::from_secs(5));
-                                    // Tier 1: graceful exit via Tauri (proper WebView2 cleanup)
-                                    app.exit(0);
-                                    std::thread::sleep(std::time::Duration::from_secs(2));
-                                    // Tier 2: force exit (guaranteed, but skips cleanup)
+                                    // At this point tokio threads should have been released
+                                    // by get_with_shutdown() returning early. If anything
+                                    // still blocks, we terminate the entire process.
+                                    let _ = app2.exit(0);
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
                                     std::process::exit(0);
                                 });
                             }

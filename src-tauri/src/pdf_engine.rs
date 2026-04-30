@@ -194,6 +194,7 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
             .map_err(|e| format!("读取第{}页字节失败: {}", i + 1, e))?;
 
         reader.Close().ok();
+        stream.Close().ok();
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
         let data_url = format!("data:image/png;base64,{}", b64);
@@ -518,6 +519,9 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         .map_err(|e| format!("创建OCR识别操作失败: {}", e))?
         .get()
         .map_err(|e| format!("OCR识别失败: {}", e))?;
+
+    // Explicitly close COM resources (best-effort)
+    stream.Close().ok();
 
     // Extract flat text (backward compatible)
     let flat_text = result.Text()
