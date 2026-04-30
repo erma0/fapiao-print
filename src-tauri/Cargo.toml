@@ -43,6 +43,7 @@ windows = { version = "0.58", features = [
     "Graphics_Imaging",
     "Media_Ocr",
     "Foundation",
+    "Foundation_Collections",
 ] }
 winprint = { version = "0.2", default-features = false }
 

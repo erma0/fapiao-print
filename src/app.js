@@ -41,6 +41,9 @@ var S = {
   }
 };
 
+// Track newly added file IDs for entrance animation
+var _newFileIds = {};
+
 // =====================================================
 // File Object Factory — unified creation with defaults
 // =====================================================
@@ -58,13 +61,15 @@ function createFileObj(opts) {
     amount: opts.amount || 0,
     amountTax: opts.amountTax || 0,
     amountNoTax: opts.amountNoTax || 0,
+    taxAmount: opts.taxAmount || 0,
     img: opts.img || null,
     ow: opts.img ? opts.img.naturalWidth : (opts.ow || 0),
     oh: opts.img ? opts.img.naturalHeight : (opts.oh || 0),
     renderDpi: opts.renderDpi || PDF_RENDER_DPI,
     sellerName: opts.sellerName || '',
     sellerCreditCode: opts.sellerCreditCode || '',
-    _ocrText: opts._ocrText || ''
+    _ocrText: opts._ocrText || '',
+    _loading: opts._loading || false
   };
 }
 
@@ -72,7 +77,11 @@ function createFileObj(opts) {
 // Helpers
 // =====================================================
 var toastT = null;
-function toast(msg, dur) { dur = dur || 2500; var e = document.getElementById('toast'); e.textContent = msg; e.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(function() { e.classList.remove('show'); }, dur); }
+function toast(msg, dur) { dur = dur || 2500; var e = document.getElementById('toast'); e.textContent = msg; e.classList.add('show'); clearTimeout(toastT); if (dur > 0) toastT = setTimeout(function() { e.classList.remove('show'); }, dur); else clearTimeout(toastT); }
+function toastHtml(msg, dur) { dur = dur || 2500; var e = document.getElementById('toast'); e.innerHTML = msg; e.classList.add('show'); clearTimeout(toastT); if (dur > 0) toastT = setTimeout(function() { e.classList.remove('show'); }, dur); else clearTimeout(toastT); }
+function toastLoading(msg) { _ocrToastActive = true; toastHtml('<span class="toast-spinner"></span>' + msg, 0); }
+function toastDone(msg) { toast(msg, 2500); }
+function hideToast() { var e = document.getElementById('toast'); e.classList.remove('show'); clearTimeout(toastT); }
 function syncSlider(s, n) { document.getElementById(n).value = s.value; }
 function syncRange(n, s) { document.getElementById(s).value = n.value; }
 function showLoading(t) { document.getElementById('loadingText').textContent = t || '处理中...'; document.getElementById('loading').classList.remove('hidden'); }
@@ -129,40 +138,84 @@ async function handleFileInput(fl) {
   document.getElementById('fileInput').value = '';
 }
 
-// Process FileData array from Rust backend — fast mode: show preview first, OCR in background
+// Process FileData array from Rust backend — instant placeholders, incremental replace
 async function processFileDataList(fileDataList) {
-  var added = 0;
   var total = fileDataList.length;
   var completed = 0;
+  var added = 0;
 
-  // Use lightweight progress indicator instead of blocking overlay
+  // Show progress bar
   var progressEl = document.getElementById('importProgress');
   if (progressEl) {
     progressEl.style.display = 'flex';
     updateImportProgress(0, total);
   }
 
+  // 1. Create placeholder entries immediately for instant visual feedback
+  fileDataList.forEach(function(fd) {
+    var ph = createFileObj({
+      name: fd.name,
+      size: fd.size,
+      type: fd.ext,
+      _loading: true
+    });
+    ph._placeholderKey = ph.id;
+    fd._phKey = ph._placeholderKey;
+    S.files.push(ph);
+    _newFileIds[ph.id] = true;
+  });
+
+  // Render placeholders immediately — user sees skeleton items right away
+  renderFileList(); updatePreview(); updatePrintBtn();
+
+  // Show "识别中" toast immediately with spinner
+  toastLoading('已添加 ' + total + ' 张发票，识别中...');
+
+  // 2. Load files and replace placeholders incrementally
   var promises = fileDataList.map(function(fd) {
     return loadFileFromDataUrlFast(fd.name, fd.dataUrl, fd.size, fd.ext, fd.path).then(function(r) {
       completed++;
       updateImportProgress(completed, total);
-      if (r) {
-        var items = Array.isArray(r) ? r : [r];
-        items.forEach(function(item) {
-          if (item) { S.files.push(item); added++; }
-        });
-        renderFileList(); updatePreview(); updatePrintBtn();
+
+      // Find placeholder by key
+      var phIdx = -1;
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
       }
+
+      if (phIdx >= 0 && r) {
+        var items = Array.isArray(r) ? r : [r];
+        // Mark new items for entrance animation
+        items.forEach(function(it) { _newFileIds[it.id] = true; });
+        // Replace placeholder with real items (handles multi-page PDF expansion)
+        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+        added += items.length;
+      } else if (phIdx >= 0) {
+        // Remove placeholder for failed/empty file
+        S.files.splice(phIdx, 1);
+      }
+
+      renderFileList(); updatePreview(); updatePrintBtn();
     }).catch(function(err) {
       completed++;
       updateImportProgress(completed, total);
       console.error('Load file error:', fd.name, err);
+
+      // Remove placeholder on error
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === fd._phKey) { S.files.splice(i, 1); break; }
+      }
+      renderFileList(); updatePreview(); updatePrintBtn();
     });
   });
 
   await Promise.all(promises);
   if (progressEl) progressEl.style.display = 'none';
-  if (added > 0) toast('已添加 ' + added + ' 张发票，识别中...');
+  // If no OCR queued (e.g. non-Tauri), dismiss toast now
+  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
+    _ocrToastActive = false;
+    toastDone('已添加 ' + added + ' 张发票');
+  }
 }
 
 function updateImportProgress(done, total) {
@@ -172,33 +225,75 @@ function updateImportProgress(done, total) {
   if (text) text.textContent = done + '/' + total;
 }
 
-// Process an array of File objects (browser fallback) — fast mode
+// Process an array of File objects (browser fallback) — instant placeholders
 async function processFiles(files) {
-  showLoading('载入 ' + files.length + ' 个文件...');
-  var added = 0;
   var total = files.length;
   var completed = 0;
+  var added = 0;
+
+  // Create placeholder entries immediately
+  files.forEach(function(file) {
+    var ext = file.name.split('.').pop().toLowerCase();
+    var ph = createFileObj({
+      name: file.name,
+      size: file.size,
+      type: ext,
+      _loading: true
+    });
+    ph._placeholderKey = ph.id;
+    file._phKey = ph._placeholderKey;
+    S.files.push(ph);
+    _newFileIds[ph.id] = true;
+  });
+  renderFileList(); updatePreview(); updatePrintBtn();
+
+  // Show "识别中" toast immediately with spinner
+  toastLoading('已添加 ' + total + ' 张发票，识别中...');
+
+  var progressEl = document.getElementById('importProgress');
+  if (progressEl) {
+    progressEl.style.display = 'flex';
+    updateImportProgress(0, total);
+  }
 
   var promises = files.map(function(file) {
     return loadFileFast(file).then(function(r) {
       completed++;
-      document.getElementById('loadingText').textContent = '载入 ' + completed + '/' + total + '...';
-      if (r) {
-        var items = Array.isArray(r) ? r : [r];
-        items.forEach(function(item) {
-          if (item) { S.files.push(item); added++; }
-        });
-        renderFileList(); updatePreview(); updatePrintBtn();
+      updateImportProgress(completed, total);
+
+      var phIdx = -1;
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === file._phKey) { phIdx = i; break; }
       }
+
+      if (phIdx >= 0 && r) {
+        var items = Array.isArray(r) ? r : [r];
+        items.forEach(function(it) { _newFileIds[it.id] = true; });
+        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+        added += items.length;
+      } else if (phIdx >= 0) {
+        S.files.splice(phIdx, 1);
+      }
+
+      renderFileList(); updatePreview(); updatePrintBtn();
     }).catch(function(err) {
       completed++;
+      updateImportProgress(completed, total);
       console.error('Load file error:', file.name, err);
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === file._phKey) { S.files.splice(i, 1); break; }
+      }
+      renderFileList(); updatePreview(); updatePrintBtn();
     });
   });
 
   await Promise.all(promises);
-  hideLoading(); renderFileList(); updatePreview(); updatePrintBtn();
-  if (added > 0) toast('已添加 ' + added + ' 张发票，识别中...');
+  if (progressEl) progressEl.style.display = 'none';
+  // If no OCR queued (e.g. non-Tauri), dismiss toast now
+  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
+    _ocrToastActive = false;
+    toastDone('已添加 ' + added + ' 张发票');
+  }
 }
 
 // NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl() removed in v1.4.1
@@ -216,11 +311,13 @@ async function processFiles(files) {
 window._tauriCleanup = function() {
   window.__TAURI_CLOSING__ = true;
   _ocrQueue = [];
+  _ocrToastActive = false;
   console.log('[Cleanup] OCR queue cleared, closing flag set');
 };
 var _ocrQueue = [];
 var _ocrRunning = 0;
 var _ocrMaxConcurrent = 2;
+var _ocrToastActive = false; // track if "识别中" toast is showing
 
 function _drainOcrQueue() {
   while (_ocrRunning < _ocrMaxConcurrent && _ocrQueue.length > 0) {
@@ -228,11 +325,16 @@ function _drainOcrQueue() {
     _ocrRunning++;
     task().then(function() {
       _ocrRunning--;
-      _drainOcrQueue();
+      if (!window.__TAURI_CLOSING__) _drainOcrQueue();
     }).catch(function() {
       _ocrRunning--;
-      _drainOcrQueue();
+      if (!window.__TAURI_CLOSING__) _drainOcrQueue();
     });
+  }
+  // All OCR done — dismiss loading toast
+  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
+    _ocrToastActive = false;
+    toastDone('识别完成');
   }
 }
 
@@ -267,6 +369,7 @@ function backgroundOcrPdf(results, dataUrl) {
             results[k].amount = piEffAmt;
             results[k].amountTax = pi.amountTax;
             results[k].amountNoTax = pi.amountNoTax;
+            results[k].taxAmount = pi.taxAmount || 0;
             updated = true;
           }
           // Skip seller info for tickets
@@ -311,6 +414,12 @@ function backgroundOcrPdf(results, dataUrl) {
           results[k].amount = piEffAmt;
           results[k].amountTax = pi.amountTax;
           results[k].amountNoTax = pi.amountNoTax;
+          results[k].taxAmount = pi.taxAmount || 0;
+          updated = true;
+        }
+        // Also fill taxAmount if main amounts already set but taxAmount is missing
+        if (results[k].amount > 0 && !results[k].taxAmount && pi.taxAmount) {
+          results[k].taxAmount = pi.taxAmount;
           updated = true;
         }
         // Skip seller info for tickets
@@ -437,7 +546,7 @@ function loadFileFast(file) {
             id: id + '_p' + p,
             name: pdf.numPages > 1 ? file.name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : file.name,
             size: file.size, type: 'pdf', previewUrl: previewUrl,
-            img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax,
+            img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax, taxAmount: info.taxAmount || 0,
             amount: effAmt, renderDpi: targetDpi,
             sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
             _ocrText: info._ocrText
@@ -510,7 +619,7 @@ function loadPdfFromDataUrlFast(name, dataUrl, size, id, resolve) {
         id: id + '_p' + p,
         name: pdf.numPages > 1 ? name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : name,
         size: size, type: 'pdf', previewUrl: previewUrl,
-        img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax,
+        img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax, taxAmount: info.taxAmount || 0,
         amount: effAmt, renderDpi: targetDpi,
         sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
         _ocrText: info._ocrText
@@ -542,12 +651,21 @@ async function handleDrop(e) {
 // =====================================================
 function renderFileList() {
   var list = document.getElementById('fileList');
+  var scrollTop = list.scrollTop;
   var sel = S.files.filter(function(f) { return f.checked; }).length;
   document.getElementById('fileCount').textContent = S.files.length + ' 张，已选 ' + sel;
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
+
+  // Snapshot and clear new-file IDs so animation only plays once
+  var currentNewIds = _newFileIds;
+  _newFileIds = {};
+
   list.innerHTML = S.files.map(function(f, i) {
+    var cls = 'file-item';
+    if (currentNewIds[f.id]) cls += ' entering';
+    if (f._loading) cls += ' loading-item';
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var ab = (f.amountTax > 0 || f.amountNoTax > 0) ? '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>' : '';
@@ -556,13 +674,25 @@ function renderFileList() {
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
-    return '<div class="file-item" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" ondblclick="openInvModal(' + i + ')">' +
+    var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4');
+    var actionBtns = f._loading
+      ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
+      : '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
+    return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
-      '<div class="file-thumb">' + (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4') + '<div class="type-badge">' + safeType + '</div></div>' +
+      '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
       '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + '</div>' + (sb ? '<div class="file-seller">' + sb + '</div>' : '<div class="file-seller" style="display:none"></div>') + '</div>' +
-      '<div style="display:flex;gap:2px"><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>' +
+      '<div style="display:flex;gap:2px">' + actionBtns + '</div>' +
     '</div>';
   }).join('');
+
+  // Apply staggered animation delay for entering items
+  var enteringItems = list.querySelectorAll('.file-item.entering');
+  enteringItems.forEach(function(el, idx) {
+    el.style.animationDelay = (idx * 30) + 'ms';
+  });
+
+  list.scrollTop = scrollTop;
   updateAmountSummary();
 }
 function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); }
@@ -584,6 +714,7 @@ function updateAmountSummary() {
   var checked = S.files.filter(function(f) { return f.checked; });
   var taxTotal = checked.reduce(function(s, f) { return s + (f.amountTax || 0); }, 0);
   var noTaxTotal = checked.reduce(function(s, f) { return s + (f.amountNoTax || 0); }, 0);
+  var taxAmtTotal = checked.reduce(function(s, f) { return s + (f.taxAmount || 0); }, 0);
   var withAmt = checked.filter(function(f) { return (f.amountTax || f.amountNoTax) > 0; }).length;
 
   el.style.display = checked.length > 0 ? '' : 'none';
@@ -597,39 +728,38 @@ function updateAmountSummary() {
   } else if (mode === 'notax') {
     amtHtml = '<span class="amt-total">\u00A5' + noTaxTotal.toFixed(2) + '</span>';
   } else {
-    amtHtml = '<span class="amt-total" style="font-size:12px;display:flex;flex-direction:column;align-items:flex-end;gap:1px"><span>含税 \u00A5' + taxTotal.toFixed(2) + '</span><span style="font-size:11px;color:var(--text-muted);font-weight:400">不含税 \u00A5' + noTaxTotal.toFixed(2) + '</span></span>';
+    var detailLines = '<span>含税 \u00A5' + taxTotal.toFixed(2) + '</span>';
+    if (taxAmtTotal > 0) {
+      detailLines += '<span style="font-size:11px;color:var(--text-muted);font-weight:400">不含税 \u00A5' + noTaxTotal.toFixed(2) + ' | 税额 \u00A5' + taxAmtTotal.toFixed(2) + '</span>';
+    } else {
+      detailLines += '<span style="font-size:11px;color:var(--text-muted);font-weight:400">不含税 \u00A5' + noTaxTotal.toFixed(2) + '</span>';
+    }
+    amtHtml = '<span class="amt-total" style="font-size:12px;display:flex;flex-direction:column;align-items:flex-end;gap:1px">' + detailLines + '</span>';
   }
-  var sellers = {}, sellerNames = [], sellerHtml = '';
+  var sellerNames = [];
   checked.forEach(function(f) {
-    if (f.sellerName) { var n = f.sellerName.trim(); sellers[n] = (sellers[n] || 0) + 1; }
+    if (f.sellerName) { var n = f.sellerName.trim(); if (sellerNames.indexOf(n) < 0) sellerNames.push(n); }
   });
-  sellerNames = Object.keys(sellers);
-  if (sellerNames.length > 0) {
-    var sellerList = sellerNames.slice(0, 5).map(function(n) {
-      var cnt = sellers[n];
-      return '<span class="seller-badge" style="margin:0 1px">' + escHtml(n.length > 10 ? n.substring(0, 10) + '\u2026' : n) + (cnt > 1 ? '\u00D7' + cnt : '') + '</span>';
-    }).join('');
-    if (sellerNames.length > 5) sellerList += ' <span style="font-size:10px;color:var(--text-muted)">+' + (sellerNames.length - 5) + '</span>';
-    sellerHtml = '<div style="display:flex;align-items:center;gap:2px;flex-wrap:wrap;font-size:10px;color:var(--text-muted);margin-top:2px;max-width:300px"><span style="white-space:nowrap">' + sellerNames.length + '个销售方</span>' + sellerList + '</div>';
-  }
+  var sellerHtml = sellerNames.length > 0
+    ? '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + sellerNames.length + '个销售方</div>'
+    : '';
   el.innerHTML = countHtml + amtHtml + sellerHtml;
 
-  var stAmt = document.getElementById('stAmount');
-  if (stAmt) {
-    var mainTotal = mode === 'notax' ? noTaxTotal : taxTotal;
-    stAmt.textContent = mainTotal > 0 ? '\u00A5' + mainTotal.toFixed(2) : '';
-  }
+  // Total amount is already shown in amountSummary (bottom-left), no need to duplicate in statusbar
 }
 
 // Invoice modal
 function openInvModal(i) {
+  if (S.files[i]._loading) return; // Don't open modal for loading placeholders
   S.editIdx = i; var f = S.files[i];
-  var ocrHtml = f._ocrText ? '<details style="margin-top:8px;font-size:11px"><summary style="cursor:pointer;color:var(--text-muted)">\uD83D\uDD0D OCR识别原文</summary><pre style="margin-top:4px;padding:6px 8px;background:var(--surface2);border-radius:4px;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.4">' + escHtml(f._ocrText) + '</pre></details>' : '';
+  var ocrText = f._ocrText || '';
+  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><pre class="hidden" style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
   document.getElementById('invModalBody').innerHTML =
     '<div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px">\uD83D\uDCC4 ' + escHtml(f.name) + '</div>' +
     '<div class="row"><label class="lbl">份数</label><div style="display:flex;gap:4px;align-items:center"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(-1)">\u2212</button><input type="number" id="mCopies" value="' + f.copies + '" min="1" max="99" style="width:52px;text-align:center"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(1)">+</button></div></div>' +
     '<div class="row"><label class="lbl">含税价</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--success)">\u00A5</span><input type="number" id="mAmountTax" value="' + (f.amountTax || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
     '<div class="row"><label class="lbl">不含税</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--text-muted)">\u00A5</span><input type="number" id="mAmountNoTax" value="' + (f.amountNoTax || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
+    '<div class="row"><label class="lbl">税额</label><div style="display:flex;gap:4px;align-items:center"><span style="font-size:14px;font-weight:600;color:var(--warning,orange)">\u00A5</span><input type="number" id="mTaxAmount" value="' + (f.taxAmount || '') + '" min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right"></div></div>' +
     '<div class="row"><label class="lbl">销售方</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mSeller" value="' + escHtml(f.sellerName || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0"></div></div>' +
     '<div class="row"><label class="lbl">信用代码</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mCreditCode" value="' + escHtml(f.sellerCreditCode || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0;font-family:monospace"></div></div>' +
     '<div class="row"><label class="lbl">旋转</label><div class="ctrl"><select id="mRot"><option value="0" ' + (f.rotation === 0 ? 'selected' : '') + '>不旋转</option><option value="90" ' + (f.rotation === 90 ? 'selected' : '') + '>90\u00B0</option><option value="180" ' + (f.rotation === 180 ? 'selected' : '') + '>180\u00B0</option><option value="270" ' + (f.rotation === 270 ? 'selected' : '') + '>270\u00B0</option></select></div></div>' +
@@ -645,8 +775,10 @@ function confirmInvModal() {
   f.rotation = parseInt(document.getElementById('mRot').value) || 0;
   var at = parseFloat(document.getElementById('mAmountTax').value);
   var an = parseFloat(document.getElementById('mAmountNoTax').value);
+  var ta = parseFloat(document.getElementById('mTaxAmount').value);
   f.amountTax = isNaN(at) || at < 0 ? 0 : Math.round(at * 100) / 100;
   f.amountNoTax = isNaN(an) || an < 0 ? 0 : Math.round(an * 100) / 100;
+  f.taxAmount = isNaN(ta) || ta < 0 ? 0 : Math.round(ta * 100) / 100;
   f.amount = f.amountTax || f.amountNoTax;
   f.sellerName = document.getElementById('mSeller').value;
   f.sellerCreditCode = document.getElementById('mCreditCode').value;
@@ -822,7 +954,7 @@ function getSettings() {
 }
 
 function getActiveFiles() {
-  var files = S.files.filter(function(f) { return f.checked; });
+  var files = S.files.filter(function(f) { return f.checked && !f._loading; });
   if (document.getElementById('pageOrder').value === 'reverse') files = files.slice().reverse();
   var exp = [];
   files.forEach(function(f) { for (var c = 0; c < Math.max(1, f.copies); c++) exp.push(f); });
@@ -1067,6 +1199,14 @@ document.getElementById('previewWrap').addEventListener('dblclick', function() {
 document.body.addEventListener('dragover', function(e) { e.preventDefault(); });
 document.body.addEventListener('drop', function(e) { e.preventDefault(); if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files)); });
 window.addEventListener('resize', function() { if (S.files.length) updatePreview(); });
+
+// beforeunload safety net — stop all work if the window is being destroyed
+// (covers cases where _tauriCleanup() wasn't called or didn't execute in time)
+window.addEventListener('beforeunload', function() {
+  window.__TAURI_CLOSING__ = true;
+  _ocrQueue = [];
+  _ocrRunning = 0;
+});
 
 // Tauri drag & drop — Rust calls window._tauriFileDrop(paths) via eval()
 window._tauriFileDrop = function(paths) {

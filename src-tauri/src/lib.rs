@@ -51,7 +51,7 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-/// OCR an image from base64 data URL, return recognized text
+/// OCR an image from base64 data URL, return structured JSON with text + word coordinates
 #[command]
 fn ocr_image(data_url: String) -> Result<String, String> {
     use std::sync::atomic::Ordering;
@@ -263,31 +263,45 @@ pub fn run() {
                 window.on_window_event(move |event| {
                     match event {
                         // --- Close event: graceful shutdown ---
-                        // Only set SHUTTING_DOWN flag to reject new OCR/COM requests.
-                        // Let Tauri handle the rest — it will destroy the window, clean up
-                        // WebView2 child processes, and exit the process normally.
-                        // Previous code used taskkill/TerminateProcess to force-kill the
-                        // process tree, which interrupted Tauri's cleanup and left WebView2
-                        // child processes as orphans — that was the actual cause of lingering
-                        // processes after exit.
-                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                        // Set SHUTTING_DOWN flag to reject new OCR/PDF/COM requests,
+                        // then let Tauri close the window immediately.
+                        //
+                        // DO NOT use api.prevent_close() — previous two-phase close
+                        // (prevent_close → 400ms delay → win.close()) caused residual processes:
+                        //   1. Delayed WebView2 cleanup → orphan msedgewebview2.exe processes
+                        //   2. Detached close thread race conditions
+                        //   3. Main process lingering while blocked WinRT .get() calls finish
+                        //
+                        // Now: window closes immediately → Tauri exits event loop → process exits.
+                        // In-flight .get() calls are killed when the process exits (Rust: main()
+                        // returns → all threads terminated). This is safe because OCR/PDF rendering
+                        // are read-only operations with no side effects.
+                        //
+                        // Force-exit safety net: if the process is still alive after 5 seconds
+                        // (e.g. tokio runtime waiting for blocked spawn_blocking tasks),
+                        // use app.exit(0) for proper WebView2 cleanup, then std::process::exit(0).
+                        tauri::WindowEvent::CloseRequested { .. } => {
                             use std::sync::atomic::Ordering;
-                            // If already shutting down, allow the close to proceed.
                             if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
-                                return;
+                                return; // Already shutting down — let close proceed
                             }
-                            // Prevent immediate close so in-flight operations can abort.
-                            api.prevent_close();
+                            // Signal all Rust long-running operations to abort on next checkpoint
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
-                            // Notify frontend to clear queues and stop accepting new work.
+                            // Notify frontend to clear OCR queues and stop new work (best-effort)
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
-                            // Brief delay for OCR/PDF threads to notice the flag,
-                            // then explicitly close the window.
-                            let win2 = win.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(400));
-                                let _ = win2.close();
-                            });
+                            // Spawn force-exit watchdog as safety net
+                            {
+                                use tauri::Manager;
+                                let app = win.app_handle().clone();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_secs(5));
+                                    // Tier 1: graceful exit via Tauri (proper WebView2 cleanup)
+                                    app.exit(0);
+                                    std::thread::sleep(std::time::Duration::from_secs(2));
+                                    // Tier 2: force exit (guaranteed, but skips cleanup)
+                                    std::process::exit(0);
+                                });
+                            }
                         }
                         // --- Drag-and-drop file handling ---
                         tauri::WindowEvent::DragDrop(drop_event) => {

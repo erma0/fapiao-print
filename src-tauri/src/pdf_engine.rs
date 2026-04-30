@@ -398,7 +398,38 @@ pub(crate) fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage,
 // OCR — Windows.Media.Ocr (lightweight, built-in, Chinese support)
 // =====================================================
 
-/// OCR an image from base64 data URL, return recognized text
+/// A single OCR word with its bounding rectangle
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrWord {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// An OCR line containing words
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrLine {
+    pub words: Vec<OcrWord>,
+}
+
+/// Structured OCR result with coordinates
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrResult {
+    /// Flat text (backward compatible)
+    pub text: String,
+    /// Lines with word-level bounding boxes
+    pub lines: Vec<OcrLine>,
+    /// Image dimensions in pixels (for coordinate normalization)
+    pub img_w: u32,
+    pub img_h: u32,
+}
+
+/// OCR an image from base64 data URL, return structured result with coordinates
 #[cfg(target_os = "windows")]
 pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -468,6 +499,10 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         .get()
         .map_err(|e| format!("获取位图失败: {}", e))?;
 
+    // Get image pixel dimensions for coordinate normalization
+    let img_w = bitmap.PixelWidth().map_err(|e| format!("获取宽度失败: {}", e))?;
+    let img_h = bitmap.PixelHeight().map_err(|e| format!("获取高度失败: {}", e))?;
+
     // Create OCR engine with user profile languages (includes Chinese on Chinese Windows)
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭，OCR已中止".to_string());
@@ -484,13 +519,53 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         .get()
         .map_err(|e| format!("OCR识别失败: {}", e))?;
 
-    let text = result.Text()
+    // Extract flat text (backward compatible)
+    let flat_text = result.Text()
         .map_err(|e| format!("获取OCR文本失败: {}", e))?
         .to_string();
 
-    log::info!("OCR recognized {} chars", text.len());
+    // Extract lines with word-level coordinates
+    let mut ocr_lines: Vec<OcrLine> = Vec::new();
+    let lines = result.Lines()
+        .map_err(|e| format!("获取OCR行失败: {}", e))?;
 
-    Ok(text)
+    for line in lines {
+        let mut ocr_words: Vec<OcrWord> = Vec::new();
+        let words = line.Words()
+            .map_err(|e| format!("获取OCR词失败: {}", e))?;
+
+        for word in words {
+            let rect = word.BoundingRect()
+                .map_err(|e| format!("获取词边界失败: {}", e))?;
+            let text = word.Text()
+                .map_err(|e| format!("获取词文本失败: {}", e))?
+                .to_string();
+            ocr_words.push(OcrWord {
+                text,
+                x: rect.X as f64,
+                y: rect.Y as f64,
+                w: rect.Width as f64,
+                h: rect.Height as f64,
+            });
+        }
+
+        if !ocr_words.is_empty() {
+            ocr_lines.push(OcrLine { words: ocr_words });
+        }
+    }
+
+    let ocr_result = OcrResult {
+        text: flat_text,
+        lines: ocr_lines,
+        img_w: img_w as u32,
+        img_h: img_h as u32,
+    };
+
+    log::info!("OCR recognized {} chars, {} lines", ocr_result.text.len(), ocr_result.lines.len());
+
+    // Return as JSON string
+    serde_json::to_string(&ocr_result)
+        .map_err(|e| format!("OCR结果序列化失败: {}", e))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -807,32 +882,43 @@ struct CachedXobj {
 /// Decode all unique images (base64 → DynamicImage), apply trim + color mode.
 /// Rotation is NOT applied here — it's per-slot and handled in build_page_ops.
 /// Returns decoded images indexed by file_index.
+/// Uses rayon for parallel decoding when multiple files are present.
 fn decode_images(
     files: &[FileSpec],
     settings: &RenderSettings,
 ) -> Vec<Option<image::DynamicImage>> {
-    let mut decoded: Vec<Option<image::DynamicImage>> = Vec::with_capacity(files.len());
+    use rayon::prelude::*;
 
-    for file_spec in files {
-        let mut img = match decode_base64_image(&file_spec.data_url) {
-            Ok(i) => i,
-            Err(e) => {
-                log::warn!("Image decode failed: {}", e);
-                decoded.push(None);
-                continue;
+    let trim = settings.trim_white.unwrap_or(false);
+    let color_mode = settings.color_mode.clone();
+
+    // Parallel decode — each file is independent
+    let decoded: Vec<Option<image::DynamicImage>> = files
+        .par_iter()
+        .map(|file_spec| {
+            // Check shutdown flag — abort image decoding if app is closing
+            if SHUTTING_DOWN.load(Ordering::SeqCst) {
+                return None;
             }
-        };
+            let mut img = match decode_base64_image(&file_spec.data_url) {
+                Ok(i) => i,
+                Err(e) => {
+                    log::warn!("Image decode failed: {}", e);
+                    return None;
+                }
+            };
 
-        // Apply trim (global setting, not per-slot)
-        if settings.trim_white.unwrap_or(false) {
-            img = trim_white_edges(&img, 245);
-        }
+            // Apply trim (global setting, not per-slot)
+            if trim {
+                img = trim_white_edges(&img, 245);
+            }
 
-        // Apply color mode (global setting, not per-slot)
-        img = apply_color_mode(img, &settings.color_mode);
+            // Apply color mode (global setting, not per-slot)
+            img = apply_color_mode(img, &color_mode);
 
-        decoded.push(Some(img));
-    }
+            Some(img)
+        })
+        .collect();
 
     decoded
 }
@@ -984,6 +1070,10 @@ pub fn generate_pdf_from_layout(
     let mut xobj_cache: std::collections::HashMap<(usize, i32), CachedXobj> = std::collections::HashMap::new();
 
     for page_spec in &request.pages {
+        // Check shutdown flag — abort PDF generation if app is closing
+        if SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return Err("应用正在关闭，PDF生成已中止".to_string());
+        }
         let ops = build_page_ops(
             &mut doc,
             page_spec,
@@ -1001,9 +1091,26 @@ pub fn generate_pdf_from_layout(
         doc.pages.push(page);
     }
 
-    // Save PDF — new API returns Vec<u8> directly (not Result)
+    // Save PDF — custom options for print quality
+    // Default PdfSaveOptions limits images to 2MB and uses 0.85 JPEG quality,
+    // which downsamples high-res invoice images and makes text blurry.
+    // We override: no size limit, higher quality, prefer JPEG for speed.
+    let save_opts = printpdf::PdfSaveOptions {
+        optimize: true,
+        subset_fonts: true,
+        secure: true,
+        image_optimization: Some(printpdf::ImageOptimizationOptions {
+            quality: Some(0.95),           // High quality (default 0.85 too lossy for text)
+            max_image_size: None,          // NO size limit (default "2MB" downsamples invoices!)
+            auto_optimize: Some(true),     // Remove alpha if opaque, detect greyscale
+            convert_to_greyscale: None,    // Don't force greyscale
+            dither_greyscale: None,
+            format: Some(printpdf::ImageCompression::Auto), // Auto: JPEG for photos, Flate for sharp edges
+        }),
+    };
+
     let mut warnings = Vec::new();
-    let pdf_bytes = doc.save(&printpdf::PdfSaveOptions::default(), &mut warnings);
+    let pdf_bytes = doc.save(&save_opts, &mut warnings);
 
     if !warnings.is_empty() {
         log::warn!("PDF save warnings: {} items", warnings.len());

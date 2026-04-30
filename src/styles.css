@@ -277,8 +277,8 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .spinner { width: 20px; height: 20px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ===== File item entrance animation ===== */
-.file-item {
+/* ===== File item entrance animation — only for newly added items ===== */
+.file-item.entering {
   animation: fileSlideIn 0.25s ease-out both;
 }
 @keyframes fileSlideIn {
@@ -286,17 +286,41 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   to { opacity: 1; transform: translateX(0); }
 }
 
-/* Stagger animation for batch-added files */
-.file-item:nth-child(1) { animation-delay: 0ms; }
-.file-item:nth-child(2) { animation-delay: 30ms; }
-.file-item:nth-child(3) { animation-delay: 60ms; }
-.file-item:nth-child(4) { animation-delay: 90ms; }
-.file-item:nth-child(5) { animation-delay: 120ms; }
-.file-item:nth-child(n+6) { animation-delay: 150ms; }
+/* Loading skeleton — shimmer on thumbnail while file renders */
+.file-item.loading-item .file-thumb {
+  position: relative;
+}
+.file-item.loading-item .file-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.5) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 5px;
+  z-index: 1;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+html.dark .file-item.loading-item .file-thumb::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%);
+  background-size: 200% 100%;
+}
+.file-item.loading-item .file-name {
+  color: var(--text-muted);
+}
+.file-item.loading-item .file-meta {
+  visibility: hidden;
+}
 
 /* ===== Toast ===== */
-.toast { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text-primary); color: white; padding: 10px 22px; border-radius: 8px; font-size: 14px; z-index: 400; opacity: 0; transition: all 0.3s; pointer-events: none; }
+.toast { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text-primary); color: white; padding: 10px 22px; border-radius: 8px; font-size: 14px; z-index: 400; opacity: 0; transition: all 0.3s; pointer-events: none; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: toast-spin 0.6s linear infinite; flex-shrink: 0; }
+@keyframes toast-spin { to { transform: rotate(360deg); } }
+html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #1a1a2e; }
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
