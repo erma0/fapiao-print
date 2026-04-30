@@ -1,6 +1,6 @@
 {
   "name": "fapiao-print",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "电子发票批量打印工具 - Tauri 桌面应用",
   "scripts": {
     "dev": "tauri dev",

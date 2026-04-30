@@ -32,7 +32,8 @@ var S = {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, collate: true, duplex: false, pageNum: false,
     printDate: false, confirmPrint: true,
-    autoOpenPdf: true
+    autoOpenPdf: true,
+    ocrEnabled: false
   }
 };
 
@@ -220,7 +221,11 @@ async function processFileDataList(fileDataList) {
   renderFileList(); updatePreview(); updatePrintBtn();
 
   // Show "识别中" toast immediately with spinner
-  toastLoading('已添加 ' + total + ' 张发票，识别中...');
+  if (S.feat.ocrEnabled) {
+    toastLoading('已添加 ' + total + ' 张发票，识别中...');
+  } else {
+    toastLoading('已添加 ' + total + ' 张发票...');
+  }
 
   // 2. Load files and replace placeholders incrementally
   var promises = fileDataList.map(function(fd) {
@@ -289,7 +294,11 @@ async function processFiles(files) {
   renderFileList(); updatePreview(); updatePrintBtn();
 
   // Show "识别中" toast immediately with spinner
-  toastLoading('已添加 ' + total + ' 张发票，识别中...');
+  if (S.feat.ocrEnabled) {
+    toastLoading('已添加 ' + total + ' 张发票，识别中...');
+  } else {
+    toastLoading('已添加 ' + total + ' 张发票...');
+  }
 
   var promises = files.map(function(file) {
     return loadFileFast(file).then(function(r) {
@@ -466,7 +475,7 @@ function loadFileFromDataUrlFast(fd) {
             resolve(results.length === 1 ? results[0] : results);
             // Queue OCR for each page in background — no blocking!
             results.forEach(function(r) {
-              applyOcrAsync(r, r.previewUrl);
+              if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
             });
             return;
           }
@@ -497,7 +506,7 @@ function loadFileFromDataUrlFast(fd) {
         });
         resolve(result);
         // Background OCR — pass filePath to skip base64 round-trip
-        applyOcrAsync(result, dataUrl);
+        if (S.feat.ocrEnabled) applyOcrAsync(result, dataUrl);
       };
       img.onerror = function() { toast('图片加载失败: ' + name); resolve(null); };
     }
@@ -527,7 +536,7 @@ function loadFileFast(file) {
           previewUrl: e.target.result, img: img
         });
         resolve(fileObj);
-        applyOcrAsync(fileObj, e.target.result);
+        if (S.feat.ocrEnabled) applyOcrAsync(fileObj, e.target.result);
       };
       reader.onerror = function() { toast('读取失败: ' + file.name); resolve(null); };
       reader.readAsDataURL(file);
@@ -586,7 +595,7 @@ function renderFileList() {
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4');
     var actionBtns = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
+      : '<button class="ib" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
     return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
@@ -610,6 +619,12 @@ function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); re
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
+function ocrFile(i) {
+  var f = S.files[i];
+  if (f._loading || f._ocrPending) return;
+  if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
+  applyOcrAsync(f, f.previewUrl);
+}
 function clearAll() { if (!S.files.length) return; if (!confirm('确认清除所有发票？')) return; S.files = []; _activeFileIdx = -1; renderFileList(); updatePreview(); updatePrintBtn(); }
 
 // Click file item → navigate preview to the page containing this invoice
@@ -1068,6 +1083,10 @@ function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.fi
 function togglePref(k, btn) {
   S.feat[k] = !S.feat[k];
   btn.classList.toggle('on', S.feat[k]);
+  // Persist OCR enabled setting
+  if (k === 'ocrEnabled') {
+    try { localStorage.setItem('fapiao-ocr-enabled', S.feat[k] ? '1' : '0'); } catch(e) {}
+  }
 }
 
 function getSaveDir() {
@@ -1115,7 +1134,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, collate: true, duplex: false, pageNum: false, printDate: false, confirmPrint: true, autoOpenPdf: true };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, collate: true, duplex: false, pageNum: false, printDate: false, confirmPrint: true, autoOpenPdf: true, ocrEnabled: false };
   S.viewZoom = 0;
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
@@ -1147,12 +1166,14 @@ function resetSettings() {
   document.getElementById('toggleDate').classList.remove('on');
   document.getElementById('toggleConfirm').classList.add('on');
   document.getElementById('toggleAutoOpenPdf').classList.add('on');
+  document.getElementById('toggleOcrEnabled').classList.remove('on');
   document.getElementById('printMode').value = 'dialog';
   document.getElementById('themeMode').value = 'light';
   document.documentElement.classList.remove('dark');
   try { localStorage.removeItem('fapiao-theme'); } catch(e) {}
   try { localStorage.removeItem('fapiao-save-dir'); } catch(e) {}
   try { localStorage.removeItem('fapiao-amt-mode'); } catch(e) {}
+  try { localStorage.removeItem('fapiao-ocr-enabled'); } catch(e) {}
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
   S.amtMode = 'tax';
@@ -1303,6 +1324,17 @@ document.getElementById('orientation').value = 'landscape';
     var pm = localStorage.getItem('fapiao-print-mode');
     if (pm && (pm === 'dialog' || pm === 'direct')) {
       document.getElementById('printMode').value = pm;
+    }
+  } catch(e) {}
+})();
+
+// Restore OCR enabled setting
+(function() {
+  try {
+    var v = localStorage.getItem('fapiao-ocr-enabled');
+    if (v === '1') {
+      S.feat.ocrEnabled = true;
+      document.getElementById('toggleOcrEnabled').classList.add('on');
     }
   } catch(e) {}
 })();

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "发票打印工具",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "identifier": "com.fapiao.print",
   "build": {
     "frontendDist": "../src"
