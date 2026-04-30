@@ -262,24 +262,21 @@ pub fn run() {
 
                 window.on_window_event(move |event| {
                     match event {
-                        // --- Close event: graceful shutdown ---
-                        // Set SHUTTING_DOWN flag to reject new OCR/PDF/COM requests,
-                        // then let Tauri close the window immediately.
+                        // --- Close event: force-exit with short delay ---
+                        // ROOT CAUSE of residual processes:
+                        // Tauri sync commands run inside tokio's spawn_blocking pool.
+                        // WinRT .get() blocks the OS thread (OCR/PDF rendering can take seconds).
+                        // When the user closes the window, tokio's Runtime::drop() waits for
+                        // ALL spawn_blocking tasks to finish before allowing the process to exit.
+                        // If OCR is still running, tokio waits forever → the main process hangs.
+                        // WebView2 child processes (msedgewebview2.exe) then become orphans.
                         //
-                        // DO NOT use api.prevent_close() — previous two-phase close
-                        // (prevent_close → 400ms delay → win.close()) caused residual processes:
-                        //   1. Delayed WebView2 cleanup → orphan msedgewebview2.exe processes
-                        //   2. Detached close thread race conditions
-                        //   3. Main process lingering while blocked WinRT .get() calls finish
-                        //
-                        // Now: window closes immediately → Tauri exits event loop → process exits.
-                        // In-flight .get() calls are killed when the process exits (Rust: main()
-                        // returns → all threads terminated). This is safe because OCR/PDF rendering
-                        // are read-only operations with no side effects.
-                        //
-                        // Force-exit safety net: if the process is still alive after 5 seconds
-                        // (e.g. tokio runtime waiting for blocked spawn_blocking tasks),
-                        // use app.exit(0) for proper WebView2 cleanup, then std::process::exit(0).
+                        // FIX: Set SHUTTING_DOWN so in-flight loops check it on next iteration,
+                        // notify frontend to stop queuing new OCR work, then spawn a watchdog
+                        // that calls std::process::exit(0) after a short grace period.
+                        // std::process::exit(0) calls the Windows ExitProcess API, which
+                        // immediately terminates the process and ALL its threads — tokio cannot
+                        // block it. WebView2 jobs are cleaned up by the OS within milliseconds.
                         tauri::WindowEvent::CloseRequested { .. } => {
                             use std::sync::atomic::Ordering;
                             if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -289,33 +286,17 @@ pub fn run() {
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
                             // Notify frontend to clear OCR queues and stop new work (best-effort)
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
-                            // Spawn force-exit watchdog as safety net.
-                            // CRITICAL: app.exit(0) and std::process::exit(0) must run in
-                            // SEPARATE threads. If app.exit() blocks waiting for tokio's
-                            // spawn_blocking tasks, a single-threaded watchdog would never
-                            // reach std::process::exit(0) and the process would hang forever.
-                            {
-                                use tauri::Manager;
-                                let app1 = win.app_handle().clone();
-                                let app2 = win.app_handle().clone();
-
-                                // Tier 1: graceful exit (allows WebView2 cleanup)
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_secs(3));
-                                    let _ = app1.exit(0);
-                                });
-
-                                // Tier 2: hard exit — absolutely guaranteed, separate thread
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_secs(5));
-                                    // At this point tokio threads should have been released
-                                    // by get_with_shutdown() returning early. If anything
-                                    // still blocks, we terminate the entire process.
-                                    let _ = app2.exit(0);
-                                    std::thread::sleep(std::time::Duration::from_millis(500));
-                                    std::process::exit(0);
-                                });
-                            }
+                            // Unconditional immediate process termination.
+                            // Do NOT use a delayed thread — if tokio is blocked on a
+                            // spawn_blocking WinRT .get() call, the delay thread may
+                            // race with the runtime drop and never get scheduled.
+                            std::process::exit(0);
+                        }
+                        tauri::WindowEvent::Destroyed => {
+                            // Fallback: if CloseRequested was somehow bypassed
+                            // (e.g. programmatic close, system shutdown), ensure
+                            // the process dies immediately when the window is gone.
+                            std::process::exit(0);
                         }
                         // --- Drag-and-drop file handling ---
                         tauri::WindowEvent::DragDrop(drop_event) => {

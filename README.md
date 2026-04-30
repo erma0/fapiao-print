@@ -11,7 +11,11 @@
 ### 📥 文件管理
 - **多格式支持**：PDF、OFD、JPG、PNG、BMP、WebP、TIFF
 - **智能渲染**：WinRT 原生渲染优先（支持中文系统字体），PDF.js 回退
-- **金额识别**：自动识别发票金额（OCR + 文字提取），支持价税合计、合计、金额等关键字段
+- **坐标感知 OCR**：自动识别发票金额和销售方信息，支持 word 级坐标定位
+  - 含税价/不含税价/税额 三值交叉推导
+  - 发票区域自动分类（买方/卖方/金额/备注）
+  - 车票专用提取（铁路客票/出租车票/网约车票）
+  - OCR ¥↔1 误识别自动修正
 - **发票查验**：一键跳转国家税务总局发票查验平台
 - **批量添加**：拖放文件或点击选择，一次添加多张发票
 - **文件排序**：拖拽排序，调整打印顺序
@@ -45,7 +49,9 @@
 - **深色模式**：完整的深色主题支持
 - **实时预览**：主区域实时预览打印效果，支持缩放和翻页
 - **无感缩放**：Ctrl+滚轮缩放（聚焦指针处放大缩小），双击重置自适应
-- **金额统计**：实时显示已选发票金额汇总
+- **金额统计**：实时显示已选发票金额汇总（含税/不含税/税额）
+- **车票识别**：自动识别铁路电子客票、出租车票、网约车票，显示票种标签
+- **OCR 全文查看**：查看/折叠 OCR 识别全文，方便排查提取问题
 - **键盘快捷键**：`Ctrl+O` 添加 | `Ctrl+P` 打印 | `Ctrl++/-` 缩放 | `Ctrl+0` 自适应 | `←→` 翻页
 
 ## 📸 界面预览
@@ -65,26 +71,34 @@
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| 前端 | 原生 HTML / CSS / JS | 单文件应用，无框架依赖 |
+| 前端 | 原生 HTML / CSS / JS | 模块化拆分（app/ocr/layout/print），无框架依赖 |
 | PDF 渲染 | WinRT + PDF.js | WinRT 优先（支持系统字体），PDF.js 回退 |
+| OCR | WinRT `Windows.Media.Ocr` | 坐标感知提取，零额外依赖 |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
-| PDF 生成 | printpdf | Rust 原生 PDF 生成 |
+| PDF 生成 | printpdf 0.9 | Rust 原生 PDF 生成 |
 | 打印 | winprint (Win32 Print Spooler) | 直接发送到打印机，可指定打印机 |
-| 图像处理 | image (Rust) | 高性能图像解码 |
+| 图像处理 | image 0.25 (Rust) | 高性能图像解码，原生 WebP 支持 |
 
 ## 📦 项目结构
 
 ```
 fapiao-print/
 ├── src/                        # 前端文件
-│   ├── index.html              # 主页面（单文件应用）
+│   ├── index.html              # 主页面结构
+│   ├── styles.css              # 全部 CSS（含深色模式）
+│   ├── app.js                  # 主入口、状态、文件加载
+│   ├── ocr.js                  # OCR 提取 + 坐标感知金额/销售方提取
+│   ├── layout.js               # calculateLayout() 纯函数 + 预览渲染
+│   ├── print.js                # 打印/导出 PDF
 │   ├── pdf.min.js              # PDF.js 本地副本
-│   └── pdf.worker.min.js       # PDF.js Worker
+│   ├── pdf.worker.min.js       # PDF.js Worker
+│   ├── cmaps/                  # PDF.js CMap 本地文件（168个 .bcmap）
+│   └── standard_fonts/         # PDF.js 标准字体（16个文件）
 ├── src-tauri/                  # Tauri / Rust 后端
 │   ├── src/
 │   │   ├── main.rs             # 入口（隐藏控制台窗口）
-│   │   ├── lib.rs              # 命令定义、拖放处理
-│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、文件读取
+│   │   ├── lib.rs              # 命令定义、拖放处理、进程管理
+│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、OCR、文件读取
 │   ├── capabilities/
 │   │   └── default.json        # Tauri 权限配置
 │   ├── icons/                  # 应用图标
@@ -92,6 +106,7 @@ fapiao-print/
 │   ├── build.rs                # Tauri 构建脚本
 │   └── tauri.conf.json         # Tauri 配置
 ├── package.json                # Node.js 依赖（Tauri CLI）
+├── CHANGELOG.md                # 更新日志
 ├── LICENSE                     # MIT 许可证
 └── .gitignore
 ```
@@ -174,12 +189,16 @@ npm run build
 - WinRT `IBufferByteAccess` COM 接口查询失败（`E_NOINTERFACE`），改用 `DataReader` 读取渲染数据
 - PDF.js CMap 配置，解决中文 CID 编码字体渲染问题
 - CID 字体 PDF 金额提取失败（`join(' ')` → `join('')`，空格破坏正则匹配）
-- WinRT OCR 金额自动识别（`Windows.Media.Ocr`，零额外依赖）
+- WinRT OCR 坐标感知提取（`Windows.Media.Ocr`，word 级坐标，区域分类）
+- OCR ¥↔1 误识别修正（双¥模式、关键词后1→¥转换）
+- 车票专用金额提取（铁路客票/出租车票/网约车票，位置感知）
+- 含税价/不含税价/税额三值交叉推导
 - 自适应 DPI 渲染（小页面自动提升 DPI，确保打印清晰度）
 - OFD 格式解析（ZIP + XML + 图片提取）
 - PDF 画质优化：300 DPI + PNG 无损输出 + 自适应渲染
 - 多发票排版边距独立计算（per-slot margin）
 - 打印机选择与直接打印（winprint + Win32 GetDefaultPrinterW，绕过 PDF 阅读器）
+- 进程残留根治：`std::process::exit(0)` 即时终止 + COM 对象显式释放
 
 ## 📄 许可证
 

@@ -31,6 +31,30 @@ function getTicketTypeLabel(text) {
   return '车票';
 }
 
+/**
+ * Normalize OCR currency symbol artifacts.
+ * OCR commonly misreads digits and ¥ symbols because they look similar:
+ *   - "1" as "¥" → "¥¥72.68" should be "¥172.68" (second ¥ is misread "1")
+ *   - "¥" as "1" → "1317.00" should be "¥317.00" (handled by keyword-based rule)
+ *   - Mixed full-width ￥ and half-width ¥
+ */
+function normalizeOcrCurrency(s) {
+  if (!s) return s;
+  // Double ¥ before a digit: the second ¥ is a misread "1" digit
+  // "¥¥72.68" → "¥172.68", "￥¥07.00" → "¥107.00"
+  s = s.replace(/[¥￥]¥(\d)/g, '¥1$1');
+  // Apply again in case of triple ¥ (very rare): "¥¥¥07" → "¥1¥07" → "¥117.07"
+  s = s.replace(/¥¥(\d)/g, '¥1$1');
+  // "1¥" pattern before a digit: ¥ was misread as "1" and "1" as "¥" (swap)
+  // "1¥72.68" → "¥172.68". Only apply when preceded by non-digit (avoid breaking real numbers)
+  s = s.replace(/(\D)1¥(\d)/g, '$1¥1$2');
+  // Also handle "1¥" at the start of the string
+  s = s.replace(/^1¥(\d)/, '¥1$1');
+  // Normalize remaining full-width ￥ to half-width ¥ for consistency
+  s = s.replace(/￥/g, '¥');
+  return s;
+}
+
 // =====================================================
 // Coordinate-aware region analysis
 // =====================================================
@@ -77,7 +101,7 @@ function buildWordMap(ocrLines, imgW, imgH) {
     for (var wi = 0; wi < line.words.length; wi++) {
       var word = line.words[wi];
       map.push({
-        text: word.text,
+        text: normalizeOcrCurrency(word.text),
         x: word.x,
         y: word.y,
         w: word.w,
@@ -117,6 +141,69 @@ function getRegionText(wordMap, region) {
     byLine[k].sort(function(a, b) { return a.x - b.x; });
     return byLine[k].map(function(w) { return w.text; }).join('');
   }).join('\n');
+}
+
+/**
+ * Clean an OCR amount string: strip ¥/￥ prefix, handle "1" misread of "¥".
+ * OCR often misreads "¥317.00" as "1317.00" (¥→1). We detect this by checking
+ * if a leading "1" could be a misread ¥ symbol: the number after removing "1"
+ * must have exactly 2 decimal places and be a reasonable amount.
+ * Returns the cleaned numeric string.
+ */
+function cleanOcrAmtStr(raw) {
+  var hadYenPrefix = /^[¥￥-]/.test(raw);
+  var s = raw.replace(/^[¥￥-]+/, '').replace(/[,，]/g, '');
+  // ¥→1 misread detection:
+  // Only strip leading "1" if the original did NOT have a ¥/negative prefix,
+  // AND the number has 4+ digits before decimal (1 + 3+ digits).
+  // When ¥ is present (e.g., "¥172.68"), the "1" is a legitimate digit,
+  // not a misread ¥. Without ¥ prefix (e.g., "1317.00"), the "1" is likely
+  // a misread "¥" symbol (they look very similar in OCR).
+  // 4+ digit check prevents stripping "1" from 3-digit amounts like "172.68"
+  // which are common and legitimate (stripping would give wrong "72.68").
+  // e.g., "1317.00" (4 digits, no ¥) → "317.00" ✓
+  // e.g., "¥172.68" (has ¥) → keep "172.68" ✓ (NOT "72.68")
+  // e.g., "172.68" (3 digits, no ¥) → keep "172.68" ✓ (NOT "72.68")
+  // e.g., "1299.06" (4 digits, no ¥) → "299.06" ✓
+  if (!hadYenPrefix && /^1\d{3,}\.\d{2}$/.test(s)) {
+    var stripped = s.substring(1);
+    var strippedVal = parseFloat(stripped);
+    if (strippedVal > 0) {
+      s = stripped;
+    }
+  }
+  return s;
+}
+
+/**
+ * Collect all amount-like numbers from wordMap, optionally filtered by
+ * region and/or normalized position ranges (0~1).
+ * Returns array of { value, x, y, text, word } sorted by value descending.
+ */
+function collectAmountWords(wordMap, imgW, imgH, regionFilter, nxMin, nxMax, nyMin, nyMax) {
+  var results = [];
+  wordMap.forEach(function(w) {
+    if (regionFilter && w.region !== regionFilter && regionFilter !== 'any') return;
+    if (imgW > 0 && imgH > 0) {
+      var nx = (w.x + w.w / 2) / imgW;
+      var ny = (w.y + w.h / 2) / imgH;
+      if (nxMin !== undefined && nx < nxMin) return;
+      if (nxMax !== undefined && nx > nxMax) return;
+      if (nyMin !== undefined && ny < nyMin) return;
+      if (nyMax !== undefined && ny > nyMax) return;
+    }
+    var t = w.text.replace(/[,，]/g, '');
+    // Match ¥-prefixed or bare amounts with exactly 2 decimal places
+    var m = t.match(/^-?¥?(\d+\.\d{2})$/);
+    if (m) {
+      var val = parseFloat(cleanOcrAmtStr(t));
+      if (val > 0 && val < 1000000) {
+        results.push({ value: val, x: w.x, y: w.y, text: w.text, word: w });
+      }
+    }
+  });
+  results.sort(function(a, b) { return b.value - a.value; });
+  return results;
 }
 
 /**
@@ -482,12 +569,23 @@ function extractInvoiceInfo(textContent) {
   fullText = fullText.replace(/¥\s+(\d)/g, '¥$1');
   fullText = fullText.replace(/([\u4e00-\u9fff])\s+¥/g, '$1¥');
 
-  // === Normalize OCR ¥→1 misread ===
+  // === Normalize OCR ¥↔1 misread — ¥¥ pattern (BEFORE keyword-based rule) ===
+  // OCR misreads "1" as "¥" producing "¥¥72.68" (should be "¥172.68")
+  // and "￥¥07.00" (should be "¥107.00"). Must run before the keyword-based
+  // "1→¥" rule to avoid re-creating double-¥ patterns.
+  fullText = normalizeOcrCurrency(fullText);
+
+  // === Normalize OCR ¥→1 misread (keyword-based) ===
   // OCR often misreads "¥" as "1" (they look very similar in many fonts).
-  // Pattern: "1XXX.XX" right after amount keywords → should be "¥XXX.XX"
+  // Pattern: "1XXX.XX" (4+ digits before decimal) right after amount keywords
+  // → should be "¥XXX.XX"
   // e.g., "价税合计1317.00" → "价税合计¥317.00"
-  // Only apply after amount-related keywords to avoid corrupting legitimate numbers
-  fullText = fullText.replace(/(价\s*税\s*合\s*计|金\s*额|税\s*额|合\s*计|票\s*价|总\s*计|不\s*含\s*税|含\s*税|实\s*付|应\s*付|开\s*票\s*金\s*额|发\s*票\s*金\s*额|全\s*价|优\s*惠\s*价)([^\d]*?)1(\d{2,}\.\d{2})/g, '$1$2¥$3');
+  // Only apply after amount-related keywords to avoid corrupting legitimate numbers.
+  // [^\d¥￥]*? excludes ¥ so we don't re-create double-¥ on already-normalized text
+  // like "金额¥172.68" → without this exclusion, "1" in "172" would be replaced → "金额¥¥72.68"
+  // \d{3,} requires 3+ digits after "1" (4+ total) to avoid stripping "1" from
+  // legitimate 3-digit amounts like "金额172.68" (should stay 172.68, not become ¥72.68)
+  fullText = fullText.replace(/(价\s*税\s*合\s*计|金\s*额|税\s*额|合\s*计|票\s*价|总\s*计|不\s*含\s*税|含\s*税|实\s*付|应\s*付|开\s*票\s*金\s*额|发\s*票\s*金\s*额|全\s*价|优\s*惠\s*价)([^\d¥￥]*?)1(\d{3,}\.\d{2})/g, '$1$2¥$3');
 
   // Helper: find first number with exactly 2 decimal places after a keyword
   function findFirstNum(keyword, text) {
@@ -502,31 +600,6 @@ function extractInvoiceInfo(textContent) {
    * (for table layouts where keyword is a column header and value is below).
    * Returns the amount or 0.
    */
-  /**
-   * Clean an OCR amount string: strip ¥/￥ prefix, handle "1" misread of "¥".
-   * OCR often misreads "¥317.00" as "1317.00" (¥→1). We detect this by checking
-   * if a leading "1" could be a misread ¥ symbol: the number after removing "1"
-   * must have exactly 2 decimal places and be a reasonable amount.
-   * Returns the cleaned numeric string.
-   */
-  function cleanOcrAmtStr(raw) {
-    var s = raw.replace(/^[¥￥]/, '').replace(/[,，]/g, '');
-    // ¥→1 misread detection:
-    // If number starts with "1" followed by 2+ digits and .XX (standard amount format),
-    // the "1" is likely a misread "¥" symbol (they look very similar in OCR).
-    // e.g., "1317.00" → "317.00", "1299.06" → "299.06"
-    // But NOT "100.00" (removing "1" gives "00.00" = 0 → rejected)
-    // And NOT "12.50" (only 2 digits before decimal, likely legitimate)
-    if (/^1\d{2,}\.\d{2}$/.test(s)) {
-      var stripped = s.substring(1);
-      var strippedVal = parseFloat(stripped);
-      if (strippedVal > 0) {
-        s = stripped;
-      }
-    }
-    return s;
-  }
-
   function findAmountNearKeyword(keywordRegex, regionFilter, maxLineDist) {
     if (!wordMap || !imgW || !imgH) return 0;
     maxLineDist = maxLineDist || 80; // max vertical distance for "next line" (increased from 30)
@@ -561,7 +634,8 @@ function extractInvoiceInfo(textContent) {
         // that is NOT an amount. Also filter other single-digit numbers (< 2) which
         // are almost never invoice amounts.
         if (/^\d$/.test(t) && parseInt(t) < 2) return false;
-        return /^¥?\d+(\.\d{1,2})?$/.test(t) || /^￥\d+(\.\d{1,2})?$/.test(t);
+        // Match: bare number, ¥-prefixed number, or negative amount
+        return /^-?¥?\d+(\.\d{1,2})?$/.test(t);
       });
       if (nearbyNums.length > 0) {
         // Sort: prefer same-line results, then closest horizontally
@@ -581,18 +655,56 @@ function extractInvoiceInfo(textContent) {
 
   var amountTax = 0, amountNoTax = 0, taxAmount = 0;
 
-  // === Step 0: Coordinate-based amount extraction (highest priority) ===
-  // Use word coordinates to find amounts by keyword proximity in the amount region
-  if (wordMap && imgW > 0 && imgH > 0) {
+  // === Step 0: Ticket-specific coordinate extraction (BEFORE invoice logic) ===
+  // Train/ride tickets have a completely different layout from VAT invoices.
+  // Ticket amounts are typically at left-half, 35-55% from top.
+  // Must run BEFORE Step 0's generic invoice extraction to avoid wrong values
+  // from generic region classification (55-75% = amount area doesn't apply to tickets).
+  if (isTicket && wordMap && imgW > 0 && imgH > 0) {
+    // 0a. Try keyword proximity with 'any' region
+    amountTax = findAmountNearKeyword(/票\s*价/, 'any');
+    if (!amountTax) amountTax = findAmountNearKeyword(/全\s*价/, 'any');
+    if (!amountTax) amountTax = findAmountNearKeyword(/优\s*惠\s*价/, 'any');
+    if (!amountTax) amountTax = findAmountNearKeyword(/学\s*生\s*价/, 'any');
+
+    // 0b. Positional fallback: ticket amount is in left-half, ~35-55% from top
+    if (!amountTax) {
+      var ticketAmts = collectAmountWords(wordMap, imgW, imgH, null, 0, 0.55, 0.3, 0.6);
+      if (ticketAmts.length > 0) {
+        // Take the largest amount in the ticket amount area
+        amountTax = ticketAmts[0].value;
+      }
+    }
+
+    if (amountTax > 0) {
+      amountNoTax = amountTax;
+      console.log('[OCR坐标] 车票金额提取:', { amountTax: amountTax });
+    }
+  }
+
+  // === Step 1: Coordinate-based amount extraction for invoices (highest priority) ===
+  // Use word coordinates to find amounts by keyword proximity in the amount region.
+  // Only runs for non-ticket invoices.
+  if (!isTicket && wordMap && imgW > 0 && imgH > 0) {
     var amountText = getRegionText(wordMap, 'amount');
 
-    // 价税合计 — try amount region first
+    // 价税合计 — try full keyword in amount region first
     if (amountText) {
       amountTax = findAmountNearKeyword(/价\s*税\s*合\s*计/, 'amount');
       // Also try regex on amount region text
       if (!amountTax) amountTax = findFirstNum('价\\s*税\\s*合\\s*计', amountText);
     }
-    // If not found in amount region, try anywhere
+    // Try partial keyword match: OCR often splits "价税合计" into "价税"+"合计" etc.
+    if (!amountTax) {
+      // "价税" partial — in VAT invoices, "价税" is part of "价税合计" label,
+      // and the nearest number should be the 含税总价
+      amountTax = findAmountNearKeyword(/价\s*税/, 'amount');
+    }
+    // Also try "税合计" partial (OCR split: "价" + "税合计")
+    if (!amountTax) {
+      amountTax = findAmountNearKeyword(/税\s*合\s*计/, 'amount');
+    }
+    // If not found in amount region, try anywhere with full keyword
     if (!amountTax) {
       amountTax = findAmountNearKeyword(/价\s*税\s*合\s*计/, 'any');
     }
@@ -639,6 +751,51 @@ function extractInvoiceInfo(textContent) {
       amountTax = Math.round((amountNoTax + taxAmount) * 100) / 100;
     }
 
+    // === Positional fallback: largest amount in amount region ===
+    // If keyword-based extraction didn't find amountTax, use positional heuristics.
+    // In the amount region of a VAT invoice, the largest ¥ amount is almost always
+    // the 价税合计 (tax-inclusive total). This is robust even when keywords are
+    // split by OCR into multiple words.
+    if (!amountTax && amountText) {
+      var regionAmounts = collectAmountWords(wordMap, imgW, imgH, 'amount');
+      if (regionAmounts.length > 0) {
+        // The largest amount in the amount region is most likely the 价税合计
+        var largestAmt = regionAmounts[0].value;
+        // Sanity check: if we already have amountNoTax, amountTax must be >= amountNoTax
+        if (amountNoTax > 0 && largestAmt < amountNoTax) {
+          // The largest found is actually the amountNoTax — no separate amountTax found
+          // Don't use positional fallback, let regex steps handle it
+        } else {
+          amountTax = largestAmt;
+          // If we don't have amountNoTax yet, the second-largest might be it
+          // (but only if there are multiple distinct amounts)
+          if (!amountNoTax && regionAmounts.length >= 2) {
+            // Find amounts that are significantly smaller than amountTax
+            var smallerAmts = regionAmounts.filter(function(a) {
+              return a.value < amountTax * 0.95; // at least 5% smaller
+            });
+            if (smallerAmts.length > 0) {
+              // The largest of the smaller amounts is likely amountNoTax
+              // (not taxAmount which is usually much smaller)
+              var noTaxCandidate = smallerAmts[0].value;
+              if (noTaxCandidate > (amountTax * 0.5)) {
+                // More than 50% of amountTax → this is amountNoTax, not taxAmount
+                amountNoTax = noTaxCandidate;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Derive missing values after positional fallback
+    if (amountTax > 0 && amountNoTax > 0 && !taxAmount) {
+      taxAmount = Math.round((amountTax - amountNoTax) * 100) / 100;
+    }
+    if (amountTax > 0 && taxAmount > 0 && !amountNoTax && taxAmount < amountTax) {
+      amountNoTax = Math.round((amountTax - taxAmount) * 100) / 100;
+    }
+
     // 合计金额 / 金额合计 (for non-VAT invoices)
     if (!amountTax && !amountNoTax) {
       var amtRegionVal = findFirstNum('合\\s*计\\s*金\\s*额', amountText || '');
@@ -657,26 +814,6 @@ function extractInvoiceInfo(textContent) {
 
     if (amountTax > 0 || amountNoTax > 0 || taxAmount > 0) {
       console.log('[OCR坐标] 金额区域提取:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount, taxRate: taxRate || '-' });
-    }
-  }
-
-  // === Step 0.5: Ticket-specific coordinate extraction ===
-  // Train/ride tickets have a completely different layout from VAT invoices.
-  // Use proximity matching (find amount near "票价"/"全价"/"优惠价" keywords)
-  // with 'any' region — this is more accurate than pure regex when multiple ¥ amounts exist.
-  if (isTicket && !amountTax && !amountNoTax && wordMap && imgW > 0 && imgH > 0) {
-    amountTax = findAmountNearKeyword(/票\s*价/, 'any');
-    if (amountTax > 0) amountNoTax = amountTax;
-    if (!amountTax) {
-      amountTax = findAmountNearKeyword(/全\s*价/, 'any');
-      if (amountTax > 0) amountNoTax = amountTax;
-    }
-    if (!amountTax) {
-      amountTax = findAmountNearKeyword(/优\s*惠\s*价/, 'any');
-      if (amountTax > 0) amountNoTax = amountTax;
-    }
-    if (amountTax > 0) {
-      console.log('[OCR坐标] 车票票价提取:', { amountTax: amountTax });
     }
   }
 
@@ -900,8 +1037,23 @@ function extractInvoiceInfo(textContent) {
   if (amountNoTax > 0 && amountTax === 0) {
     if (taxAmount > 0 && taxAmount < amountNoTax) {
       amountTax = Math.round((amountNoTax + taxAmount) * 100) / 100;
+    } else if (wordMap && imgW > 0 && imgH > 0) {
+      // Last-ditch positional: find any amount larger than amountNoTax in the image
+      // This catches cases where 价税合计 is outside the standard amount region
+      var allImgAmts = collectAmountWords(wordMap, imgW, imgH, null);
+      var largerAmts = allImgAmts.filter(function(a) { return a.value > amountNoTax + 0.01; });
+      if (largerAmts.length > 0) {
+        // The smallest amount that's larger than amountNoTax is most likely amountTax
+        largerAmts.sort(function(a, b) { return a.value - b.value; });
+        amountTax = largerAmts[0].value;
+        taxAmount = Math.round((amountTax - amountNoTax) * 100) / 100;
+        console.log('[OCR提取] 全图位置反推含税价:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount });
+      } else {
+        // No larger amount found — this is likely a non-VAT invoice
+        amountTax = amountNoTax;
+      }
     } else {
-      // No tax info — this is likely a non-VAT invoice, amountTax = amountNoTax is correct
+      // No coordinates — this is likely a non-VAT invoice, amountTax = amountNoTax is correct
       amountTax = amountNoTax;
     }
   }

@@ -193,8 +193,11 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
         reader.ReadBytes(&mut data)
             .map_err(|e| format!("读取第{}页字节失败: {}", i + 1, e))?;
 
-        reader.Close().ok();
+        // Explicitly release per-page COM objects
+        drop(reader);
         stream.Close().ok();
+        drop(stream);
+        drop(page);
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
         let data_url = format!("data:image/png;base64,{}", b64);
@@ -209,6 +212,13 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
 
         log::info!("Rendered page {} ({}x{}) @ {}dpi", i + 1, dest_w, dest_h, effective_dpi);
     }
+
+    // Explicitly release document-level COM objects before ComGuard drops.
+    // PdfDocument doesn't implement IClosable, but PdfPage does (already closed in loop).
+    // StorageFile doesn't implement IClosable either.
+    drop(doc);
+    drop(file);
+    // ComGuard (_com) drops here last, calling CoUninitialize()
 
     Ok(results)
 }
@@ -520,15 +530,11 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         .get()
         .map_err(|e| format!("OCR识别失败: {}", e))?;
 
-    // Explicitly close COM resources (best-effort)
-    stream.Close().ok();
-
-    // Extract flat text (backward compatible)
+    // --- Extract data from OCR result BEFORE releasing COM objects ---
     let flat_text = result.Text()
         .map_err(|e| format!("获取OCR文本失败: {}", e))?
         .to_string();
 
-    // Extract lines with word-level coordinates
     let mut ocr_lines: Vec<OcrLine> = Vec::new();
     let lines = result.Lines()
         .map_err(|e| format!("获取OCR行失败: {}", e))?;
@@ -557,6 +563,21 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
             ocr_lines.push(OcrLine { words: ocr_words });
         }
     }
+
+    // --- Explicitly release ALL WinRT COM objects in reverse creation order ---
+    // This ensures COM resources are freed BEFORE CoUninitialize (via ComGuard drop).
+    // Without explicit Close(), WinRT objects only get Release() on Drop, which
+    // decrements refcount but may not flush I/O or release OS handles.
+    // This is critical for clean process exit — leaked COM objects can prevent
+    // the thread from terminating, which blocks the process from exiting.
+    drop(result);
+    drop(engine);
+    bitmap.Close().ok();  // SoftwareBitmap implements IClosable
+    drop(bitmap);
+    drop(decoder);        // BitmapDecoder does NOT implement IClosable — just drop
+    stream.Close().ok();  // InMemoryRandomAccessStream implements IClosable
+    drop(stream);
+    // ComGuard (_com) drops here last, calling CoUninitialize()
 
     let ocr_result = OcrResult {
         text: flat_text,

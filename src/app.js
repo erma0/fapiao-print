@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.5.2 | isTauri:', isTauri);
+console.log('发票批量打印 v1.6.6 | isTauri:', isTauri);
 
 // =====================================================
 // Constants

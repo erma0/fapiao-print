@@ -16,6 +16,9 @@
   --radius: 10px; --radius-sm: 6px;
 }
 
+/* ===== Universal hidden class ===== */
+.hidden { display: none; }
+
 /* ===== Dark Theme ===== */
 html.dark {
   --bg: #1a1a2e; --surface: #16213e; --surface2: #1a1a2e;
