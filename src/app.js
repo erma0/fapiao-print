@@ -6,7 +6,7 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.6.6 | isTauri:', isTauri);
+console.log('发票批量打印 v1.7.1 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -16,11 +16,6 @@ var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Must match Rust RENDER_DPI — validated at startup via get_config
 var MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
 var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
-
-// CMap & font base URL — local first, CDN fallback
-// Set to local paths; if files not found, PDF.js will fall back gracefully
-var CMAP_BASE_URL = 'cmaps/';
-var STD_FONT_BASE_URL = 'standard_fonts/';
 
 // =====================================================
 // State
@@ -85,8 +80,30 @@ function toastDone(msg) { toast(msg, 2500); }
 function hideToast() { var e = document.getElementById('toast'); e.classList.remove('show'); clearTimeout(toastT); }
 function syncSlider(s, n) { document.getElementById(n).value = s.value; }
 function syncRange(n, s) { document.getElementById(s).value = n.value; }
-function showLoading(t) { document.getElementById('loadingText').textContent = t || '处理中...'; document.getElementById('loading').classList.remove('hidden'); }
-function hideLoading() { document.getElementById('loading').classList.add('hidden'); }
+function showLoading(t) { document.getElementById('loadingText').textContent = t || '处理中...'; document.getElementById('loadingProgress').classList.add('hidden'); document.getElementById('loadingDetail').classList.add('hidden'); document.getElementById('loading').classList.remove('hidden'); }
+function hideLoading() { document.getElementById('loading').classList.add('hidden'); document.getElementById('loadingProgress').classList.add('hidden'); document.getElementById('loadingDetail').classList.add('hidden'); }
+function updateLoadingProgress(phase, current, total) {
+  var pct = total > 0 ? Math.round(current / total * 100) : 0;
+  var bar = document.getElementById('loadingBar');
+  var prog = document.getElementById('loadingProgress');
+  var detail = document.getElementById('loadingDetail');
+  var text = document.getElementById('loadingText');
+  if (bar) bar.style.width = pct + '%';
+  if (prog) prog.classList.remove('hidden');
+  if (detail) {
+    if (phase === 'build') {
+      detail.textContent = current + ' / ' + total + ' 页';
+      if (text) text.textContent = '正在排版...';
+    } else if (phase === 'save') {
+      detail.textContent = '';
+      if (text) text.textContent = '正在写入PDF...';
+    } else {
+      detail.textContent = current + ' / ' + total;
+      if (text) text.textContent = '正在处理...';
+    }
+    if (detail.textContent) detail.classList.remove('hidden'); else detail.classList.add('hidden');
+  }
+}
 function fmtSize(b) { return b < 1024 ? b + 'B' : b < 1048576 ? (b / 1024).toFixed(1) + 'KB' : (b / 1048576).toFixed(1) + 'MB'; }
 function escHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -145,13 +162,6 @@ async function processFileDataList(fileDataList) {
   var completed = 0;
   var added = 0;
 
-  // Show progress bar
-  var progressEl = document.getElementById('importProgress');
-  if (progressEl) {
-    progressEl.style.display = 'flex';
-    updateImportProgress(0, total);
-  }
-
   // 1. Create placeholder entries immediately for instant visual feedback
   fileDataList.forEach(function(fd) {
     var ph = createFileObj({
@@ -176,7 +186,6 @@ async function processFileDataList(fileDataList) {
   var promises = fileDataList.map(function(fd) {
     return loadFileFromDataUrlFast(fd.name, fd.dataUrl, fd.size, fd.ext, fd.path).then(function(r) {
       completed++;
-      updateImportProgress(completed, total);
 
       // Find placeholder by key
       var phIdx = -1;
@@ -199,7 +208,6 @@ async function processFileDataList(fileDataList) {
       renderFileList(); updatePreview(); updatePrintBtn();
     }).catch(function(err) {
       completed++;
-      updateImportProgress(completed, total);
       console.error('Load file error:', fd.name, err);
 
       // Remove placeholder on error
@@ -211,19 +219,11 @@ async function processFileDataList(fileDataList) {
   });
 
   await Promise.all(promises);
-  if (progressEl) progressEl.style.display = 'none';
   // If no OCR queued (e.g. non-Tauri), dismiss toast now
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
     toastDone('已添加 ' + added + ' 张发票');
   }
-}
-
-function updateImportProgress(done, total) {
-  var bar = document.getElementById('importProgressBar');
-  var text = document.getElementById('importProgressText');
-  if (bar) bar.style.width = Math.round(done / total * 100) + '%';
-  if (text) text.textContent = done + '/' + total;
 }
 
 // Process an array of File objects (browser fallback) — instant placeholders
@@ -251,16 +251,9 @@ async function processFiles(files) {
   // Show "识别中" toast immediately with spinner
   toastLoading('已添加 ' + total + ' 张发票，识别中...');
 
-  var progressEl = document.getElementById('importProgress');
-  if (progressEl) {
-    progressEl.style.display = 'flex';
-    updateImportProgress(0, total);
-  }
-
   var promises = files.map(function(file) {
     return loadFileFast(file).then(function(r) {
       completed++;
-      updateImportProgress(completed, total);
 
       var phIdx = -1;
       for (var i = 0; i < S.files.length; i++) {
@@ -279,7 +272,6 @@ async function processFiles(files) {
       renderFileList(); updatePreview(); updatePrintBtn();
     }).catch(function(err) {
       completed++;
-      updateImportProgress(completed, total);
       console.error('Load file error:', file.name, err);
       for (var i = 0; i < S.files.length; i++) {
         if (S.files[i]._placeholderKey === file._phKey) { S.files.splice(i, 1); break; }
@@ -289,7 +281,6 @@ async function processFiles(files) {
   });
 
   await Promise.all(promises);
-  if (progressEl) progressEl.style.display = 'none';
   // If no OCR queued (e.g. non-Tauri), dismiss toast now
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
@@ -297,9 +288,8 @@ async function processFiles(files) {
   }
 }
 
-// NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl() removed in v1.4.1
-// Replaced by Fast variants (loadFileFast, loadFileFromDataUrlFast, loadPdfFromDataUrlFast)
-// which show preview first and run OCR in background for better UX.
+// NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl(), loadPdfFromDataUrlFast() removed.
+// PDF.js removed in v1.7.1 — all PDF rendering via WinRT native, all text extraction via PP-OCRv5.
 
 // =====================================================
 // Fast loading functions — show preview first, OCR in background
@@ -353,44 +343,12 @@ function applyOcrAsync(fileObj, dataUrl) {
 }
 
 /**
- * Background OCR for PDF pages + PDF.js text extraction fallback.
+ * Background OCR for PDF pages.
  * Uses OCR queue for throttling. Updates UI incrementally.
  */
-function backgroundOcrPdf(results, dataUrl) {
+function backgroundOcrPdf(results) {
   if (window.__TAURI_CLOSING__) return;
-  if (!isTauri || !invoke) {
-    // Non-Tauri: try PDF.js text extraction as the only source
-    if (dataUrl) {
-      tryExtractPdfInfo(dataUrl, results.length).then(function(pdfInfoList) {
-        var updated = false;
-        for (var k = 0; k < pdfInfoList.length && k < results.length; k++) {
-          var pi = pdfInfoList[k];
-          var piEffAmt = pi.amountTax > 0 ? pi.amountTax : pi.amountNoTax;
-          if (piEffAmt > 0 && results[k].amount <= 0) {
-            results[k].amount = piEffAmt;
-            results[k].amountTax = pi.amountTax;
-            results[k].amountNoTax = pi.amountNoTax;
-            results[k].taxAmount = pi.taxAmount || 0;
-            updated = true;
-          }
-          // Set seller name (for tickets, this is the ticket type label)
-          if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
-          // Credit code only for non-tickets
-          if (!pi.isTicket) {
-            if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
-          }
-          if (pi.isTicket) { results[k]._isTicket = true; }
-          // Also set _ocrText from PDF.js extraction
-          if (pi._ocrText && !results[k]._ocrText) {
-            results[k]._ocrText = pi._ocrText;
-            updated = true;
-          }
-        }
-        if (updated) { renderFileList(); updateAmountSummary(); }
-      }).catch(function() {});
-    }
-    return;
-  }
+  if (!isTauri || !invoke) return;
 
   // Tauri: use throttled OCR queue — always queue ALL pages so _ocrText is populated
   for (var p = 0; p < results.length; p++) {
@@ -406,43 +364,6 @@ function backgroundOcrPdf(results, dataUrl) {
     })(p);
   }
   _drainOcrQueue();
-
-  // Always try PDF.js text extraction for seller info — OCR on rendered images
-  // often misses the seller section, but PDF.js text extraction preserves layout better
-  if (dataUrl) {
-    tryExtractPdfInfo(dataUrl, results.length).then(function(pdfInfoList) {
-      var updated = false;
-      for (var k = 0; k < pdfInfoList.length && k < results.length; k++) {
-        var pi = pdfInfoList[k];
-        var piEffAmt = pi.amountTax > 0 ? pi.amountTax : pi.amountNoTax;
-        if (piEffAmt > 0 && results[k].amount <= 0) {
-          results[k].amount = piEffAmt;
-          results[k].amountTax = pi.amountTax;
-          results[k].amountNoTax = pi.amountNoTax;
-          results[k].taxAmount = pi.taxAmount || 0;
-          updated = true;
-        }
-        // Also fill taxAmount if main amounts already set but taxAmount is missing
-        if (results[k].amount > 0 && !results[k].taxAmount && pi.taxAmount) {
-          results[k].taxAmount = pi.taxAmount;
-          updated = true;
-        }
-        // Set seller name (for tickets, this is the ticket type label)
-        if (pi.sellerName && !results[k].sellerName) { results[k].sellerName = pi.sellerName; updated = true; }
-        // Credit code only for non-tickets
-        if (!pi.isTicket && !results[k]._isTicket) {
-          if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
-        }
-        if (pi.isTicket) { results[k]._isTicket = true; }
-        // Also set _ocrText from PDF.js extraction so it's available for display
-        if (pi._ocrText && !results[k]._ocrText) {
-          results[k]._ocrText = pi._ocrText;
-          updated = true;
-        }
-      }
-      if (updated) { renderFileList(); updateAmountSummary(); }
-    }).catch(function(e) { console.warn('[信息提取] PDF.js提取失败:', e); });
-  }
 }
 
 /**
@@ -492,18 +413,22 @@ function loadFileFromDataUrlFast(name, dataUrl, size, ext, filePath) {
               }));
             }
             resolve(results.length === 1 ? results[0] : results);
-            // Background: OCR + PDF.js text extraction
-            backgroundOcrPdf(results, dataUrl);
+            // Background: OCR
+            backgroundOcrPdf(results);
             return;
           }
-          loadPdfFromDataUrlFast(name, dataUrl, size, id, resolve);
+          toast('PDF 渲染结果为空: ' + name);
+          resolve(null);
         }).catch(function(err) {
-          console.error('[PDF] WinRT rendering failed, falling back to PDF.js:', err);
-          loadPdfFromDataUrlFast(name, dataUrl, size, id, resolve);
+          console.error('[PDF] WinRT rendering failed:', err);
+          toast('PDF 渲染失败: ' + name);
+          resolve(null);
         });
         return;
       }
-      loadPdfFromDataUrlFast(name, dataUrl, size, id, resolve);
+      // Non-Tauri: PDF files require native rendering
+      toast('PDF 格式请使用桌面版打开');
+      resolve(null);
     }
     else {
       var img = new Image(); img.src = dataUrl;
@@ -530,48 +455,9 @@ function loadFileFast(file) {
     var id = 'f' + Date.now() + Math.random().toString(36).slice(2);
 
     if (ext === 'pdf') {
-      if (!window.pdfjsLib) {
-        toast('PDF.js 尚未加载，请稍后重试');
-        resolve(null); return;
-      }
-      var url = URL.createObjectURL(file);
-      pdfjsLib.getDocument({ url: url, cMapUrl: CMAP_BASE_URL, cMapPacked: true, standardFontDataUrl: STD_FONT_BASE_URL, disableFontFace: true, useSystemFonts: false }).promise.then(async function(pdf) {
-        var results = [];
-        for (var p = 1; p <= pdf.numPages; p++) {
-          var page = await pdf.getPage(p);
-          var vp1 = page.getViewport({ scale: 1.0 });
-          var longestSide = Math.max(vp1.width, vp1.height);
-          var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
-          targetDpi = Math.min(targetDpi, 1200);
-          var vp = page.getViewport({ scale: targetDpi / 72 });
-          var canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-          var previewUrl = canvas.toDataURL('image/png');
-          var img = new Image(); img.src = previewUrl;
-          await new Promise(function(r) { img.onload = r; });
-          var textContent = await page.getTextContent();
-          var info = extractInvoiceInfo(textContent);
-          var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
-          results.push(createFileObj({
-            id: id + '_p' + p,
-            name: pdf.numPages > 1 ? file.name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : file.name,
-            size: file.size, type: 'pdf', previewUrl: previewUrl,
-            img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax, taxAmount: info.taxAmount || 0,
-            amount: effAmt, renderDpi: targetDpi,
-            sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
-            _ocrText: info._ocrText, _isTicket: info.isTicket || false
-          }));
-        }
-        URL.revokeObjectURL(url);
-        resolve(results.length === 1 ? results[0] : results);
-        // Background OCR for pages missing info
-        backgroundOcrPdf(results, null);
-      }).catch(function(err) {
-        console.error('PDF load error:', err);
-        toast('PDF 加载失败: ' + file.name);
-        resolve(null);
-      });
+      // Browser mode: PDF files require native rendering, not available here
+      toast('PDF 格式请使用桌面版打开');
+      resolve(null);
     }
     else if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif'].indexOf(ext) >= 0) {
       var reader = new FileReader();
@@ -596,53 +482,6 @@ function loadFileFast(file) {
       toast('不支持的格式: ' + ext);
       resolve(null);
     }
-  });
-}
-
-/**
- * Fast PDF.js fallback — render + text extract, then resolve; OCR in background
- */
-function loadPdfFromDataUrlFast(name, dataUrl, size, id, resolve) {
-  if (!window.pdfjsLib) {
-    toast('PDF.js 尚未加载，请稍后重试');
-    resolve(null); return;
-  }
-  var raw = dataUrlToUint8Array(dataUrl);
-  pdfjsLib.getDocument({ data: raw, cMapUrl: CMAP_BASE_URL, cMapPacked: true, standardFontDataUrl: STD_FONT_BASE_URL, disableFontFace: true, useSystemFonts: false }).promise.then(async function(pdf) {
-    var results = [];
-    for (var p = 1; p <= pdf.numPages; p++) {
-      var page = await pdf.getPage(p);
-      var vp1 = page.getViewport({ scale: 1.0 });
-      var longestSide = Math.max(vp1.width, vp1.height);
-      var targetDpi = Math.max(PDF_RENDER_DPI, Math.ceil(MIN_RENDER_PX / longestSide * 72));
-      targetDpi = Math.min(targetDpi, 1200);
-      var vp = page.getViewport({ scale: targetDpi / 72 });
-      var canvas = document.createElement('canvas');
-      canvas.width = vp.width; canvas.height = vp.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-      var previewUrl = canvas.toDataURL('image/png');
-      var img = new Image(); img.src = previewUrl;
-      await new Promise(function(r) { img.onload = r; });
-      var textContent = await page.getTextContent();
-      var info = extractInvoiceInfo(textContent);
-      var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
-      results.push(createFileObj({
-        id: id + '_p' + p,
-        name: pdf.numPages > 1 ? name.replace(/\.pdf$/i, '') + '_第' + p + '页.pdf' : name,
-        size: size, type: 'pdf', previewUrl: previewUrl,
-        img: img, amountTax: info.amountTax, amountNoTax: info.amountNoTax, taxAmount: info.taxAmount || 0,
-        amount: effAmt, renderDpi: targetDpi,
-        sellerName: info.sellerName, sellerCreditCode: info.sellerCreditCode,
-        _ocrText: info._ocrText, _isTicket: info.isTicket || false
-      }));
-    }
-    resolve(results.length === 1 ? results[0] : results);
-    // Background OCR for pages missing info
-    backgroundOcrPdf(results, dataUrl);
-  }).catch(function(err) {
-    console.error('PDF load error:', err);
-    toast('PDF 加载失败: ' + name);
-    resolve(null);
   });
 }
 
@@ -1262,33 +1101,6 @@ window._tauriFileDrop = function(paths) {
     }
   })();
 };
-
-// =====================================================
-// Load PDF.js — local first, CDN fallback
-// =====================================================
-(function() {
-  var s = document.createElement('script');
-  s.onerror = function() {
-    console.warn('Local PDF.js not found, trying CDN...');
-    var s2 = document.createElement('script');
-    s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    s2.onload = function() {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      // CDN fallback also means CMap/standard_fonts must come from CDN
-      CMAP_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/';
-      STD_FONT_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/';
-      console.log('PDF.js loaded from CDN');
-    };
-    s2.onerror = function() { console.error('PDF.js failed to load'); };
-    document.head.appendChild(s2);
-  };
-  s.onload = function() {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
-    console.log('PDF.js loaded from local');
-  };
-  s.src = 'pdf.min.js';
-  document.head.appendChild(s);
-})();
 
 // Printers are loaded on-demand when user opens the print tab (see switchTab)
 

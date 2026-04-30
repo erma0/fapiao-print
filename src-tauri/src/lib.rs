@@ -1,6 +1,6 @@
-use tauri::command;
+use tauri::{command, Emitter};
 
-// v1.5.0: upgraded image 0.24→0.25 (webp), printpdf 0.7→0.9 (new API)
+// v1.7.0: ocr-rs (PP-OCRv5 + MNN) replaces WinRT OCR, coordinate-first extraction
 
 mod pdf_engine;
 use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
@@ -112,8 +112,10 @@ fn trim_image(data_url: String) -> Result<String, String> {
 
 /// Generate PDF from layout request (files + pages + settings).
 /// Replaces JS `renderPageToCanvas` + `generate_pdf_from_pages`.
+/// Emits `pdf-progress` events to the frontend with { phase, current, total }.
 #[command]
 fn generate_pdf_from_layout(
+    app: tauri::AppHandle,
     request: LayoutRenderRequest,
     output_path: String,
     direct_print: Option<bool>,
@@ -126,7 +128,17 @@ fn generate_pdf_from_layout(
     }
 
     let output = std::path::Path::new(&output_path);
-    pdf_engine::generate_pdf_from_layout(&request, output)
+    let app_handle = app.clone();
+
+    let progress_cb: pdf_engine::ProgressFn = Box::new(move |phase, current, total| {
+        let _ = app_handle.emit("pdf-progress", serde_json::json!({
+            "phase": phase,
+            "current": current,
+            "total": total,
+        }));
+    });
+
+    pdf_engine::generate_pdf_from_layout(&request, output, Some(progress_cb))
         .map_err(|e| format!("PDF生成失败: {}", e))?;
 
     let is_direct = direct_print.unwrap_or(false);

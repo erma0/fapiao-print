@@ -440,7 +440,7 @@ pub(crate) fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage,
 }
 
 // =====================================================
-// OCR — Windows.Media.Ocr (lightweight, built-in, Chinese support)
+// OCR — PaddleOCR via ocr-rs (MNN inference, high-accuracy Chinese OCR)
 // =====================================================
 
 /// A single OCR word with its bounding rectangle
@@ -454,11 +454,26 @@ pub struct OcrWord {
     pub h: f64,
 }
 
-/// An OCR line containing words
+/// A 2D point for polygon coordinates
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// An OCR line containing words, with line-level bounding polygon and confidence
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrLine {
     pub words: Vec<OcrWord>,
+    /// Four corner points of the text line polygon (from detection model).
+    /// Top-left, top-right, bottom-right, bottom-left (roughly).
+    /// Used for more accurate coordinate analysis in frontend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points: Option<Vec<OcrPoint>>,
+    /// OCR confidence for this line (0.0 - 1.0)
+    pub confidence: f32,
 }
 
 /// Structured OCR result with coordinates
@@ -474,18 +489,107 @@ pub struct OcrResult {
     pub img_h: u32,
 }
 
+/// Lazy-initialized global OCR engine (PaddleOCR + MNN)
+/// Initialized on first use, persists for the app lifetime.
+use std::sync::Mutex;
+static OCR_ENGINE: Mutex<Option<ocr_rs::OcrEngine>> = Mutex::new(None);
+
+/// Get or create the OCR engine.
+/// Model files are expected alongside the executable:
+///   - PP-OCRv5_mobile_det.mnn  (detection model)
+///   - PP-OCRv5_mobile_rec.mnn  (recognition model)
+///   - ppocr_keys_v5.txt        (character set, 18383 chars)
+fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrEngine>>, String> {
+    let mut lock = OCR_ENGINE.lock().map_err(|e| format!("OCR引擎锁失败: {}", e))?;
+
+    if lock.is_none() {
+        let exe_dir = std::env::current_exe()
+            .map_err(|e| format!("获取exe路径失败: {}", e))?
+            .parent()
+            .ok_or("无法获取exe目录")?
+            .to_path_buf();
+
+        // Tauri 2.x bundle.resources preserves directory structure:
+        // "models/X.mnn" → <exe_dir>/models/X.mnn
+        // Also try <exe_dir>/X.mnn as fallback (green portable deployment)
+        let det_path = if exe_dir.join("models").join("PP-OCRv5_mobile_det.mnn").exists() {
+            exe_dir.join("models").join("PP-OCRv5_mobile_det.mnn")
+        } else {
+            exe_dir.join("PP-OCRv5_mobile_det.mnn")
+        };
+        let rec_path = if exe_dir.join("models").join("PP-OCRv5_mobile_rec.mnn").exists() {
+            exe_dir.join("models").join("PP-OCRv5_mobile_rec.mnn")
+        } else {
+            exe_dir.join("PP-OCRv5_mobile_rec.mnn")
+        };
+        let keys_path = if exe_dir.join("models").join("ppocr_keys_v5.txt").exists() {
+            exe_dir.join("models").join("ppocr_keys_v5.txt")
+        } else {
+            exe_dir.join("ppocr_keys_v5.txt")
+        };
+
+        // Validate model files exist
+        if !det_path.exists() {
+            return Err(format!(
+                "OCR检测模型不存在: {}（请确保模型文件在exe同级目录或models子目录）",
+                det_path.display()
+            ));
+        }
+        if !rec_path.exists() {
+            return Err(format!(
+                "OCR识别模型不存在: {}（请确保模型文件在exe同级目录或models子目录）",
+                rec_path.display()
+            ));
+        }
+        if !keys_path.exists() {
+            return Err(format!(
+                "OCR字符集文件不存在: {}（请确保模型文件在exe同级目录或models子目录）",
+                keys_path.display()
+            ));
+        }
+
+        log::info!(
+            "Loading PaddleOCR models from: {}",
+            exe_dir.display()
+        );
+
+        let config = ocr_rs::OcrEngineConfig::new()
+            .with_parallel(false) // CRITICAL: disable rayon — MNN InferenceEngine is not truly
+                                  // thread-safe (unsafe impl Sync). Rayon parallelism with a
+                                  // single MNN session causes thread contention and actually
+                                  // *slows down* recognition. Use batch inference instead,
+                                  // which MNN handles internally with its own multi-threading.
+            .with_threads(4)      // MNN internal thread count
+            .with_min_result_confidence(0.3) // Lower threshold — invoice text can be faint,
+                                              // better to capture more and filter in frontend
+            .with_rec_options(
+                ocr_rs::RecOptions::new()
+                    .with_batch_size(16) // Larger batch = fewer MNN calls = better throughput
+                    .with_batch(true)    // Enable batch processing
+            );
+
+        let engine = ocr_rs::OcrEngine::new(
+            det_path.to_str().unwrap(),
+            rec_path.to_str().unwrap(),
+            keys_path.to_str().unwrap(),
+            Some(config),
+        )
+        .map_err(|e| format!("创建PaddleOCR引擎失败: {:?}", e))?;
+
+        log::info!("PaddleOCR engine initialized successfully");
+        *lock = Some(engine);
+    }
+
+    Ok(lock)
+}
+
 /// OCR an image from base64 data URL, return structured result with coordinates
-#[cfg(target_os = "windows")]
 pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
     }
-    use windows::Media::Ocr::OcrEngine;
-    use windows::Graphics::Imaging::BitmapDecoder;
-    use windows::Storage::Streams::InMemoryRandomAccessStream;
-    use base64::Engine;
 
-    let _com = ComGuard::init();
+    use base64::Engine;
 
     // Decode base64 data
     let base64_data = if data_url.contains(',') {
@@ -502,134 +606,195 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<String, String> {
         return Err("图片数据为空".to_string());
     }
 
-    // Create stream from bytes
-    let stream = InMemoryRandomAccessStream::new()
-        .map_err(|e| format!("创建流失败: {}", e))?;
+    // Decode image using the `image` crate (already a dependency)
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("图片解码失败: {}", e))?;
 
-    // Check shutdown before starting OCR
+    let img_w = img.width();
+    let img_h = img.height();
+
+    // Get OCR engine (lazy init on first call)
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭，OCR已中止".to_string());
     }
+    let lock = get_ocr_engine()?;
+    let engine = lock.as_ref().ok_or("OCR引擎未初始化")?;
 
-    let writer = windows::Storage::Streams::DataWriter::CreateDataWriter(&stream)
-        .map_err(|e| format!("创建DataWriter失败: {}", e))?;
-
-    writer.WriteBytes(&bytes)
-        .map_err(|e| format!("写入数据失败: {}", e))?;
-
-    writer.StoreAsync()
-        .map_err(|e| format!("创建Store操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("存储数据失败: {}", e))?;
-
-    writer.FlushAsync()
-        .map_err(|e| format!("创建Flush操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("刷新数据失败: {}", e))?;
-
-    writer.Close().ok();
-
-    stream.Seek(0)
-        .map_err(|e| format!("Seek失败: {}", e))?;
-
-    // Decode bitmap from stream
-    let decoder = BitmapDecoder::CreateAsync(&stream)
-        .map_err(|e| format!("创建解码操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("解码图片失败: {}", e))?;
-
-    // Get SoftwareBitmap (no-arg version in windows 0.58)
-    let bitmap = decoder.GetSoftwareBitmapAsync()
-        .map_err(|e| format!("创建位图操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("获取位图失败: {}", e))?;
-
-    // Get image pixel dimensions for coordinate normalization
-    let img_w = bitmap.PixelWidth().map_err(|e| format!("获取宽度失败: {}", e))?;
-    let img_h = bitmap.PixelHeight().map_err(|e| format!("获取高度失败: {}", e))?;
-
-    // Create OCR engine with user profile languages (includes Chinese on Chinese Windows)
+    // Run OCR recognition
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭，OCR已中止".to_string());
     }
-    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
-        .map_err(|e| format!("创建OCR引擎失败: {}（请确保系统已安装中文语言包）", e))?;
+    let results = engine.recognize(&img)
+        .map_err(|e| format!("PaddleOCR识别失败: {:?}", e))?;
 
-    // Run OCR
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭，OCR已中止".to_string());
-    }
-    let result = engine.RecognizeAsync(&bitmap)
-        .map_err(|e| format!("创建OCR识别操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("OCR识别失败: {}", e))?;
-
-    // --- Extract data from OCR result BEFORE releasing COM objects ---
-    let flat_text = result.Text()
-        .map_err(|e| format!("获取OCR文本失败: {}", e))?
-        .to_string();
-
+    // Collect data from results before releasing the engine lock.
+    // PaddleOCR returns line-level results; we convert to our word-level format.
     let mut ocr_lines: Vec<OcrLine> = Vec::new();
-    let lines = result.Lines()
-        .map_err(|e| format!("获取OCR行失败: {}", e))?;
+    let mut flat_text_parts: Vec<String> = Vec::new();
 
-    for line in lines {
-        let mut ocr_words: Vec<OcrWord> = Vec::new();
-        let words = line.Words()
-            .map_err(|e| format!("获取OCR词失败: {}", e))?;
+    for result in &results {
+        let line_text = result.text.trim().to_string();
+        if line_text.is_empty() {
+            continue;
+        }
+        flat_text_parts.push(line_text.clone());
 
-        for word in words {
-            let rect = word.BoundingRect()
-                .map_err(|e| format!("获取词边界失败: {}", e))?;
-            let text = word.Text()
-                .map_err(|e| format!("获取词文本失败: {}", e))?
-                .to_string();
-            ocr_words.push(OcrWord {
-                text,
-                x: rect.X as f64,
-                y: rect.Y as f64,
-                w: rect.Width as f64,
-                h: rect.Height as f64,
+        let bbox = &result.bbox;
+        let rect = bbox.rect;
+        let bx = rect.left() as f64;
+        let by = rect.top() as f64;
+        let bw = (rect.right() - rect.left()) as f64;
+        let bh = (rect.bottom() - rect.top()) as f64;
+
+        let line_confidence = result.confidence;
+
+        // Extract polygon points from detection model (4 corner points)
+        let line_points = bbox.points.as_ref().map(|pts| {
+            pts.iter().map(|p| OcrPoint { x: p.x as f64, y: p.y as f64 }).collect()
+        });
+
+        let tokens = split_line_to_words(&line_text);
+
+        if tokens.is_empty() {
+            ocr_lines.push(OcrLine {
+                words: vec![OcrWord {
+                    text: line_text,
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                }],
+                points: line_points,
+                confidence: line_confidence,
             });
+            continue;
         }
 
-        if !ocr_words.is_empty() {
-            ocr_lines.push(OcrLine { words: ocr_words });
+        // Character-width-weighted distribution: CJK chars are ~2x wider than Latin/digits.
+        // This produces much more accurate word positions than equal-width-per-char.
+        let total_weight: f64 = tokens.iter().map(|t| token_width_weight(t)).sum();
+        let mut words: Vec<OcrWord> = Vec::new();
+        let mut x_offset = 0.0f64;
+
+        for token in &tokens {
+            let token_w = if total_weight > 0.0 {
+                bw * token_width_weight(token) / total_weight
+            } else {
+                bw
+            };
+
+            words.push(OcrWord {
+                text: token.clone(),
+                x: bx + x_offset,
+                y: by,
+                w: token_w,
+                h: bh,
+            });
+            x_offset += token_w;
         }
+
+        ocr_lines.push(OcrLine { words, points: line_points, confidence: line_confidence });
     }
 
-    // --- Explicitly release ALL WinRT COM objects in reverse creation order ---
-    // This ensures COM resources are freed BEFORE CoUninitialize (via ComGuard drop).
-    // Without explicit Close(), WinRT objects only get Release() on Drop, which
-    // decrements refcount but may not flush I/O or release OS handles.
-    // This is critical for clean process exit — leaked COM objects can prevent
-    // the thread from terminating, which blocks the process from exiting.
-    drop(result);
-    drop(engine);
-    bitmap.Close().ok();  // SoftwareBitmap implements IClosable
-    drop(bitmap);
-    drop(decoder);        // BitmapDecoder does NOT implement IClosable — just drop
-    stream.Close().ok();  // InMemoryRandomAccessStream implements IClosable
-    drop(stream);
-    // ComGuard (_com) drops here last, calling CoUninitialize()
+    // Release the engine lock
+    drop(lock);
 
+    let flat_text = flat_text_parts.join("\n");
     let ocr_result = OcrResult {
         text: flat_text,
         lines: ocr_lines,
-        img_w: img_w as u32,
-        img_h: img_h as u32,
+        img_w,
+        img_h,
     };
 
-    log::info!("OCR recognized {} chars, {} lines", ocr_result.text.len(), ocr_result.lines.len());
+    log::info!(
+        "OCR recognized {} chars, {} lines",
+        ocr_result.text.len(),
+        ocr_result.lines.len()
+    );
 
     // Return as JSON string
     serde_json::to_string(&ocr_result)
         .map_err(|e| format!("OCR结果序列化失败: {}", e))
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn ocr_image_from_data(_data_url: &str) -> Result<String, String> {
-    Err("OCR仅支持Windows系统".to_string())
+/// Split a line of text into word tokens for coordinate mapping.
+/// - CJK characters are kept as individual tokens (each character = one word)
+/// - Non-CJK runs (Latin, digits, symbols) are kept as single tokens
+/// - Spaces are included as part of adjacent tokens (not separate words)
+fn split_line_to_words(text: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current_non_cjk = String::new();
+
+    for ch in text.chars() {
+        let is_cjk = is_cjk_char(ch);
+        if is_cjk {
+            // Flush accumulated non-CJK token
+            if !current_non_cjk.is_empty() {
+                tokens.push(current_non_cjk.clone());
+                current_non_cjk.clear();
+            }
+            // Each CJK character is its own token
+            tokens.push(ch.to_string());
+        } else {
+            // Accumulate non-CJK characters (Latin, digits, symbols, spaces)
+            current_non_cjk.push(ch);
+        }
+    }
+
+    // Flush remaining non-CJK
+    if !current_non_cjk.is_empty() {
+        tokens.push(current_non_cjk);
+    }
+
+    // Filter out pure-whitespace tokens
+    tokens.retain(|t| !t.trim().is_empty());
+    tokens
+}
+
+/// Compute visual width weight for a token.
+/// CJK characters are approximately 2x wider than Latin/digits in most fonts.
+/// Fullwidth forms (FF00-FFEF) are also 2x.
+/// This produces more accurate x/w estimates than equal-width-per-character.
+fn token_width_weight(token: &str) -> f64 {
+    token.chars().map(|ch| {
+        let cp = ch as u32;
+        if (0x4E00..=0x9FFF).contains(&cp)       // CJK Unified Ideographs
+            || (0x3400..=0x4DBF).contains(&cp)    // CJK Extension A
+            || (0xF900..=0xFAFF).contains(&cp)    // CJK Compatibility
+            || (0x3000..=0x303F).contains(&cp)    // CJK Symbols and Punctuation
+            || (0xFF00..=0xFFEF).contains(&cp)    // Fullwidth forms
+            || (0x3040..=0x309F).contains(&cp)    // Hiragana
+            || (0x30A0..=0x30FF).contains(&cp)    // Katakana
+            || cp >= 0x20000                       // CJK Extension B+
+        {
+            2.0
+        } else {
+            1.0
+        }
+    }).sum()
+}
+
+/// Check if a character is CJK (Chinese, Japanese, Korean)
+fn is_cjk_char(ch: char) -> bool {
+    let cp = ch as u32;
+    // CJK Unified Ideographs: 4E00-9FFF
+    // CJK Unified Ideographs Extension A: 3400-4DBF
+    // CJK Compatibility Ideographs: F900-FAFF
+    // CJK Unified Ideographs Extension B-F: 20000-2FA1F
+    // Fullwidth forms: FF00-FFEF
+    // CJK Symbols and Punctuation: 3000-303F
+    // Hiragana: 3040-309F, Katakana: 30A0-30FF
+    matches!(cp,
+        0x4E00..=0x9FFF |
+        0x3400..=0x4DBF |
+        0xF900..=0xFAFF |
+        0x20000..=0x2FA1F |
+        0xFF00..=0xFFEF |
+        0x3000..=0x303F |
+        0x3040..=0x309F |
+        0x30A0..=0x30FF
+    )
 }
 
 // =====================================================
@@ -1106,16 +1271,23 @@ fn build_page_ops(
     ops
 }
 
+/// Progress callback type: phase name + current (1-based) + total
+pub type ProgressFn = Box<dyn Fn(&str, u32, u32) + Send>;
+
 /// Generate PDF from layout request (files + pages + settings).
 /// This replaces JS `renderPageToCanvas` + `generate_pdf_from_pages`.
+/// `on_progress` is called with (phase, current, total) to report progress.
+/// Phases: "decode" (image decoding), "build" (page composition), "save" (PDF writing).
 pub fn generate_pdf_from_layout(
     request: &LayoutRenderRequest,
     output_path: &std::path::Path,
+    on_progress: Option<ProgressFn>,
 ) -> Result<(), String> {
     if request.pages.is_empty() {
         return Err("没有页面数据".to_string());
     }
 
+    let total_pages = request.pages.len() as u32;
     let (slot_positions, pw, ph) = calculate_layout_mm(&request.settings);
 
     // Create PDF document (new API: no page dimensions at creation time)
@@ -1123,12 +1295,19 @@ pub fn generate_pdf_from_layout(
 
     // Step 1: Decode all unique images (base64 → DynamicImage), apply trim + color mode.
     // Rotation is per-slot and deferred to build_page_ops for correct (file, rotation) caching.
+    let total_files = request.files.len() as u32;
+    if let Some(ref cb) = &on_progress {
+        cb("decode", 0, total_files);
+    }
     let decoded = decode_images(&request.files, &request.settings);
+    if let Some(ref cb) = &on_progress {
+        cb("decode", total_files, total_files);
+    }
 
     // Step 2: Build pages, caching XObjects by (file_index, rotation) to avoid redundant work.
     let mut xobj_cache: std::collections::HashMap<(usize, i32), CachedXobj> = std::collections::HashMap::new();
 
-    for page_spec in &request.pages {
+    for (i, page_spec) in request.pages.iter().enumerate() {
         // Check shutdown flag — abort PDF generation if app is closing
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
             return Err("应用正在关闭，PDF生成已中止".to_string());
@@ -1148,6 +1327,16 @@ pub fn generate_pdf_from_layout(
             ops,
         );
         doc.pages.push(page);
+
+        // Report progress (1-based page number)
+        if let Some(ref cb) = on_progress {
+            cb("build", (i + 1) as u32, total_pages);
+        }
+    }
+
+    // Step 3: Save PDF — can be slow for large documents
+    if let Some(ref cb) = on_progress {
+        cb("save", 0, 1);
     }
 
     // Save PDF — custom options for print quality
@@ -1177,6 +1366,10 @@ pub fn generate_pdf_from_layout(
 
     std::fs::write(output_path, &pdf_bytes)
         .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    if let Some(ref cb) = on_progress {
+        cb("save", 1, 1);
+    }
 
     Ok(())
 }

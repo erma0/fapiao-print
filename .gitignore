@@ -4,6 +4,9 @@ node_modules/
 # Build output
 src-tauri/target/
 
+# MNN prebuilt SDK (auto-downloaded by ocr-rs build.rs)
+mnn-dev-windows-x86_64.zip
+
 # Tauri generated
 src-tauri/gen/
 

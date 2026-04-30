@@ -8,14 +8,8 @@
 </head>
 <body>
 
-<div class="loading hidden" id="loading"><div class="spinner"></div><span id="loadingText">处理中...</span></div>
+<div class="loading hidden" id="loading"><div class="spinner"></div><div class="loading-body"><span id="loadingText">处理中...</span><div class="loading-progress hidden" id="loadingProgress"><div class="loading-bar" id="loadingBar"></div></div><span class="loading-detail hidden" id="loadingDetail"></span></div></div>
 
-<!-- Import progress bar (non-blocking) -->
-<div id="importProgress" style="display:none;position:fixed;top:0;left:0;right:0;z-index:250;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow-sm);align-items:center;gap:10px;font-size:13px;color:var(--text-secondary)">
-  <span style="white-space:nowrap">📥 载入中</span>
-  <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden"><div id="importProgressBar" style="height:100%;width:0%;background:var(--accent);border-radius:2px;transition:width 0.15s ease"></div></div>
-  <span id="importProgressText" style="font-size:12px;color:var(--text-muted);white-space:nowrap">0/0</span>
-</div>
 <div class="toast" id="toast"></div>
 
 <!-- File input — browser fallback only -->
@@ -245,7 +239,7 @@
       <div id="stPages">0 页</div>
       <div id="stLayout">1×1</div>
       <div id="stPaper">A4</div>
-      <div style="margin-left:auto">v1.6.7</div>
+      <div style="margin-left:auto">v1.7.0</div>
     </div>
   </main>
 </div>

@@ -1,6 +1,6 @@
 [package]
 name = "fapiao-print"
-version = "1.6.7"
+version = "1.7.1"
 description = "电子发票批量打印工具"
 authors = ["fapiao-print"]
 license = "MIT"
@@ -28,11 +28,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 printpdf = { version = "0.9", features = ["images"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rayon = "1.10"
+ocr-rs = "2.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_System_Com",
-    "Win32_System_Threading",
     "Win32_Foundation",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -40,8 +40,6 @@ windows = { version = "0.58", features = [
     "Data_Pdf",
     "Storage",
     "Storage_Streams",
-    "Graphics_Imaging",
-    "Media_Ocr",
     "Foundation",
     "Foundation_Collections",
 ] }

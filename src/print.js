@@ -73,6 +73,38 @@ function getEffectiveRotation(fileObj, slotIdx, settings, layout) {
 }
 
 /**
+ * Listen for PDF generation progress events from Rust backend.
+ * Uses Tauri 2.x event system via invoke('plugin:event|listen').
+ * Returns an unlisten function.
+ */
+async function listenPdfProgress() {
+  if (!isTauri || !invoke) return null;
+  try {
+    // Tauri 2.x: transformCallback registers a JS callback and returns an IPC callback ID
+    var callbackId = window.__TAURI_INTERNALS__.transformCallback(function(evt) {
+      var data = evt.payload;
+      if (data && data.current !== undefined && data.total !== undefined) {
+        updateLoadingProgress(data.phase || '', data.current, data.total);
+      }
+    });
+
+    var eventId = await invoke('plugin:event|listen', {
+      event: 'pdf-progress',
+      target: { kind: 'Any' },
+      handler: callbackId
+    });
+
+    // Return unlisten function
+    return function() {
+      try { invoke('plugin:event|unlisten', { event: 'pdf-progress', eventId: eventId }); } catch(e) {}
+    };
+  } catch(e) {
+    console.warn('listen pdf-progress failed:', e);
+    return null;
+  }
+}
+
+/**
  * Print invoices — Rust does layout + PDF generation.
  */
 async function doPrint() {
@@ -80,6 +112,7 @@ async function doPrint() {
   if (!files.length) { toast('请先添加发票！'); return; }
 
   showLoading('正在准备打印...');
+  var unlisten = await listenPdfProgress();
   try {
     var s = getSettings();
     var layoutReq = buildLayoutRequest(files, s);
@@ -96,6 +129,7 @@ async function doPrint() {
         directPrint: printMode === 'direct',
         printerName: s.printerName || null
       });
+      if (unlisten) unlisten();
       hideLoading();
       if (result.success) {
         toast('\uD83D\uDCA8 ' + result.message);
@@ -103,10 +137,12 @@ async function doPrint() {
         toast('打印失败：' + result.message);
       }
     } else {
+      if (unlisten) unlisten();
       hideLoading();
       fallbackPrint(files, s);
     }
   } catch (err) {
+    if (unlisten) unlisten();
     hideLoading();
     console.error('Print error:', err);
     toast('打印出错：' + String(err));
@@ -146,6 +182,7 @@ async function savePdf() {
   }
 
   showLoading('正在准备保存...');
+  var unlisten = await listenPdfProgress();
   try {
     var s = getSettings();
     var layoutReq = buildLayoutRequest(files, s);
@@ -158,6 +195,7 @@ async function savePdf() {
         directPrint: false,
         printerName: null
       });
+      if (unlisten) unlisten();
       hideLoading();
       if (result.success) {
         toast('\u2705 PDF已保存: ' + result.pdfPath);
@@ -169,10 +207,12 @@ async function savePdf() {
         toast('PDF生成失败：' + result.message);
       }
     } else {
+      if (unlisten) unlisten();
       hideLoading();
       fallbackPrint(files, s);
     }
   } catch (err) {
+    if (unlisten) unlisten();
     hideLoading();
     console.error('PDF error:', err);
     toast('PDF生成出错：' + String(err));

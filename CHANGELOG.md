@@ -1,5 +1,88 @@
 # 📋 更新日志
 
+## v1.7.1 — 移除 PDF.js，纯原生渲染
+
+### 🚀 重大变更
+
+- **移除 PDF.js**（节省 ~3.6MB 安装包体积）
+  - 删除 `src/pdf.min.js`、`src/pdf.worker.min.js`
+  - 删除 `src/cmaps/` 目录（168 个 bcmap 文件）
+  - 删除 `src/standard_fonts/` 目录（14 个字体文件）
+  - PDF 渲染完全走 WinRT `Windows.Data.Pdf` 原生路径
+  - 文字提取完全走 PP-OCRv5，不再需要 PDF.js 文本层
+
+---
+
+## v1.7.0 — 含税价同行多金额修复 + 下方优先
+
+### 🐛 修复
+
+- **修复含税价仍匹配到同行不含税价**（含税价修复4）
+  - **根因**：发票布局中，不含税金额+税额在同一行（如 `¥172.68 ¥5.18`），含税价在更下方（如 `¥177.86`）。`_findNearbyAmount`/`findAmountNearKeyword` 按距离排序会误匹配同行不含税价
+  - **修复**：检测匹配金额同行是否有其他金额→如有，搜索下方更大金额作为含税价
+  - `extractByCoordinates` Step 1：价税合计关键词找到金额后，同行多金额→搜索下方
+  - `extractByCoordinates` Step 1.5：小写关键词彻底重写→优先找下方金额
+  - `findAmountNearKeyword` 新增 `preferBelow` 参数→同行多金额+有下方候选时选下方
+  - 关键规律：含税价在`（小写）`右侧，比不含税价+税额行更下方
+
+---
+
+## v1.6.9 — OCR 引擎切换：WinRT → ocr-rs (PP-OCRv5 + MNN)
+
+### 🚀 重大变更
+
+- **OCR 引擎从 WinRT `Windows.Media.Ocr` 切换为 `ocr-rs` (PaddleOCR + MNN)**
+  - 使用 PP-OCRv5 mobile 模型，识别准确率较 v4 提升约 13%
+  - 支持简体中文、繁体中文、英文、日文、中文拼音 5 大文字类型
+  - 增强手写体、竖排文本、生僻字识别能力
+  - 字符集从 6,623 字（v4）扩展至 18,383 字（v5）
+  - 模型文件：`PP-OCRv5_mobile_det.mnn` (4.5MB) + `PP-OCRv5_mobile_rec.mnn` (15.8MB) + `ppocr_keys_v5.txt` (90KB)
+
+### 🔧 正则优化（适配 PP-OCRv5 输出特征）
+
+- **跨行匹配**：所有金额提取正则从 `[^\d]*?` / `[^\n]*?` 改为 `[\s\S]*?`，支持 PP-OCRv5 将关键词和金额拆成多行的情况
+- **数字空格归一化增强**：迭代归并数字间空格（`3 1 7.00` → `317.00`），处理 PP-OCRv5 在数字中间插入空格的问题
+- **全角￥归一化**：`￥` 后空格归一化（`￥ 317.00` → `￥317.00`）
+- **PP-OCRv5 特殊字符归一化**：中间点/项目符号→小数点（`3·00` → `3.00`），数字间O→0（`3O7` → `307`）
+- **CJK 跨行归一化**：相邻 CJK 字符间的换行符归并（`价\n税` → `价税`），修复 PP-OCRv5 拆行问题
+
+### 🧮 坐标优化
+
+- **字符宽度权重模型**：`split_line_to_words` 从按字符数均分宽度改为字符宽度权重分配（CJK=2.0, Latin/digit=1.0），大幅提升 word-level 坐标准确度
+- **四角多边形坐标传递**：`OcrLine` 新增 `points` 字段（4 个角点），传递 PP-OCRv5 检测模型的多边形坐标到前端
+- **OCR 置信度传递**：`OcrLine` 新增 `confidence` 字段，前端可过滤低置信度结果（< 0.3 阈值）
+
+### 📦 模型文件
+
+- 从 RapidOCR/ModelScope 下载 ONNX 格式模型，本地用 MNNConvert 转为 MNN 格式
+- 模型打包到安装程序，无需联网下载
+
+### 🧹 清理
+
+- 移除 `Cargo.toml` 中不再需要的 `windows` crate features（`Win32_System_Threading`、`Graphics_Imaging`）
+- OCR 后端代码完全移除 WinRT `Windows.Media.Ocr` 依赖，使用纯 Rust 的 `ocr-rs`
+
+---
+
+## v1.6.8 — 含税价 findLastNum + 年份过滤 + 移除进度条
+
+### 🐛 修复
+
+- **修复含税价仍匹配到不含税价**
+  - **根因**：`findFirstNum` 取关键词后第一个数字，但含税价在发票 OCR 文本最下方，第一个匹配到的常是不含税价行
+  - **修复**：新增 `findLastNum()` 辅助函数，取关键词后最后一个有效数字，含税价 Step 1 正则 fallback 全部改用 `findLastNum`
+- **修复车票价格匹配到年份（如 2025）**
+  - **根因**：OCR 文本中 "2025年01月" 的 "2025.01" 被 `\d+\.\d{2}` 正则匹配为价格
+  - **修复**：新增 `isLikelyYearOrDate()` — 过滤 1900-2099 范围值和 "20XX.XX" 日期格式；应用于 `findFirstNum`、`findLastNum`、`findAmountNearKeyword`、`findNumberNearWord`、`collectAmountWords`、Step 6 车票全部正则
+  - 车票价格上限统一 ¥5000，下限 ¥5
+- **移除顶部导入进度条**：遮挡标题内容，下方 toast 加载动画已足够
+
+### ⚠️ 已知问题
+
+- **OCR 识别准确率较低**：当前使用 Windows 系统 OCR 引擎（WinRT `Windows.Media.Ocr`），对发票版式适应性有限，金额/销售方/不含税价等字段可能出现误识别。建议用户核对 OCR 自动填充结果。**后续版本计划切换至更精准的 OCR 引擎以提升识别率。**
+
+---
+
 ## v1.6.7 — 修复含税价/不含税价关键字精准匹配
 
 ### 🐛 修复
