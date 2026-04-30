@@ -653,6 +653,39 @@ function extractInvoiceInfo(textContent) {
     return 0;
   }
 
+  // Helper: find amount near a specific word object (same proximity logic as findAmountNearKeyword)
+  // Used when we need context-aware matching — find the word first, then use it directly
+  function findNumberNearWord(kw, maxLineDist) {
+    if (!kw || !wordMap) return 0;
+    maxLineDist = maxLineDist || 80;
+    var nearbyNums = wordMap.filter(function(w) {
+      if (w === kw) return false;
+      var dy = w.y - kw.y;
+      var ady = Math.abs(dy);
+      if (ady <= maxLineDist * 0.5) {
+        if (w.x < kw.x - 20) return false;
+      } else if (dy > 0 && dy <= maxLineDist) {
+        if (w.x < kw.x - kw.w * 2 || w.x > kw.x + kw.w * 4) return false;
+      } else {
+        return false;
+      }
+      var t = w.text.replace(/[,，]/g, '');
+      if (/^\d$/.test(t) && parseInt(t) < 2) return false;
+      return /^-?¥?\d+(\.\d{1,2})?$/.test(t);
+    });
+    if (!nearbyNums.length) return 0;
+    nearbyNums.sort(function(a, b) {
+      var aOnLine = Math.abs(a.y - kw.y) <= maxLineDist * 0.5 ? 0 : 1;
+      var bOnLine = Math.abs(b.y - kw.y) <= maxLineDist * 0.5 ? 0 : 1;
+      if (aOnLine !== bOnLine) return aOnLine - bOnLine;
+      return Math.abs(a.x - kw.x) - Math.abs(b.x - kw.x);
+    });
+    var amtStr = cleanOcrAmtStr(nearbyNums[0].text);
+    var val = parseFloat(amtStr);
+    if (val > 0 && val < 1000000) return Math.round(val * 100) / 100;
+    return 0;
+  }
+
   var amountTax = 0, amountNoTax = 0, taxAmount = 0;
 
   // === Step 0: Ticket-specific coordinate extraction (BEFORE invoice logic) ===
@@ -704,23 +737,93 @@ function extractInvoiceInfo(textContent) {
     if (!amountTax) {
       amountTax = findAmountNearKeyword(/税\s*合\s*计/, 'amount');
     }
+    // Try "合计" — but ONLY if "价" is nearby to the left (part of "价税合计")
+    // Standalone "合计" (without "价" to the left) is the 不含税合计 row → amountNoTax
+    if (!amountTax) {
+      var _hejiWords = wordMap.filter(function(w) {
+        if (w.region !== 'amount') return false;
+        // Only "合计" words — exclude "税合计" (already handled by 税\s*合\s*计 above)
+        return /合\s*计/.test(w.text) && !/税/.test(w.text);
+      });
+      for (var _hi = 0; _hi < _hejiWords.length && !amountTax; _hi++) {
+        var _hw = _hejiWords[_hi];
+        // Check if "价" is to the left (part of split "价税合计")
+        var _hasJiaLeft = wordMap.some(function(w) {
+          if (w === _hw) return false;
+          if (!/价/.test(w.text)) return false;
+          var dx = _hw.x - (w.x + w.w);
+          var dy = Math.abs(_hw.y - w.y);
+          return dx >= -30 && dx < 250 && dy < 50;
+        });
+        if (_hasJiaLeft) {
+          // This "合计" is part of "价税合计" → find nearby number for 含税价
+          amountTax = findNumberNearWord(_hw);
+        }
+      }
+    }
+    // Try "小写" keyword — "（小写）" is right before the 含税价 number
+    // (from "价税合计（大写）...（小写）¥123.45" — very specific to 含税价)
+    if (!amountTax) {
+      amountTax = findAmountNearKeyword(/小\s*写/, 'amount');
+    }
     // If not found in amount region, try anywhere with full keyword
     if (!amountTax) {
       amountTax = findAmountNearKeyword(/价\s*税\s*合\s*计/, 'any');
     }
 
-    // 不含税金额 — from "金额" keyword in amount region
+    // 不含税金额 — from standalone "合计" keyword (without "价" to the left)
+    // In invoice layout: "合计  100.00" is the 不含税金额合计 row
+    // "合计" is closer to the number than "金额" — more reliable match
+    if (!amountNoTax) {
+      var _hejiWords2 = wordMap.filter(function(w) {
+        if (w.region !== 'amount') return false;
+        return /合\s*计/.test(w.text) && !/税/.test(w.text);
+      });
+      for (var _hi2 = 0; _hi2 < _hejiWords2.length && !amountNoTax; _hi2++) {
+        var _hw2 = _hejiWords2[_hi2];
+        // Standalone "合计" — NO "价" to the left
+        var _hasJiaLeft2 = wordMap.some(function(w) {
+          if (w === _hw2) return false;
+          if (!/价/.test(w.text)) return false;
+          var dx = _hw2.x - (w.x + w.w);
+          var dy = Math.abs(_hw2.y - w.y);
+          return dx >= -30 && dx < 250 && dy < 50;
+        });
+        if (!_hasJiaLeft2) {
+          // This "合计" is standalone → 不含税价 row
+          amountNoTax = findNumberNearWord(_hw2);
+        }
+      }
+    }
+
+    // 不含税金额 — from "金额" keyword in amount region (secondary)
     // Coordinate proximity: find "金额" label → nearby number on same or next line
     if (!amountNoTax) {
       amountNoTax = findAmountNearKeyword(/金\s*额/, 'amount');
-      // Fallback: regex on amount region text, but skip if preceded by "税"
+      // Fallback: regex on amount region text, but skip if preceded by "税" or "合计"
+      // (e.g., "税额" → tax amount, "合计金额" → total including tax)
       if (!amountNoTax && amountText) {
-        var amtPreMatch = amountText.match(/(?:^|[^税])金\s*额[^\d]*?(\d+(?:,\d{3})*\.\d{2})/);
+        var amtPreMatch = amountText.match(/(?:^|[^税合])金\s*额[^\d]*?(\d+(?:,\d{3})*\.\d{2})/);
         if (amtPreMatch) amountNoTax = parseAmt(amtPreMatch[1]);
       }
       // Also try "不含税金额" explicit label
       if (!amountNoTax && amountText) {
         amountNoTax = findFirstNum('不\\s*含\\s*税\\s*金\\s*额', amountText);
+      }
+    }
+
+    // Cross-check: validate amountNoTax against amountTax
+    // Invariant: 含税价 >= 不含税价 (always true for any invoice)
+    // If violated, "金额" keyword likely matched the wrong number
+    if (amountNoTax > 0 && amountTax > 0) {
+      if (Math.abs(amountNoTax - amountTax) < 0.01) {
+        // Equal values — keyword matched the same number (e.g., "合计金额" near 含税价)
+        console.log('[OCR坐标] 不含税价=含税价，可能匹配错误，重置不含税价让推导逻辑重算');
+        amountNoTax = 0;
+      } else if (amountNoTax > amountTax) {
+        // 不含税价 > 含税价 — impossible, "金额" keyword matched the 含税价 number
+        console.log('[OCR坐标] 不含税价>含税价，"金额"关键词可能匹配到含税价，重置');
+        amountNoTax = 0;
       }
     }
 
@@ -815,6 +918,16 @@ function extractInvoiceInfo(textContent) {
     if (amountTax > 0 || amountNoTax > 0 || taxAmount > 0) {
       console.log('[OCR坐标] 金额区域提取:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount, taxRate: taxRate || '-' });
     }
+
+    // Unconditional invariant: 含税价 must be >= 不含税价
+    // This catches cases where keyword proximity matched the wrong number
+    // (e.g., "价税" matched a number near the 金额 row instead of 价税合计)
+    if (amountTax > 0 && amountNoTax > 0 && amountTax < amountNoTax) {
+      var _tmpAmt = amountTax;
+      amountTax = amountNoTax;
+      amountNoTax = _tmpAmt;
+      console.log('[OCR坐标] 含税价<不含税价，已交换:', { amountTax: amountTax, amountNoTax: amountNoTax });
+    }
   }
 
   // === Step 1: 价税合计 → 含税总价 (fallback to full-text regex) ===
@@ -871,11 +984,28 @@ function extractInvoiceInfo(textContent) {
   // === Step 2: Remove ALL 价税合计 variants ===
   var workText = fullText.replace(/价\s*税\s*合\s*计\s*(?:[（(](?:\s*大\s*写\s*[^\d]*?)?\s*小\s*写\s*[）)]\s*)?[^\d]*?\d+(?:,\d{3})*\.\d{2}/g, '');
 
-  // === Step 3: 合计 → 不含税价 ===
-  if (!amountNoTax) amountNoTax = findFirstNum('合\\s*计', workText);
+  // === Step 3: 合计 → 不含税价 (after 价税合计 removed from text) ===
+  // In workText, remaining "合计" should refer to the 不含税 合计 row
+  if (!amountNoTax) {
+    var hejiNum = findFirstNum('合\\s*计', workText);
+    // But "合计" could still match 含税价 — validate against amountTax
+    if (hejiNum > 0 && amountTax > 0 && Math.abs(hejiNum - amountTax) < 0.01) {
+      hejiNum = 0; // Same as 含税价, probably wrong match
+    }
+    if (hejiNum > 0) amountNoTax = hejiNum;
+  }
 
   // === Step 4: 金额 → 不含税价 ===
-  if (!amountNoTax) amountNoTax = findFirstNum('金\\s*额', workText);
+  // Exclude "合计金额"/"价税金额" patterns — those refer to 含税价, not 不含税价
+  if (!amountNoTax) {
+    var amtNumMatch = workText.match(/(?:^|[^税合])金\s*额[^\d]*?(\d+(?:,\d{3})*\.\d{2})/);
+    if (amtNumMatch) amountNoTax = parseAmt(amtNumMatch[1]);
+  }
+
+  // Validate: if amountNoTax equals amountTax, keyword likely matched the wrong number
+  if (amountNoTax > 0 && amountTax > 0 && Math.abs(amountNoTax - amountTax) < 0.01) {
+    amountNoTax = 0; // Reset, let tax-based derivation handle it
+  }
 
   // === Step 5: 税额反推 ===
   if (amountTax > 0 && !amountNoTax) {
@@ -1060,6 +1190,16 @@ function extractInvoiceInfo(textContent) {
   // If only amountTax found, derive amountNoTax from taxAmount
   if (amountTax > 0 && amountNoTax === 0 && taxAmount > 0 && taxAmount < amountTax) {
     amountNoTax = Math.round((amountTax - taxAmount) * 100) / 100;
+  }
+
+  // Unconditional sanity check: 含税价 must be >= 不含税价
+  // This catches all cases where keyword proximity or regex matched the wrong value,
+  // regardless of whether taxAmount was found.
+  if (amountTax > 0 && amountNoTax > 0 && amountTax < amountNoTax) {
+    var _finalTmp = amountTax;
+    amountTax = amountNoTax;
+    amountNoTax = _finalTmp;
+    console.log('[OCR提取] 最终校验：含税价<不含税价，已交换');
   }
 
   // === Final cross-validation: verify VAT formula amountTax ≈ amountNoTax + taxAmount ===
