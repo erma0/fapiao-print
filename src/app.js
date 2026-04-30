@@ -378,6 +378,11 @@ function backgroundOcrPdf(results, dataUrl) {
             if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
           }
           if (pi.isTicket) { results[k]._isTicket = true; }
+          // Also set _ocrText from PDF.js extraction
+          if (pi._ocrText && !results[k]._ocrText) {
+            results[k]._ocrText = pi._ocrText;
+            updated = true;
+          }
         }
         if (updated) { renderFileList(); updateAmountSummary(); }
       }).catch(function() {});
@@ -385,10 +390,8 @@ function backgroundOcrPdf(results, dataUrl) {
     return;
   }
 
-  // Tauri: use throttled OCR queue for pages missing info
+  // Tauri: use throttled OCR queue — always queue ALL pages so _ocrText is populated
   for (var p = 0; p < results.length; p++) {
-    // Queue OCR for pages that are missing either amount OR seller info
-    if (results[p].amount > 0 && results[p].sellerName && !results[p]._isTicket) continue;
     (function(idx) {
       _ocrQueue.push(function() {
         return applyOcr(results[idx], results[idx].previewUrl).then(function() {
@@ -428,6 +431,11 @@ function backgroundOcrPdf(results, dataUrl) {
           if (pi.sellerCreditCode && !results[k].sellerCreditCode) { results[k].sellerCreditCode = pi.sellerCreditCode; updated = true; }
         }
         if (pi.isTicket) { results[k]._isTicket = true; }
+        // Also set _ocrText from PDF.js extraction so it's available for display
+        if (pi._ocrText && !results[k]._ocrText) {
+          results[k]._ocrText = pi._ocrText;
+          updated = true;
+        }
       }
       if (updated) { renderFileList(); updateAmountSummary(); }
     }).catch(function(e) { console.warn('[信息提取] PDF.js提取失败:', e); });
@@ -995,7 +1003,32 @@ function updatePreview() {
   updatePageDots(pages.length);
 }
 
-function updatePageDots(t) { var d = document.getElementById('pageDots'); if (t <= 1) { d.innerHTML = ''; return; } var m = Math.min(t, 12); d.innerHTML = Array.from({ length: m }, function(_, i) { return '<div class="page-dot ' + (i === S.currentPage ? 'active' : '') + '" onclick="gotoPage(' + i + ')"></div>'; }).join(''); }
+function updatePageDots(t) {
+  var d = document.getElementById('pageDots');
+  if (t <= 1) { d.innerHTML = ''; return; }
+  var MAX_DOTS = 9;
+  if (t <= MAX_DOTS) {
+    // All pages fit — show every dot
+    d.innerHTML = Array.from({ length: t }, function(_, i) {
+      return '<div class="page-dot ' + (i === S.currentPage ? 'active' : '') + '" onclick="gotoPage(' + i + ')"></div>';
+    }).join('');
+  } else {
+    // Sliding window: show dots around current page with ellipsis indicators
+    var cur = S.currentPage;
+    var half = Math.floor((MAX_DOTS - 2) / 2); // dots on each side of center (reserve 2 for ellipsis)
+    var start = Math.max(1, cur - half);
+    var end = Math.min(t - 2, start + MAX_DOTS - 3);
+    start = Math.max(1, end - (MAX_DOTS - 3));
+    var html = '<div class="page-dot ' + (cur === 0 ? 'active' : '') + '" onclick="gotoPage(0)"></div>';
+    if (start > 1) html += '<div class="page-dot ellipsis" title="更多页">···</div>';
+    for (var i = start; i <= end; i++) {
+      html += '<div class="page-dot ' + (i === cur ? 'active' : '') + '" onclick="gotoPage(' + i + ')"></div>';
+    }
+    if (end < t - 2) html += '<div class="page-dot ellipsis" title="更多页">···</div>';
+    html += '<div class="page-dot ' + (cur === t - 1 ? 'active' : '') + '" onclick="gotoPage(' + (t - 1) + ')"></div>';
+    d.innerHTML = html;
+  }
+}
 function prevPage() { if (S.currentPage > 0) { S.currentPage--; updatePreview(); } }
 function nextPage() { if (S.currentPage < S.totalPages - 1) { S.currentPage++; updatePreview(); } }
 function gotoPage(i) { S.currentPage = i; updatePreview(); }

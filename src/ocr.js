@@ -468,6 +468,13 @@ function extractInvoiceInfo(textContent) {
   fullText = fullText.replace(/¥\s+(\d)/g, '¥$1');
   fullText = fullText.replace(/([\u4e00-\u9fff])\s+¥/g, '$1¥');
 
+  // === Normalize OCR ¥→1 misread ===
+  // OCR often misreads "¥" as "1" (they look very similar in many fonts).
+  // Pattern: "1XXX.XX" right after amount keywords → should be "¥XXX.XX"
+  // e.g., "价税合计1317.00" → "价税合计¥317.00"
+  // Only apply after amount-related keywords to avoid corrupting legitimate numbers
+  fullText = fullText.replace(/(价\s*税\s*合\s*计|金\s*额|税\s*额|合\s*计|票\s*价|总\s*计|不\s*含\s*税|含\s*税|实\s*付|应\s*付|开\s*票\s*金\s*额|发\s*票\s*金\s*额|全\s*价|优\s*惠\s*价)([^\d]*?)1(\d{2,}\.\d{2})/g, '$1$2¥$3');
+
   // Helper: find first number with exactly 2 decimal places after a keyword
   function findFirstNum(keyword, text) {
     var re = new RegExp(keyword + '[^\\d]*?(\\d+(?:,\\d{3})*\\.\\d{2})');
@@ -481,6 +488,31 @@ function extractInvoiceInfo(textContent) {
    * (for table layouts where keyword is a column header and value is below).
    * Returns the amount or 0.
    */
+  /**
+   * Clean an OCR amount string: strip ¥/￥ prefix, handle "1" misread of "¥".
+   * OCR often misreads "¥317.00" as "1317.00" (¥→1). We detect this by checking
+   * if a leading "1" could be a misread ¥ symbol: the number after removing "1"
+   * must have exactly 2 decimal places and be a reasonable amount.
+   * Returns the cleaned numeric string.
+   */
+  function cleanOcrAmtStr(raw) {
+    var s = raw.replace(/^[¥￥]/, '').replace(/[,，]/g, '');
+    // ¥→1 misread detection:
+    // If number starts with "1" followed by 2+ digits and .XX (standard amount format),
+    // the "1" is likely a misread "¥" symbol (they look very similar in OCR).
+    // e.g., "1317.00" → "317.00", "1299.06" → "299.06"
+    // But NOT "100.00" (removing "1" gives "00.00" = 0 → rejected)
+    // And NOT "12.50" (only 2 digits before decimal, likely legitimate)
+    if (/^1\d{2,}\.\d{2}$/.test(s)) {
+      var stripped = s.substring(1);
+      var strippedVal = parseFloat(stripped);
+      if (strippedVal > 0) {
+        s = stripped;
+      }
+    }
+    return s;
+  }
+
   function findAmountNearKeyword(keywordRegex, regionFilter, maxLineDist) {
     if (!wordMap || !imgW || !imgH) return 0;
     maxLineDist = maxLineDist || 80; // max vertical distance for "next line" (increased from 30)
@@ -510,8 +542,11 @@ function extractInvoiceInfo(textContent) {
         else {
           return false;
         }
-        // Check if it looks like an amount (1-2 decimal places, or integer)
         var t = w.text.replace(/[,，]/g, '');
+        // Filter out bare "1" — OCR misreads ¥ as "1", producing a standalone "1" word
+        // that is NOT an amount. Also filter other single-digit numbers (< 2) which
+        // are almost never invoice amounts.
+        if (/^\d$/.test(t) && parseInt(t) < 2) return false;
         return /^¥?\d+(\.\d{1,2})?$/.test(t) || /^￥\d+(\.\d{1,2})?$/.test(t);
       });
       if (nearbyNums.length > 0) {
@@ -522,7 +557,7 @@ function extractInvoiceInfo(textContent) {
           if (aOnLine !== bOnLine) return aOnLine - bOnLine;
           return Math.abs(a.x - kw.x) - Math.abs(b.x - kw.x);
         });
-        var amtStr = nearbyNums[0].text.replace(/^[¥￥]/, '').replace(/[,，]/g, '');
+        var amtStr = cleanOcrAmtStr(nearbyNums[0].text);
         var val = parseFloat(amtStr);
         if (val > 0 && val < 1000000) return Math.round(val * 100) / 100;
       }
@@ -826,9 +861,48 @@ function extractInvoiceInfo(textContent) {
     if (amountTax > 0) amountNoTax = amountTax;
   }
 
-  // AUTO-FALLBACK: if only amountNoTax found, auto-assign to amountTax
+  // AUTO-FALLBACK: if only amountNoTax found, derive amountTax from taxAmount if possible
+  // DO NOT blindly set amountTax = amountNoTax (that's wrong for VAT invoices where they differ)
   if (amountNoTax > 0 && amountTax === 0) {
-    amountTax = amountNoTax;
+    if (taxAmount > 0 && taxAmount < amountNoTax) {
+      amountTax = Math.round((amountNoTax + taxAmount) * 100) / 100;
+    } else {
+      // No tax info — this is likely a non-VAT invoice, amountTax = amountNoTax is correct
+      amountTax = amountNoTax;
+    }
+  }
+  // If only amountTax found, derive amountNoTax from taxAmount
+  if (amountTax > 0 && amountNoTax === 0 && taxAmount > 0 && taxAmount < amountTax) {
+    amountNoTax = Math.round((amountTax - taxAmount) * 100) / 100;
+  }
+
+  // === Final cross-validation: verify VAT formula amountTax ≈ amountNoTax + taxAmount ===
+  if (amountTax > 0 && amountNoTax > 0 && taxAmount > 0) {
+    var expectedTax = Math.round((amountTax - amountNoTax) * 100) / 100;
+    var diff = Math.abs(expectedTax - taxAmount);
+    // If the difference is more than 0.02 (rounding tolerance), values are inconsistent
+    if (diff > 0.02) {
+      console.warn('[OCR提取] 金额交叉验证失败: amountTax=' + amountTax + ' ≠ amountNoTax(' + amountNoTax + ') + taxAmount(' + taxAmount + ')=' + (amountNoTax + taxAmount));
+      // Try to fix: if amountTax < amountNoTax, they might be swapped
+      if (amountTax < amountNoTax) {
+        var tmp = amountTax;
+        amountTax = amountNoTax;
+        amountNoTax = tmp;
+        console.log('[OCR提取] 已交换含税/不含税金额');
+      }
+      // Re-check after swap
+      expectedTax = Math.round((amountTax - amountNoTax) * 100) / 100;
+      diff = Math.abs(expectedTax - taxAmount);
+      if (diff > 0.02) {
+        // Still inconsistent — trust amountTax (from 价税合计, most reliable) and taxAmount,
+        // recompute amountNoTax
+        var recomputedNoTax = Math.round((amountTax - taxAmount) * 100) / 100;
+        if (recomputedNoTax > 0) {
+          console.log('[OCR提取] 重算不含税价: ' + amountNoTax + ' → ' + recomputedNoTax);
+          amountNoTax = recomputedNoTax;
+        }
+      }
+    }
   }
 
   console.log('[OCR提取] 金额:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount }, '销售方:', sellerName || '(未识别)', '信用代码:', sellerCreditCode || '(未识别)', '车票:', isTicket);
@@ -887,13 +961,22 @@ async function applyOcr(fileObj, dataUrl) {
       ocrResult = { text: ocrResultStr, lines: [], imgW: 0, imgH: 0 };
     }
     var info = extractInvoiceInfo(ocrResult);
+    // Always set _ocrText for display — this is the main purpose of running OCR on all pages
+    fileObj._ocrText = info._ocrText || ocrResult.text || '';
+    fileObj._isTicket = info.isTicket || false;
+    // Only update amounts if they are not already set (PDF.js text extraction is more reliable for text-based PDFs)
     var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
-    if (effAmt > 0) {
+    if (effAmt > 0 && !fileObj.amountTax && !fileObj.amountNoTax) {
       fileObj.amount = effAmt;
       fileObj.amountTax = info.amountTax;
       fileObj.amountNoTax = info.amountNoTax;
       fileObj.taxAmount = info.taxAmount || 0;
-    } else if (info.taxAmount > 0) {
+    } else if (effAmt > 0 && fileObj.amountTax > 0) {
+      // Amounts already set — only fill in missing taxAmount
+      if (!fileObj.taxAmount && info.taxAmount > 0) {
+        fileObj.taxAmount = info.taxAmount;
+      }
+    } else if (info.taxAmount > 0 && !fileObj.taxAmount) {
       fileObj.taxAmount = info.taxAmount;
     }
     // Skip seller info for tickets
@@ -901,8 +984,6 @@ async function applyOcr(fileObj, dataUrl) {
       if (info.sellerName) fileObj.sellerName = info.sellerName;
       if (info.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
     }
-    fileObj._ocrText = info._ocrText || ocrResult.text || '';
-    fileObj._isTicket = info.isTicket || false;
   } catch(e) {
     console.warn('[OCR] 识别失败:', e);
   }

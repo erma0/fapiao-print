@@ -252,8 +252,9 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .page-nav { padding: 8px 16px; display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--surface); border-top: 1px solid var(--border); }
 .page-info { font-size: 13px; color: var(--text-secondary); }
 .page-dots { display: flex; gap: 4px; }
-.page-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); cursor: pointer; transition: all 0.15s; }
+.page-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
 .page-dot.active { background: var(--accent); }
+.page-dot.ellipsis { width: auto; height: auto; border-radius: 0; background: transparent; cursor: default; font-size: 8px; line-height: 1; color: var(--text-muted); letter-spacing: 1px; padding: 0 1px; }
 .statusbar {
   background: var(--surface); border-top: 1px solid var(--border); padding: 4px 16px;
   display: flex; align-items: center; gap: 16px; font-size: 11px; color: var(--text-muted);
