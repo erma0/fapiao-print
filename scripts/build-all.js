@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * 一键全量构建脚本 — 产出 4 个产物:
- *   1. 发票打印工具_1.7.7_x64-setup.exe          轻量版安装包 (NSIS, ~3.6MB)
- *   2. 发票打印工具_1.7.7_x64_绿色版.zip          轻量版绿色便携 (exe, ~14MB)
- *   3. 发票打印工具_1.7.7_x64_OCR版-setup.exe     OCR 版安装包 (NSIS, ~24MB)
- *   4. 发票打印工具_1.7.7_x64_OCR绿色版.zip       OCR 版绿色便携 (exe + models/, ~22MB)
+ *   1. 发票打印工具_x64-setup.exe          轻量版安装包 (NSIS)
+ *   2. 发票打印工具_x64_绿色版.exe         轻量版绿色便携 (单文件 exe，无需 zip)
+ *   3. 发票打印工具_x64_OCR版-setup.exe    OCR 版安装包 (NSIS)
+ *   4. 发票打印工具_x64_OCR绿色版.zip      OCR 版绿色便携 (exe + models/)
  *
  * 用法: node scripts/build-all.js
  *        npm run build:all
@@ -30,7 +30,7 @@ const DIST = path.join(ROOT, 'dist');
 // 最终产物文件名（统一放在 dist/ 根目录）
 const FINAL_FILES = {
   lwInstaller:  `${PRODUCT_NAME}_${VERSION}_${ARCH}-setup.exe`,
-  lwPortable:   `${PRODUCT_NAME}_${VERSION}_${ARCH}_绿色版.zip`,
+  lwPortable:   `${PRODUCT_NAME}_${VERSION}_${ARCH}_绿色版.exe`,
   ocrInstaller: `${PRODUCT_NAME}_${VERSION}_${ARCH}_OCR版-setup.exe`,
   ocrPortable:  `${PRODUCT_NAME}_${VERSION}_${ARCH}_OCR绿色版.zip`,
 };
@@ -207,13 +207,9 @@ async function main() {
   console.log('  [3/4] 打包绿色便携版...');
   console.log(`${'─'.repeat(60)}`);
 
-  // 轻量版绿色便携: 仅 exe
-  console.log('\n📦 轻量版绿色便携 (仅 exe)...');
-  createZip(
-    path.join(DIST, FINAL_FILES.lwPortable),
-    [lwExeCopy],
-    `${PRODUCT_NAME}_${VERSION}_绿色版`
-  );
+  // 轻量版绿色便携: 直接用单文件 exe（无额外依赖，不需要打 zip）
+  console.log('\n📦 轻量版绿色便携 (单文件 exe)...');
+  copyFile(lwExeCopy, path.join(DIST, FINAL_FILES.lwPortable));
 
   // OCR 版绿色便携: exe + models/ (先验证模型)
   console.log('\n📦 OCR 版绿色便携 (exe + models/)...');

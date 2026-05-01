@@ -74,7 +74,7 @@ jobs:
           $dist = "dist"
           $expected = @(
             "发票打印工具_*_x64-setup.exe",
-            "发票打印工具_*_x64_绿色版.zip",
+            "发票打印工具_*_x64_绿色版.exe",
             "发票打印工具_*_x64_OCR版-setup.exe",
             "发票打印工具_*_x64_OCR绿色版.zip"
           )
@@ -112,9 +112,9 @@ jobs:
             }
           }
 
-          # 也检查 zip 文件名
+          # 检查绿色便携版文件名（轻量版=exe, OCR版=zip）
           $zipRenameMap = @{
-            "_${version}_x64_.zip"                     = "发票打印工具_${version}_x64_绿色版.zip"
+            "_${version}_x64_.exe"                     = "发票打印工具_${version}_x64_绿色版.exe"
             "_${version}_x64_OCR.zip"                  = "发票打印工具_${version}_x64_OCR绿色版.zip"
           }
 

@@ -7,7 +7,7 @@
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
 var hasOcr  = false; // Set to true at startup if OCR feature is available
-console.log('发票批量打印 v1.8.0 | isTauri:', isTauri);
+console.log('发票批量打印 v1.8.1 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -150,7 +150,8 @@ function downsampleForOcr(dataUrl, maxDim) {
         canvas.width = w; canvas.height = h;
         var ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
+        // Quality 0.92: higher quality preserves text edges for better OCR accuracy
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
       };
       img.onerror = function() { resolve(dataUrl); };
       img.src = dataUrl;
@@ -426,7 +427,7 @@ function applyOcrAsync(fileObj, dataUrl) {
       ocrPromise = applyOcr(fileObj, '', fileObj._filePath);
     } else {
       // No file path (e.g. browser-mode image) — downsample for faster IPC
-      ocrPromise = downsampleForOcr(dataUrl, 960).then(function(ocrDataUrl) {
+      ocrPromise = downsampleForOcr(dataUrl, 1280).then(function(ocrDataUrl) {
         return applyOcr(fileObj, ocrDataUrl);
       });
     }

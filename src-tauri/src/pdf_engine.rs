@@ -552,15 +552,18 @@ pub(crate) fn render_and_ocr_pdf(pdf_path: &str, dpi: u32) -> Result<Vec<Rendere
                     let orig_h = img.height();
                     let longest = orig_w.max(orig_h);
 
-                    // Resize for OCR if needed (same logic as ocr_image_from_data)
+                    // Resize for OCR if needed (same logic as run_ocr_on_image)
                     let ocr_img = if longest > OCR_MAX_DIM {
                         let rscale = OCR_MAX_DIM as f32 / longest as f32;
                         let nw = (orig_w as f32 * rscale).round() as u32;
                         let nh = (orig_h as f32 * rscale).round() as u32;
-                        img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
+                        img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3)
                     } else {
                         img
                     };
+
+                    // Enhance contrast for better OCR accuracy
+                    let ocr_img = enhance_contrast_ocr(ocr_img);
 
                     let resized_w = ocr_img.width();
                     let resized_h = ocr_img.height();
@@ -1127,11 +1130,11 @@ fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrE
 }
 
 /// Maximum longest-side dimension for OCR input.
-/// 960px preserves small text (密码区/备注栏/明细行) that 720 would blur out.
-/// Speed trade-off: ~40% slower detection + ~25% slower recognition vs 720,
-/// but accuracy on dense/small-text invoices is significantly better.
+/// 1280px: balances accuracy and speed. v1.6.7 used full resolution (2480×3508 for 300DPI A4)
+/// which was more accurate but slower. 960 was too aggressive — small text (密码区/备注栏/明细行)
+/// got blurred. 1280 preserves detail while keeping detection model in its optimal range.
 #[cfg(feature = "ocr")]
-const OCR_MAX_DIM: u32 = 960;
+const OCR_MAX_DIM: u32 = 1280;
 
 /// OCR an image from a file path or base64 data URL.
 /// When `file_path` is provided, reads the image directly from disk — skipping
@@ -1202,6 +1205,74 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<OcrResult, String> {
     run_ocr_on_image(img)
 }
 
+/// Enhance image contrast for OCR using histogram stretching.
+/// Maps the darkest 1% of pixels to 0 and brightest 1% to 255.
+/// This dramatically improves OCR accuracy on low-contrast/faded invoices
+/// and scanned documents with uneven lighting.
+#[cfg(feature = "ocr")]
+fn enhance_contrast_ocr(img: image::DynamicImage) -> image::DynamicImage {
+    use image::GenericImageView;
+    use image::Pixel;
+
+    // Build luminance histogram (256 bins)
+    let mut histogram = [0u32; 256];
+    let mut total_pixels = 0u32;
+    for pixel in img.pixels() {
+        let rgba = pixel.2.to_rgba();
+        let lum = (0.299 * rgba[0] as f64 + 0.587 * rgba[1] as f64 + 0.114 * rgba[2] as f64) as u8;
+        histogram[lum as usize] += 1;
+        total_pixels += 1;
+    }
+
+    if total_pixels == 0 {
+        return img;
+    }
+
+    // Find 1st and 99th percentile
+    let threshold_low = total_pixels / 100;   // 1%
+    let threshold_high = total_pixels - threshold_low; // 99%
+    let mut cumulative = 0u32;
+    let mut p1 = 0u8;
+    let mut p99 = 255u8;
+    for i in 0..256 {
+        cumulative += histogram[i];
+        if cumulative >= threshold_low && p1 == 0 {
+            p1 = i as u8;
+        }
+        if cumulative >= threshold_high {
+            p99 = i as u8;
+            break;
+        }
+    }
+
+    // Skip enhancement if contrast is already good (range > 180)
+    if p99.saturating_sub(p1) > 180 {
+        return img;
+    }
+
+    // Build lookup table for linear contrast stretch
+    let range = p99 as f64 - p1 as f64;
+    if range < 1.0 {
+        return img; // all pixels same color, nothing to enhance
+    }
+    let mut lut = [0u8; 256];
+    for i in 0..256 {
+        let v = ((i as f64 - p1 as f64) / range * 255.0).round();
+        lut[i] = v.max(0.0).min(255.0) as u8;
+    }
+
+    // Apply LUT to each pixel
+    let mut out = img.to_rgba8();
+    for pixel in out.pixels_mut() {
+        pixel.0[0] = lut[pixel.0[0] as usize];
+        pixel.0[1] = lut[pixel.0[1] as usize];
+        pixel.0[2] = lut[pixel.0[2] as usize];
+    }
+
+    log::info!("OCR contrast enhancement: p1={} p99={} range={}", p1, p99, p99.saturating_sub(p1));
+    image::DynamicImage::ImageRgba8(out)
+}
+
 /// Core OCR logic: takes a pre-decoded image, resizes if needed, runs OCR,
 /// and returns structured result with coordinates.
 #[cfg(feature = "ocr")]
@@ -1214,9 +1285,8 @@ fn run_ocr_on_image(mut img: image::DynamicImage) -> Result<OcrResult, String> {
     }
 
     // Resize for OCR if image is larger than OCR_MAX_DIM on the longest side.
-    // Detection model works best at ~960px; larger images are slower without
-    // better accuracy. We keep the original dimensions for coordinate reporting
-    // so the frontend can normalize correctly.
+    // We keep the original dimensions for coordinate reporting so the frontend
+    // can normalize correctly.
     let orig_w = img.width();
     let orig_h = img.height();
     let longest = orig_w.max(orig_h);
@@ -1225,13 +1295,19 @@ fn run_ocr_on_image(mut img: image::DynamicImage) -> Result<OcrResult, String> {
         let scale = OCR_MAX_DIM as f32 / longest as f32;
         let new_w = (orig_w as f32 * scale).round() as u32;
         let new_h = (orig_h as f32 * scale).round() as u32;
-        img = img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
+        // Lanczos3 produces sharper text edges than Triangle — critical for OCR accuracy
+        img = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
         log::info!(
             "OCR resize: {}x{} → {}x{} ({}ms)",
             orig_w, orig_h, new_w, new_h,
             t0.elapsed().as_millis()
         );
     }
+
+    // Enhance contrast for low-contrast invoices (e.g., scanned/faded invoices).
+    // PaddleOCR detection works better with higher contrast input.
+    // We apply a simple linear contrast stretch: map the darkest 1% to 0, brightest 1% to 255.
+    img = enhance_contrast_ocr(img);
 
     let resized_w = img.width();
     let resized_h = img.height();

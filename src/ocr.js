@@ -398,6 +398,21 @@ function _normTextForExtract(text) {
   }
   text = text.replace(/(\d)[ \t]+\./g, '$1.');
   text = text.replace(/¥[ \t]+(\d)/g, '¥$1');
+  text = text.replace(/([\u4e00-\u9fff])\s+¥/g, '$1¥');
+
+  // Normalize OCR ¥↔1 misread artifacts (critical for amount accuracy)
+  // Step 1: ¥¥ patterns — OCR misreads "1" as "¥" producing "¥¥72.68" → "¥172.68"
+  text = normalizeOcrCurrency(text);
+
+  // Step 2: Keyword-based ¥→1 misread correction (restored from v1.6.7)
+  // OCR often misreads "¥" as "1" (they look very similar). After amount keywords,
+  // "1XXX.XX" (4+ digits before decimal) should be "¥XXX.XX".
+  // e.g., "价税合计1317.00" → "价税合计¥317.00"
+  // Only apply after amount keywords to avoid corrupting legitimate numbers.
+  // \d{3,} requires 3+ digits after "1" (4+ total) to avoid stripping "1" from
+  // legitimate 3-digit amounts like "金额172.68" (should stay 172.68).
+  text = text.replace(/(价\s*税\s*合\s*计|金\s*额|税\s*额|合\s*计|票\s*价|总\s*计|不\s*含\s*税|含\s*税|实\s*付|应\s*付|开\s*票\s*金\s*额|发\s*票\s*金\s*额|全\s*价|优\s*惠\s*价|小\s*写)([^\d¥￥]*?)1(\d{3,}\.\d{2})/g, '$1$2¥$3');
+
   return text;
 }
 
@@ -479,32 +494,124 @@ function _extractByText(fullText) {
     if (sn) result.sellerName = sn;
   }
 
-  // Priority 2: Generic "名称：" — first = buyer (left side), second = seller (right side)
-  // In VAT invoices, buyer info is always printed before seller info in OCR text
-  if (!result.buyerName || !result.sellerName) {
-    var nameRegex = /名\s*称[:：]\s*([^\n]+)/g;
-    var names = [];
-    var nm;
-    while ((nm = nameRegex.exec(text)) !== null) {
-      var name = _cleanName(nm[1]);
-      if (name && names.indexOf(name) < 0) names.push(name);
-    }
-    if (!result.buyerName && names.length >= 1) result.buyerName = names[0];
-    if (!result.sellerName && names.length >= 2) result.sellerName = names[1];
-  }
-
-  // --- Buyer/Seller credit codes ---
+  // --- Buyer/Seller credit codes (extract FIRST — use as anchor for name matching) ---
   // First occurrence = buyer, second = seller (same left-to-right order as names)
-  // The label can be "统一社会信用代码/纳税人识别号：" or either keyword separately
   var ccRegex = /(?:统一社会信用代码|纳税人识别号)[^A-Z0-9]{0,30}([A-Z0-9]{15,20})/gi;
   var codes = [];
+  var ccPositions = [];
   var cm;
   while ((cm = ccRegex.exec(text)) !== null) {
     var code = cm[1].toUpperCase();
-    if (codes.indexOf(code) < 0) codes.push(code);
+    if (codes.indexOf(code) < 0) {
+      codes.push(code);
+      ccPositions.push(cm.index);
+    }
   }
   if (codes.length >= 1) result.buyerCreditCode = codes[0];
   if (codes.length >= 2) result.sellerCreditCode = codes[1];
+
+  // Priority 2: "销方名称" / "销方" abbreviated form (v1.6.7 strategy)
+  if (!result.sellerName) {
+    var shortSeller = text.match(/销\s*方(?:信息)?名\s*称[:\s]*([^\n]+)/);
+    if (shortSeller) {
+      var ssn = _cleanName(shortSeller[1]);
+      if (ssn) result.sellerName = ssn;
+    }
+  }
+
+  // Priority 3: Generic "名称：" — first = buyer, second = seller
+  // Use credit code position as anchor: find "名称" before seller's credit code
+  if (!result.buyerName || !result.sellerName) {
+    var nameRegex = /名\s*称[:：]\s*([^\n]+)/g;
+    var names = [];
+    var namePositions = [];
+    var nm;
+    while ((nm = nameRegex.exec(text)) !== null) {
+      var name = _cleanName(nm[1]);
+      if (name && names.indexOf(name) < 0) {
+        names.push(name);
+        namePositions.push(nm.index);
+      }
+    }
+    if (!result.buyerName && names.length >= 1) result.buyerName = names[0];
+    if (!result.sellerName) {
+      // Credit-code-anchored strategy (v1.6.7): find LAST "名称" before seller's credit code
+      if (codes.length >= 2 && ccPositions.length >= 2) {
+        var sellerCcPos = ccPositions[ccPositions.length - 1];
+        var lastNameBeforeCc = '';
+        for (var ni = 0; ni < namePositions.length; ni++) {
+          if (namePositions[ni] < sellerCcPos) {
+            var nc = _cleanName(names[ni]);
+            if (nc && !/^(?:购买方|销售方|名称)/.test(nc)) {
+              lastNameBeforeCc = nc;
+            }
+          }
+        }
+        if (lastNameBeforeCc) result.sellerName = lastNameBeforeCc;
+      }
+      // Fallback: 2nd "名称" match
+      if (!result.sellerName && names.length >= 2) result.sellerName = names[1];
+      else if (!result.sellerName && names.length === 1) result.sellerName = names[0];
+    }
+  }
+
+  // Priority 4: "收款单位" / "销货单位" / "开票方" (non-standard invoices)
+  if (!result.sellerName) {
+    var altSeller = text.match(/(?:收款单位|销货单位|开票方|销售单位)[^\n]{0,30}?[:：]?\s*([^\n]{2,60}?)(?=\s*(?:纳税人|统一社会|地址|开户行|电话|账号|[A-Z0-9]{15,20})|\n|$)/i);
+    if (altSeller) {
+      var altName = _cleanName(altSeller[1]);
+      if (altName) result.sellerName = altName;
+    }
+  }
+
+  // Priority 5: Company name near the last credit code (v1.6.7 Strategy 4)
+  // Some OCR outputs have: "91440300xxxxxxxxx  深圳市某某科技有限公司"
+  if (!result.sellerName && ccPositions.length > 0) {
+    var csSuffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
+    var lastCcPos = ccPositions[ccPositions.length - 1];
+    var afterLastCc = text.substring(lastCcPos);
+    var compNearCc = afterLastCc.match(new RegExp('[A-Z0-9]{15,20}\\s*[:：]?\\s*([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + csSuffix + ')'));
+    if (compNearCc) {
+      var compName = _cleanName(compNearCc[1]);
+      if (compName) result.sellerName = compName;
+    }
+  }
+
+  // Priority 6: Last company name with suffix in full text (v1.6.7 Strategy 6)
+  if (!result.sellerName) {
+    var csSuffix2 = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
+    var allCompRe = new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]{2,25}' + csSuffix2 + ')', 'g');
+    var allCompMatches = [];
+    var ccm;
+    while ((ccm = allCompRe.exec(text)) !== null) {
+      var cn = ccm[1].trim();
+      if (cn.length > 3 && !/^(?:购买方|销售方|信息|名称|地址)/.test(cn)) {
+        allCompMatches.push(cn);
+      }
+    }
+    if (allCompMatches.length >= 2) {
+      result.sellerName = allCompMatches[allCompMatches.length - 1];
+    } else if (allCompMatches.length === 1 && !result.buyerName) {
+      // Only one company found — could be seller if no buyer found either
+      result.sellerName = allCompMatches[0];
+    }
+  }
+
+  // Also try standalone credit codes (some OCR misses the label prefix)
+  if (!result.buyerCreditCode || !result.sellerCreditCode) {
+    var standaloneRe = /\b([0-9][A-Z0-9]{17})\b/g;
+    var sm;
+    var standaloneCodes = [];
+    while ((sm = standaloneRe.exec(text)) !== null) {
+      if (/\d{6,}/.test(sm[1]) && /[A-Z]/.test(sm[1])) {
+        var sc = sm[1].toUpperCase();
+        if (standaloneCodes.indexOf(sc) < 0) standaloneCodes.push(sc);
+      }
+    }
+    if (!result.buyerCreditCode && standaloneCodes.length >= 1) result.buyerCreditCode = standaloneCodes[0];
+    if (!result.sellerCreditCode && standaloneCodes.length >= 2) result.sellerCreditCode = standaloneCodes[1];
+    else if (!result.sellerCreditCode && standaloneCodes.length === 1) result.sellerCreditCode = standaloneCodes[0];
+  }
 
   return result;
 }
