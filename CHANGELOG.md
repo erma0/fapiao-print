@@ -8,480 +8,127 @@
   - 轻量版 `npm run build`：无 OCR，安装包 ~3.5MB
   - OCR 版 `npm run build:ocr`：含 PP-OCRv5，安装包 ~24MB
 - **`check_ocr_available` 命令**：前端启动时检测 OCR 可用性，无 OCR 时自动隐藏相关 UI
-  - 隐藏：一键识别按钮、每张发票的 🔍 按钮、设置面板 OCR 区域
-  - 点击 OCR 功能时提示"此版本不支持 OCR 识别"
-- **模型文件不再默认打包**：`tauri.conf.json` 移除 `models/` 资源，OCR 版通过 `tauri.ocr.conf.json` 注入
-- **`ocr-rs` 改为 optional 依赖**：不启用 `ocr` feature 时不编译 MNN 推理引擎，exe 体积大幅缩小
-- **一键全量构建脚本** (`scripts/build-all.js`)：`npm run build:all` 自动编译轻量版 + OCR 版，产出 4 个发布产物
-- **双配置文件**：`tauri.conf.json`（轻量版，无 models）+ `tauri.ocr.conf.json`（OCR 版，含 models 资源）
-- **Rust 条件编译**：所有 OCR 相关代码用 `#[cfg(feature = "ocr")]` 包裹，`invoke_handler` 按 feature 注册不同命令集
+- **模型文件不再默认打包**：轻量版 `tauri.conf.json` 移除 `models/`，OCR 版通过 `tauri.ocr.conf.json` 注入
+- **`ocr-rs` 改为 optional 依赖**：不启用 `ocr` feature 时不编译 MNN 推理引擎
+- **一键全量构建** (`scripts/build-all.js`)：`npm run build:all` 产出 4 个发布文件
+- **Rust 条件编译**：所有 OCR 代码用 `#[cfg(feature = "ocr")]` 包裹，`invoke_handler` 按 feature 注册
 
 ### 🐛 修复
 
-- **修复打印模式分支反转**：直接打印和对话框打印的函数调用搞反了，导致"直接打印"实际弹出对话框、"对话框打印"实际直接打印
-- **修复关闭时 OCR 队列残留**：`_tauriCleanup` 增加 `_ocrRunning = 0`，`_drainOcrQueue` 增加 `__TAURI_CLOSING__` 检查
-- **根治关闭时进程残留/死锁**：`CloseRequested` 中调用 `api.prevent_close()` 阻止 Tauri 默认关闭序列与 `process::exit` 并发导致死锁；`exit(0)` 在独立线程 200ms 后执行，避免主线程阻塞；新增 `TerminateProcess` 5 秒兜底，防止 `ExitProcess` 在 `DLL_PROCESS_DETACH` 阶段死锁
+- 修复打印模式分支反转（直接打印/对话框打印函数调用互换）
+- 修复关闭时 OCR 队列残留（`_tauriCleanup` 增加 `_ocrRunning=0`，`_drainOcrQueue` 检查 `__TAURI_CLOSING__`）
+- 根治关闭时进程残留/死锁：`prevent_close()` 阻止 Tauri 默认关闭 → `exit(0)` 独立线程 200ms 后执行 → `TerminateProcess` 5s 兜底
 
 ### 🔧 改进
 
-- **布局预设调整**：原 3×1 预设改为更常用的 3×2（侧边栏和工具栏同步更新）
-- **PDF 生成前 shutdown 检查**：`generate_pdf_from_layout` 保存前检查 `SHUTTING_DOWN`，避免关闭时继续生成
-- **`dist/` 加入 .gitignore**：构建产物不再被 git 跟踪
+- 布局预设 3×1 → 3×2；PDF 生成前 shutdown 检查；`dist/` 加入 .gitignore
 
-### 🔧 开发命令
-
-- `npm run dev` — 开发模式（轻量版）
-- `npm run dev:ocr` — 开发模式（OCR 版，`--features ocr`）
-- `npm run build` — 编译轻量版（NSIS 安装包 ~3.5MB）
-- `npm run build:ocr` — 编译 OCR 版（NSIS 安装包 ~24MB）
-- `npm run build:all` — 一键全量构建，产出 4 个发布文件
-
-### 📦 发布产物（4 个文件）
+### 📦 发布产物
 
 | 文件 | 说明 | 大小 |
 |------|------|------|
-| `发票打印工具_x64-setup.exe` | 轻量版安装包（无 OCR） | ~3.5MB |
-| `发票打印工具_x64_绿色版.zip` | 轻量版绿色便携（仅 exe） | ~5MB |
+| `发票打印工具_x64-setup.exe` | 轻量版安装包 | ~3.5MB |
+| `发票打印工具_x64_绿色版.zip` | 轻量版便携 | ~5MB |
 | `发票打印工具_x64_OCR版-setup.exe` | OCR 版安装包 | ~24MB |
-| `发票打印工具_x64_OCR绿色版.zip` | OCR 版绿色便携（exe + models/） | ~22MB |
-
-### 📋 待办计划
-
-- [ ] **重写打印流程**：当前"直接打印"仍通过 `ShellExecuteW("printto")` 依赖系统 PDF 阅读器中转，计划改为直接调用 Win32 Print Spooler API（`StartDoc`/`StartPage`/`EndPage`），绕过 PDF 阅读器，实现真正的静默直接打印
-- [ ] **完善 OCR 识别**：
-  - 支持全电发票（数电票）版式识别
-  - 通行费发票字段提取
-  - OCR 识别结果缓存，避免重复识别同一文件
-  - 识别准确率持续优化（特殊版式、低质量图片）
-- [ ] **发票去重检测**：基于发票号码 + 开票日期检测重复发票
-- [ ] **批量打印进度反馈**：多份打印时显示打印进度
-- [ ] **国际化支持**：界面多语言（英文）
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版便携 | ~22MB |
 
 ---
 
 ## v1.7.6 — 一键识别 + OCR 准确率恢复
 
-### 🆕 新功能
-
-- **一键识别按钮 🔍**：发票列表顶部新增"一键识别"按钮
-  - 自动识别所有未识别的发票（无金额且不在识别中）
-  - 识别过程中按钮显示进度 `done/total`，如 `3/10`
-  - 识别完成后恢复为 🔍 按钮
-- **单文件 OCR 结果 toast**：手动识别单张发票时，完成即显示结果
-  - 识别成功：显示 `识别成功 ¥XXX.XX`
-  - 未识别到金额：显示 `识别完成，未识别到金额`
-  - 识别失败：显示 `识别失败`
-  - 批量识别不逐条弹 toast，仅显示进度 toast
-- **OCR 按钮 spinner**：发票列表每项的 🔍 按钮在识别中显示旋转动画
-  - 识别中按钮禁用，防止重复触发
-  - 识别完成后恢复为可点击状态
-
-### 🔧 改进
-
-- **OCR_MAX_DIM 恢复为 960**（从 720 恢复）
-  - 720 对小字（密码区/备注栏/明细行）识别率不足，丢失严重
-  - 960 虽然检测慢约 40%、识别慢约 25%，但准确率显著提升
-- **OCR resize 滤波器恢复为 Triangle**（从 Nearest 恢复）
-  - Nearest 对细笔画/小数点有锯齿/像素化，降低识别率
-  - Triangle resize 仅占 OCR 总耗时 5-10%，整体影响 ~1-2%
-
----
+- 新增一键识别按钮 🔍（自动识别所有未识别发票，显示进度）
+- 单文件 OCR 结果 toast + OCR 按钮 spinner 动画
+- OCR_MAX_DIM 恢复为 960（720 对小字识别率不足），resize 滤波器恢复 Triangle
 
 ## v1.7.5 — OCR 默认关闭 + 手动识别按钮
 
-### 🆕 新功能
-
-- **OCR 自动识别默认关闭**：添加发票时不再自动 OCR，减少不必要的等待
-  - 设置面板新增 "🔍 OCR 识别" 区域，包含"自动识别"开关
-  - 开启后恢复之前的行为：添加发票时自动 OCR 识别金额、销售方等信息
-  - 关闭时仅提示"已添加 N 张发票..."，不再显示"识别中"
-  - 设置持久化到 `localStorage`，重启后保留
-- **手动识别按钮 🔍**：发票列表每项新增 OCR 手动触发按钮
-  - 点击 🔍 按钮即可对单张发票发起 OCR 识别
-  - 识别中（`_ocrPending`）或加载中时按钮禁用
-  - 非 Tauri 环境提示"OCR 识别需要桌面版"
-
-### 🔧 改进
-
-- 设置面板拆分：原 "🔍 发票查验" 区域一分为二——"🔍 OCR 识别" + "✅ 发票查验"
-- 重置设置时同步清除 `fapiao-ocr-enabled` localStorage 项
-
----
+- OCR 自动识别默认关闭，设置面板新增"自动识别"开关
+- 发票列表每项新增 🔍 手动识别按钮
 
 ## v1.7.4 — OCR 速度优化
 
-### 🚀 性能优化
+- `ocr_pdf_page` 零 IPC 往返：Rust 渲染+OCR 一体化，省掉 base64 传输链路
+- OCR_MAX_DIM 960→720，resize 滤波器 Triangle→Nearest
 
-- **`ocr_pdf_page` 零 IPC 往返**：PDF 页面 OCR 不再走 base64 传输
-  - Rust 侧新增 `ocr_pdf_page(pdfPath, pageIndex, dpi)` — 渲染+OCR 在 Rust 内存中完成
-  - 省掉 `Rust→base64→IPC→前端downsample→base64→IPC→Rust解码→OCR` 整条链路
-  - 前端 `applyOcrPdfPage(fileObj)` → `invoke('ocr_pdf_page', {pdfPath, pageIndex})`
-  - `createFileObj` 新增 `_pdfPath`/`_pdfPageIdx` 字段，PDF 加载时填充
-  - `applyOcrAsync` 三路分支: isPdfPage → applyOcrPdfPage | hasFilePath → applyOcr(filePath) | else → downsample+applyOcr
-- **OCR_MAX_DIM 960→720**：发票文字大且清晰，720 足够，检测提速约 40%，识别提速约 25%
-- **resize 滤波器 Triangle→Nearest**：OCR 对插值质量不敏感，Nearest 快 3-5x
-  - `run_ocr_on_image` 和 `render_and_ocr_pdf` 两处 OCR resize 均改为 Nearest
-  - 非 OCR 的 PDF 渲染 resize 保持 Triangle
+## v1.7.3 — PDF 渲染与 OCR 分离 + 文本提取架构
 
----
-
-## v1.7.3 — PDF 渲染与 OCR 分离 + 文本提取架构 + 交互增强
-
-### 🚀 重大变更
-
-- **PDF 渲染与 OCR 分离**：`render_and_ocr_pdf` → `render_pdf_pages`（仅渲染），OCR 改为后台队列异步执行
-  - 预览即时显示（无需等OCR完成），占位符快速替换为真实预览
-  - OCR 通过 `applyOcrAsync` 队列异步执行，不阻塞 UI
-  - PDF 页面的 OCR 数据通过 `downsampleForOcr` 缩放到 960px 后 IPC 传输，减少开销
-  - 图片文件仍优先使用 `_filePath` 直读磁盘，不走 base64
-
-### 🆕 新功能
-
-- **文本优先提取架构**：OCR 文本格式整齐，用正则直接提取结构化字段（文本提取优先，坐标仅作回退）
-  - 发票号码：`发票号码：(\d{8,20})`
-  - 开票日期：`开票日期：(YYYY年MM月DD日)`
-  - 名称：优先 "购买方名称："/"销售方名称："，回退通用 "名称："（第1=购买方，第2=销售方）
-  - 信用代码：优先 "统一社会信用代码"/"纳税人识别号" 后跟代码
-  - 使用 `_normTextForExtract()` 保留换行符（普通 `normText` 会折叠 CJK 换行导致多行合并）
-- **文本金额提取（三阶段）**：`_extractAmountsByText`
-  - Phase 1 — 含税价：`小写¥金额` → `小写bare金额` → `价税合计后¥` → `价税合计后bare`
-  - Phase 2 — 数学验证配对（PRIMARY）：含税价已知后，扫描全文所有金额，找 A+B=含税价 的配对（大=不含税，小=税额），数学关系不可伪造
-  - Phase 3 — 区域解析（FALLBACK）：截取 standalone "合计" 到 "价税合计" 之间的文本
-- **OCR 进度 toast**：「识别中，剩余 N 张...」实时更新，每完成一张递减
-- **OCR spinner**：`_ocrPending` 标志 + `.ocr-spinner` CSS 动画，识别中显示旋转图标替代空金额
-- **点击跳转预览**：点击左侧发票项自动跳转右侧预览到对应页面
-  - 未勾选的发票自动勾选
-  - `_activeFileIdx` 跟踪高亮项，`.active-item` CSS 蓝色左边框高亮
-  - 翻页时 `syncActiveFileFromPage()` 自动更新侧边栏高亮
-- **新增字段**：`invoiceNo`（发票号码）、`invoiceDate`（开票日期）、`buyerName`（购买方名称）、`buyerCreditCode`（购买方信用代码）
-- **发票类型检测**：`_detectInvoiceType()` — vat/ticket/ride/unknown
-
-### 🔧 改进
-
-- **坐标提取降级为回退**：`extractByCoordinates` 各步骤加 `if (!field)` 保护，仅填充文本提取未找到的字段
-- **旧正则路径删除**：`extractInvoiceInfo()` 已移除
-
----
-
-## v1.7.2 — PDF 渲染+OCR 一体化（已废弃）
-
-### 🚀 变更（v1.7.3 已废弃此路径）
-
-- **PDF 一步到位**（`render_and_ocr_pdf`）：WinRT 渲染 PDF 页 → 直接 OCR → 一起返回预览图+OCR结果
-- v1.7.3 改用 `render_pdf_pages`（仅渲染）+ 后台 OCR 队列，此路径已废弃
-
----
+- PDF 渲染与 OCR 分离：`render_and_ocr_pdf` → `render_pdf_pages`（仅渲染）+ 后台异步 OCR 队列
+- 文本优先提取架构：正则直接提取 → 坐标回退
+- 金额三阶段提取：含税价 → 数学验证配对(A+B=含税) → 区域解析
+- 新增字段：invoiceNo、invoiceDate、buyerName、buyerCreditCode
+- 发票类型检测 `_detectInvoiceType()`
+- 点击跳转预览、OCR 进度 toast
 
 ## v1.7.1 — 移除 PDF.js，纯原生渲染
 
-### 🚀 重大变更
+- 移除 PDF.js（节省 ~3.6MB），PDF 渲染完全走 WinRT，文字提取完全走 PP-OCRv5
 
-- **移除 PDF.js**（节省 ~3.6MB 安装包体积）
-  - 删除 `src/pdf.min.js`、`src/pdf.worker.min.js`
-  - 删除 `src/cmaps/` 目录（168 个 bcmap 文件）
-  - 删除 `src/standard_fonts/` 目录（14 个字体文件）
-  - PDF 渲染完全走 WinRT `Windows.Data.Pdf` 原生路径
-  - 文字提取完全走 PP-OCRv5，不再需要 PDF.js 文本层
+## v1.7.0 — 含税价同行多金额修复
 
----
-
-## v1.7.0 — 含税价同行多金额修复 + 下方优先
-
-### 🐛 修复
-
-- **修复含税价仍匹配到同行不含税价**（含税价修复4）
-  - **根因**：发票布局中，不含税金额+税额在同一行（如 `¥172.68 ¥5.18`），含税价在更下方（如 `¥177.86`）。`_findNearbyAmount`/`findAmountNearKeyword` 按距离排序会误匹配同行不含税价
-  - **修复**：检测匹配金额同行是否有其他金额→如有，搜索下方更大金额作为含税价
-  - `extractByCoordinates` Step 1：价税合计关键词找到金额后，同行多金额→搜索下方
-  - `extractByCoordinates` Step 1.5：小写关键词彻底重写→优先找下方金额
-  - `findAmountNearKeyword` 新增 `preferBelow` 参数→同行多金额+有下方候选时选下方
-  - 关键规律：含税价在`（小写）`右侧，比不含税价+税额行更下方
-
----
+- 修复含税价匹配到同行不含税价：同行多金额时搜索下方更大金额
 
 ## v1.6.9 — OCR 引擎切换：WinRT → ocr-rs (PP-OCRv5 + MNN)
 
-### 🚀 重大变更
+- OCR 引擎从 WinRT 切换为 ocr-rs (PaddleOCR + MNN)，PP-OCRv5 准确率提升约 13%
+- 正则优化适配 PP-OCRv5：跨行匹配、数字空格归一化、全角￥归一化、CJK 跨行归一化
+- 字符宽度权重模型、四角多边形坐标传递、OCR 置信度传递
 
-- **OCR 引擎从 WinRT `Windows.Media.Ocr` 切换为 `ocr-rs` (PaddleOCR + MNN)**
-  - 使用 PP-OCRv5 mobile 模型，识别准确率较 v4 提升约 13%
-  - 支持简体中文、繁体中文、英文、日文、中文拼音 5 大文字类型
-  - 增强手写体、竖排文本、生僻字识别能力
-  - 字符集从 6,623 字（v4）扩展至 18,383 字（v5）
-  - 模型文件：`PP-OCRv5_mobile_det.mnn` (4.5MB) + `PP-OCRv5_mobile_rec.mnn` (15.8MB) + `ppocr_keys_v5.txt` (90KB)
+## v1.6.8 — 含税价 findLastNum + 年份过滤
 
-### 🔧 正则优化（适配 PP-OCRv5 输出特征）
+- 含税价改用 `findLastNum()`；车票价格过滤年份误匹配
 
-- **跨行匹配**：所有金额提取正则从 `[^\d]*?` / `[^\n]*?` 改为 `[\s\S]*?`，支持 PP-OCRv5 将关键词和金额拆成多行的情况
-- **数字空格归一化增强**：迭代归并数字间空格（`3 1 7.00` → `317.00`），处理 PP-OCRv5 在数字中间插入空格的问题
-- **全角￥归一化**：`￥` 后空格归一化（`￥ 317.00` → `￥317.00`）
-- **PP-OCRv5 特殊字符归一化**：中间点/项目符号→小数点（`3·00` → `3.00`），数字间O→0（`3O7` → `307`）
-- **CJK 跨行归一化**：相邻 CJK 字符间的换行符归并（`价\n税` → `价税`），修复 PP-OCRv5 拆行问题
+## v1.6.7 — 含税价/不含税价关键字精准匹配
 
-### 🧮 坐标优化
+- 含税价上下文感知匹配，新增 `小写` 关键字；不含税价首选 standalone "合计"
 
-- **字符宽度权重模型**：`split_line_to_words` 从按字符数均分宽度改为字符宽度权重分配（CJK=2.0, Latin/digit=1.0），大幅提升 word-level 坐标准确度
-- **四角多边形坐标传递**：`OcrLine` 新增 `points` 字段（4 个角点），传递 PP-OCRv5 检测模型的多边形坐标到前端
-- **OCR 置信度传递**：`OcrLine` 新增 `confidence` 字段，前端可过滤低置信度结果（< 0.3 阈值）
+## v1.6.6 — 车票位置提取 + 发票含税价修复
 
-### 📦 模型文件
+- 车票金额移至左半侧位置提取；含税价增加部分关键词匹配+位置反推
 
-- 从 RapidOCR/ModelScope 下载 ONNX 格式模型，本地用 MNNConvert 转为 MNN 格式
-- 模型打包到安装程序，无需联网下载
+## v1.6.5 — OCR ¥符号误识别修复
 
-### 🧹 清理
+- ¥↔1 误识别自动修正，新增 `normalizeOcrCurrency()`；修复全文折叠/展开
 
-- 移除 `Cargo.toml` 中不再需要的 `windows` crate features（`Win32_System_Threading`、`Graphics_Imaging`）
-- OCR 后端代码完全移除 WinRT `Windows.Media.Ocr` 依赖，使用纯 Rust 的 `ocr-rs`
+## v1.6.4 — 车票票种标签
 
----
+- 车票票种标签显示；车票坐标邻近金额提取
 
-## v1.6.8 — 含税价 findLastNum + 年份过滤 + 移除进度条
+## v1.6.3 — OCR ¥→1 误识别修复
 
-### 🐛 修复
-
-- **修复含税价仍匹配到不含税价**
-  - **根因**：`findFirstNum` 取关键词后第一个数字，但含税价在发票 OCR 文本最下方，第一个匹配到的常是不含税价行
-  - **修复**：新增 `findLastNum()` 辅助函数，取关键词后最后一个有效数字，含税价 Step 1 正则 fallback 全部改用 `findLastNum`
-- **修复车票价格匹配到年份（如 2025）**
-  - **根因**：OCR 文本中 "2025年01月" 的 "2025.01" 被 `\d+\.\d{2}` 正则匹配为价格
-  - **修复**：新增 `isLikelyYearOrDate()` — 过滤 1900-2099 范围值和 "20XX.XX" 日期格式；应用于 `findFirstNum`、`findLastNum`、`findAmountNearKeyword`、`findNumberNearWord`、`collectAmountWords`、Step 6 车票全部正则
-  - 车票价格上限统一 ¥5000，下限 ¥5
-- **移除顶部导入进度条**：遮挡标题内容，下方 toast 加载动画已足够
-
-### ⚠️ 已知问题
-
-- **OCR 识别准确率较低**：当前使用 Windows 系统 OCR 引擎（WinRT `Windows.Media.Ocr`），对发票版式适应性有限，金额/销售方/不含税价等字段可能出现误识别。建议用户核对 OCR 自动填充结果。**后续版本计划切换至更精准的 OCR 引擎以提升识别率。**
-
----
-
-## v1.6.7 — 修复含税价/不含税价关键字精准匹配
-
-### 🐛 修复
-
-- **修复含税价匹配到不含税价的数字**
-  - **根因**：`合\s*计` 关键字被直接用于含税价匹配，但发票中 standalone 的"合计"实际是不含税金额行的标签（"合计 100.00"），不是价税合计
-  - **修复**：含税价的"合计"匹配改为上下文感知 — 只有左侧有"价"的"合计"才用于含税价（是"价税合计"的 OCR 拆分）
-  - **新增**不含税价首选关键字：standalone "合计"（左侧无"价"）匹配不含税金额，放在"金额"之前
-  - **新增** `小写` 关键字匹配含税价 — "（小写）"紧挨含税价数字（来自"价税合计（大写）...（小写）¥113.00"），非常特异
-  - **新增** `findNumberNearWord()` 辅助函数：接受 word 对象直接查找近邻数字，支持上下文感知匹配
-
-### 🔧 改进
-
-- 含税价匹配优先级：`价税合计` → `价税` → `税合计` → `合计`（仅左侧有价） → `小写` → 全图兜底
-- 不含税价匹配优先级：`合计`（standalone） → `金额` → `不含税金额`
-
----
-
-## v1.6.6 — 修复金额识别：车票位置提取 + 发票含税价
-
-### 🐛 修复
-
-- **修复发票含税价仍显示不含税价**
-  - **根因1**：OCR 将"价税合计"拆分为"价税"+"合计"等多个 word，`findAmountNearKeyword` 的完整关键词匹配失败，导致 `amountTax` 未找到，auto-fallback 错误地将 `amountTax = amountNoTax`
-  - **修复**：增加部分关键词匹配（"价税"、"税合计"），在金额区域用坐标位置找最大值作为含税价候选
-  - **新增** `collectAmountWords()` 函数：收集区域内所有金额 word 并按值排序，取最大值作为含税价
-  - **新增** auto-fallback 位置反推：当只有 `amountNoTax` 时，搜索全图中比它大的最小金额作为 `amountTax`
-  - `cleanOcrAmtStr` 提取为全局函数，供 `collectAmountWords` 调用
-  - 含税价位置兜底：金额区域最大值 = 含税价候选，自动推导不含税价和税额
-
-- **修复车票金额提取不准确**
-  - **根因**：车票"票价"在左半侧 40-50% 高度位置，被 `classifyRegion` 归类为 `buyer` 区域，导致通用发票 Step 0 可能在错误区域提取
-  - **修复**：车票提取（Step 0）移至发票提取（Step 1）之前，跳过通用发票区域分类
-  - **新增**车票位置提取：在左半侧 30-60% 高度区域搜索最大金额作为票价
-  - 车票关键词匹配新增"学生价"
-
-### 🔧 改进
-
-- **关闭进程机制简化**：移除双线程延迟退出方案，改为 `CloseRequested` 中立即 `std::process::exit(0)` + `Destroyed` 事件兜底
-- **COM 对象显式释放**：OCR 和 PDF 渲染中所有 WinRT COM 对象逆序 drop/Close，确保进程退出前资源释放
-
----
-
-## v1.6.5 — 修复 OCR 金额识别和全文折叠
-
-### 🐛 修复
-
-- **修复 OCR ¥符号误识别导致金额解析错误**
-  - **根因**：OCR 常将数字"1"误读为"¥"符号（两者字形相似），产生"双¥"模式如 `¥¥72.68`（实际应为 `¥172.68`）、`￥¥07.00`（实际应为 `¥107.00`），导致不含税价被错误解析为 72.68 或 7.00
-  - 新增 `normalizeOcrCurrency()` 函数，在金额提取前规范化货币符号
-  - 在 `buildWordMap` 中对 word 文本也做规范化，确保坐标感知提取正确
-  - 关键词正则改用 `\d{3,}` 替代 `\d{2,}`，避免3位数金额的"1"被误判为误读¥
-  - 关键词正则排除 ¥ 字符 `[^\d¥￥]*?`，避免对已规范化文本重复替换产生"双¥"
-
-- **修复 OCR 全文折叠/展开功能无效**
-  - 添加通用 `.hidden { display: none; }` 规则
-
----
-
-## v1.6.4 — 车票票种标签 + 坐标邻近金额提取
-
-### 🆕 新功能
-
-- **车票票种标签**：`getTicketTypeLabel()` 自动识别铁路电子客票/出租车票/网约车票，显示为蓝色 `.ticket-badge` 替代空白销售方
-
-### 🔧 改进
-
-- **车票专用坐标邻近金额提取**（Step 0.5）：`findAmountNearKeyword` + 'any' 区域，用于车票"票价"等关键词近邻匹配
-
----
-
-## v1.6.3 — 修复 OCR ¥→1 误识别
-
-### 🐛 修复
-
-- **修复 OCR 将 ¥ 误识别为"1"**：金额关键词后"1XXX.XX"自动转为"¥XXX.XX"
-- **新增 `cleanOcrAmtStr()`**：无¥前缀时剥离疑似误读的1（仅4+位数）
-- 过滤裸"1"数字词（`parseInt < 2`）
-
----
+- 金额关键词后"1XXX.XX"自动转为"¥XXX.XX"
 
 ## v1.6.1 — 坐标感知增强
 
-### 🔧 改进
-
-- `findAmountNearKeyword` 增加"下方搜索"：表格布局中关键词在表头、数值在下一行
-- maxLineDist 从 30→80，支持跨行邻近匹配；接受1-2位小数
-- Step 0 扩展：不含税金额（"金额"关键词→邻近数值）、税额（"税额"关键词→邻近数值）
-- Cross-validation：amountTax = amountNoTax + taxAmount，三值互相推导
-- 新增 `taxAmount` 字段：编辑弹窗、汇总栏均已支持
-
----
+- 不含税金额/税额关键词邻近提取；三值交叉验证；新增 `taxAmount` 字段
 
 ## v1.6.0 — 坐标感知 OCR 提取
 
-### 🆕 新功能
+- word 级坐标返回、区域分类、销售方 7 策略、公司后缀补全、车票检测
 
-- **坐标感知提取**：`ocr_image_from_data` 返回 JSON（含 word 级坐标），不再仅返回纯文本
-- **区域分类**：`classifyRegion()` 按位置分区 — y<55% 左半=buyer/右半=seller，55-75%=amount，>75%=remark
-- **Strategy 0**（最高优先级）：只在 seller 区域提取名称+信用代码，彻底消除买卖方混淆
-- **Step 0**（金额最高优先级）：先在 amount 区域提取，坐标感知关键词+数值近邻匹配
-- **销售方 7 策略**：坐标感知 → "销售方名称:" → "名称:"位置推导 → 替代标签 → 信用代码近邻 → 关键词后匹配 → 全文兜底
-- **公司后缀补全**：有限合伙/合伙企业/个体工商户/工作室/经营部/分公司等
-- **独立信用代码匹配**：OCR 遗漏前缀时用 `[0-9][A-Z0-9]{17}` 独立匹配
-- **PDF.js 伪 word map**：用 `transform[4,5]` 构建坐标，Y轴翻转
-- **车票检测**：`isTicketText()` 检测车票/出租车/网约车关键词，车票跳过销售方提取
+## v1.5.3 — 关闭后残留进程修复
 
----
+- `SHUTTING_DOWN` AtomicBool + `std::process::exit(0)` 立即终止
 
-## v1.5.3 — 彻底修复关闭后残留进程
+## v1.5.2 — 启动白屏根治
 
-### 🐛 修复
+- `"visible": false` 根治白屏；打印机按需加载；销售方识别增强
 
-- **彻底修复关闭后残留进程问题**
-  - **根因**：Tauri 同步 command 运行在 tokio 的 `spawn_blocking` 线程池中。OCR/PDF 渲染中的 WinRT `.get()` 调用会阻塞 OS 线程数秒。用户关闭窗口后，tokio 的 `Runtime::drop()` 会**无限等待**所有 `spawn_blocking` 任务完成，导致 WebView2 子进程沦为孤儿进程。
-  - **修复**：关闭窗口时设置 `SHUTTING_DOWN` 标记并通知前端停止 OCR 队列，然后直接调用 `std::process::exit(0)`。该 API 调用 Windows `ExitProcess`，立即终止进程及所有线程。
-  - `SHUTTING_DOWN` AtomicBool：OCR/PDF渲染/图片解码/PDF生成入口+循环中检查，关闭时拒绝新请求并中止进行中的循环
-  - 前端：`beforeunload` 兜底 + `_drainOcrQueue` 递归时检查 `__TAURI_CLOSING__`
+## v1.5.0 — 前端模块化拆分
 
----
+- 拆分 ocr.js / layout.js / print.js / app.js；image 0.25 + printpdf 0.9
 
-## v1.5.2 — 启动白屏根治、打印机按需加载、销售方识别增强
+## v1.2.1 — 打印机选择
 
-### 🐛 修复
+- 打印机选择、直接打印模式、打印机列表刷新
 
-- **启动白屏根治**：`tauri.conf.json` 中 `"visible": false` 彻底解决，删除无效的 `window.hide()` + splash 方案
-- **打印机按需加载**：首次点击打印面板时才获取打印机列表，避免启动时 Win32 API 调用阻塞
+## v1.2.0 — 画质优化、OFD 支持、金额识别
 
-### 🔧 改进
+- OFD 格式支持、OCR 金额识别、金额统计、版面布局增强、深色模式、自适应 DPI
 
-- **销售方识别增强（12策略+公司后缀补全）**
+## v1.1.0 — WinRT PDF 渲染
 
----
+- `Windows.Data.Pdf` 原生渲染 + PDF.js 回退 + CMap 中文支持
 
-## v1.5.1 — 销售方识别增强、金额识别补全
+## v1.0.0 — 初始版本
 
-### 🔧 改进
-
-- **销售方识别增强（9策略）**
-- **金额识别补全**：价税合计+¥直接匹配、合计金额/金额合计、税价合计(OCR颠倒)、合计附近¥双向、全角￥、定额发票短文本、开票金额/发票金额
-- **导入动画优化**
-
----
-
-## v1.5.0 — image 0.25 + printpdf 0.9 + 前端模块化拆分
-
-### 🆕 新功能
-
-- **前端模块化拆分**（v1.5.0）：
-  - `src/ocr.js` — OCR 提取 + `applyOcr()` 统一入口
-  - `src/layout.js` — `calculateLayout()` 纯函数 + HTML预览渲染
-  - `src/print.js` — 打印/导出 PDF
-  - `src/app.js` — 主入口、状态、文件加载
-
-### 🔧 改进
-
-- **image crate 升级到 0.25**：原生支持 WebP，`DynamicImage::from(buf)` 新 API
-- **printpdf 升级到 0.9**：`PdfPage::new()` + `Op::UseXobject` 新 API，`doc.save()` 直接返回字节
-- **前端 Canvas 转换移除**：`ensureRustCompatibleUrl()` 和 `processTrim()` 中的 Canvas 转换代码已删除，data URL 直接透传 Rust
-- **Rust 图片/XObject 缓存**：避免重复解码
-
----
-
-## v1.4.0 — 修复6项问题
-
-### 🐛 修复
-
-- 销售方识别/车票跳过/布局优化/导入性能/金额识别/进程残留
-
----
-
-## v1.2.1 — 打印优化、打印机选择
-
-### 🆕 新功能
-
-- **打印机选择**：可在左侧「🖨 打印」面板选择特定打印机
-- **直接打印模式优化**：使用 winprint 直接发送 PDF 到 Windows Print Spooler，无需 PDF 阅读器
-
-### 🔧 改进
-
-- **打印机列表刷新**：使用 winprint 原生 API 获取打印机列表
-- **默认打印机获取**：使用 Win32 GetDefaultPrinterW API
-- **打印模式持久化**：打印模式设置保存到 localStorage
-
----
-
-## v1.2.0 — 画质优化、OFD支持、金额识别、排版增强
-
-### 🆕 新功能
-
-- **OFD 格式支持**：支持打开 OFD（电子发票标准格式），自动提取嵌入图片
-- **OCR 金额自动识别**：基于 WinRT OCR 引擎，零额外依赖
-- **金额统计**：文件列表底部实时显示已选发票金额汇总
-- **发票查验**：一键跳转国家税务总局发票查验平台
-- **版面布局增强**：9 个预设 + 自定义行列，工具栏快捷切换
-- **缩放功能增强**：Ctrl+滚轮、双击重置、Ctrl++/-/0 快捷键
-- **自适应 DPI 渲染**：小 PDF 页面自动提升渲染 DPI
-- **深色模式**：完整的深色主题支持
-- **设置面板扩展**
-
-### 🔧 改进
-
-- **DPI 常量统一**：前端和 Rust 端统一为 300
-- **Per-slot 边距**：每张发票在各自 slot 内有独立边距
-
-### 🐛 修复
-
-- CID 字体 PDF 拼接缺陷、OCR 多页中断、金额正则过严等
-
----
-
-## v1.1.0 — WinRT PDF渲染修复，中文发票完美显示
-
-### 🆕 新功能
-
-- **WinRT 原生 PDF 渲染**：使用 `Windows.Data.Pdf` API
-- **PDF.js 回退**：WinRT 失败时自动回退
-- **PDF.js CMap 配置**：中文 CID 编码字体正常渲染
-
----
-
-## v1.0.0 — 发票批量打印工具
-
-### 🆕 初始功能
-
-- PDF / JPG / PNG / BMP / WebP / TIFF 多格式支持
-- A4 / A5 / B5 / Letter / Legal 纸张规格
-- 1×1 / 1×2 / 2×2 版面布局
-- 拖放添加、排序、旋转、缩放
-- PDF 导出、打印
+- PDF/JPG/PNG/BMP/WebP/TIFF 多格式、纸张规格、版面布局、拖放排序、打印/导出
