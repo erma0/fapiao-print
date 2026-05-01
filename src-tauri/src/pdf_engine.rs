@@ -107,6 +107,7 @@ pub struct RenderedPage {
 
 /// Rendered PDF page with OCR result — avoids IPC round-trip for OCR.
 /// The image is rendered and OCR'd in Rust in a single pass.
+#[cfg(feature = "ocr")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedOcrPage {
@@ -258,7 +259,7 @@ pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedP
 ///   Rust render → base64 → IPC → frontend → downsample → base64 → IPC → Rust decode → OCR
 /// Instead: Rust render → decode in memory → OCR → return result directly.
 /// Returns OcrResult with coordinates in the original (full-DPI) pixel space.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "ocr"))]
 pub(crate) fn ocr_pdf_page(pdf_path: &str, page_index: u32, dpi: Option<u32>) -> Result<OcrResult, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
@@ -365,7 +366,7 @@ pub(crate) fn ocr_pdf_page(pdf_path: &str, page_index: u32, dpi: Option<u32>) ->
 /// Render PDF pages and run OCR in one pass — avoids the IPC round-trip
 /// where the frontend sends the rendered dataUrl back to Rust for OCR.
 /// The image is decoded from PNG bytes ONCE, OCR'd, then base64-encoded for preview.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "ocr"))]
 pub(crate) fn render_and_ocr_pdf(pdf_path: &str, dpi: u32) -> Result<Vec<RenderedOcrPage>, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
@@ -594,7 +595,7 @@ pub(crate) fn render_and_ocr_pdf(pdf_path: &str, dpi: u32) -> Result<Vec<Rendere
     Ok(results)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "ocr"))]
 pub(crate) fn render_and_ocr_pdf(_pdf_path: &str, _dpi: u32) -> Result<Vec<RenderedOcrPage>, String> {
     Ok(vec![])
 }
@@ -892,6 +893,7 @@ pub(crate) fn decode_base64_image(data_url: &str) -> Result<image::DynamicImage,
 // OCR — PaddleOCR via ocr-rs (MNN inference, high-accuracy Chinese OCR)
 // =====================================================
 
+#[cfg(feature = "ocr")]
 /// A single OCR word with its bounding rectangle
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -904,6 +906,7 @@ pub struct OcrWord {
 }
 
 /// A 2D point for polygon coordinates
+#[cfg(feature = "ocr")]
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrPoint {
@@ -912,6 +915,7 @@ pub struct OcrPoint {
 }
 
 /// An OCR line containing words, with line-level bounding polygon and confidence
+#[cfg(feature = "ocr")]
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrLine {
@@ -926,6 +930,7 @@ pub struct OcrLine {
 }
 
 /// Structured OCR result with coordinates
+#[cfg(feature = "ocr")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrResult {
@@ -940,7 +945,9 @@ pub struct OcrResult {
 
 /// Lazy-initialized global OCR engine (PaddleOCR + MNN)
 /// Initialized on first use, persists for the app lifetime.
+#[cfg(feature = "ocr")]
 use std::sync::Mutex;
+#[cfg(feature = "ocr")]
 static OCR_ENGINE: Mutex<Option<ocr_rs::OcrEngine>> = Mutex::new(None);
 
 /// Get or create the OCR engine.
@@ -948,6 +955,7 @@ static OCR_ENGINE: Mutex<Option<ocr_rs::OcrEngine>> = Mutex::new(None);
 ///   - PP-OCRv5_mobile_det.mnn  (detection model)
 ///   - PP-OCRv5_mobile_rec.mnn  (recognition model)
 ///   - ppocr_keys_v5.txt        (character set, 18383 chars)
+#[cfg(feature = "ocr")]
 fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrEngine>>, String> {
     let mut lock = OCR_ENGINE.lock().map_err(|e| format!("OCR引擎锁失败: {}", e))?;
 
@@ -1033,16 +1041,17 @@ fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrE
 }
 
 /// Maximum longest-side dimension for OCR input.
-/// Maximum longest-side dimension for OCR input.
 /// 960px preserves small text (密码区/备注栏/明细行) that 720 would blur out.
 /// Speed trade-off: ~40% slower detection + ~25% slower recognition vs 720,
 /// but accuracy on dense/small-text invoices is significantly better.
+#[cfg(feature = "ocr")]
 const OCR_MAX_DIM: u32 = 960;
 
 /// OCR an image from a file path or base64 data URL.
 /// When `file_path` is provided, reads the image directly from disk — skipping
 /// the expensive base64 encode→IPC→decode round-trip.
 /// Falls back to `data_url` when `file_path` is None or file read fails.
+#[cfg(feature = "ocr")]
 pub fn ocr_image(data_url: &str, file_path: Option<&str>) -> Result<OcrResult, String> {
     // Try file_path first (skip base64 entirely)
     if let Some(path) = file_path {
@@ -1073,6 +1082,7 @@ pub fn ocr_image(data_url: &str, file_path: Option<&str>) -> Result<OcrResult, S
 
 /// OCR an image from base64 data URL, return structured result with coordinates.
 /// Internal helper — prefer `ocr_image()` which supports file_path.
+#[cfg(feature = "ocr")]
 pub fn ocr_image_from_data(data_url: &str) -> Result<OcrResult, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
@@ -1108,6 +1118,7 @@ pub fn ocr_image_from_data(data_url: &str) -> Result<OcrResult, String> {
 
 /// Core OCR logic: takes a pre-decoded image, resizes if needed, runs OCR,
 /// and returns structured result with coordinates.
+#[cfg(feature = "ocr")]
 fn run_ocr_on_image(mut img: image::DynamicImage) -> Result<OcrResult, String> {
     use std::time::Instant;
     let t0 = Instant::now();
@@ -1262,6 +1273,7 @@ fn run_ocr_on_image(mut img: image::DynamicImage) -> Result<OcrResult, String> {
 /// - CJK characters are kept as individual tokens (each character = one word)
 /// - Non-CJK runs (Latin, digits, symbols) are kept as single tokens
 /// - Spaces are included as part of adjacent tokens (not separate words)
+#[cfg(feature = "ocr")]
 fn split_line_to_words(text: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut current_non_cjk = String::new();
@@ -1296,6 +1308,7 @@ fn split_line_to_words(text: &str) -> Vec<String> {
 /// CJK characters are approximately 2x wider than Latin/digits in most fonts.
 /// Fullwidth forms (FF00-FFEF) are also 2x.
 /// This produces more accurate x/w estimates than equal-width-per-character.
+#[cfg(feature = "ocr")]
 fn token_width_weight(token: &str) -> f64 {
     token.chars().map(|ch| {
         let cp = ch as u32;
@@ -1316,6 +1329,7 @@ fn token_width_weight(token: &str) -> f64 {
 }
 
 /// Check if a character is CJK (Chinese, Japanese, Korean)
+#[cfg(feature = "ocr")]
 fn is_cjk_char(ch: char) -> bool {
     let cp = ch as u32;
     // CJK Unified Ideographs: 4E00-9FFF
@@ -1336,6 +1350,14 @@ fn is_cjk_char(ch: char) -> bool {
         0x30A0..=0x30FF
     )
 }
+
+/// Check whether OCR feature is available at runtime.
+#[cfg(feature = "ocr")]
+pub fn check_ocr_available() -> bool { true }
+
+/// Check whether OCR feature is available at runtime.
+#[cfg(not(feature = "ocr"))]
+pub fn check_ocr_available() -> bool { false }
 
 // =====================================================
 // OFD Format Support
@@ -1926,6 +1948,10 @@ pub fn generate_pdf_from_layout(
     }
 
     // Step 3: Save PDF — can be slow for large documents
+    // Check shutdown before starting the expensive save operation
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭，PDF生成已中止".to_string());
+    }
     if let Some(ref cb) = on_progress {
         cb("save", 0, 1);
     }

@@ -1,9 +1,9 @@
 use tauri::{command, Emitter};
 
-// v1.7.0: ocr-rs (PP-OCRv5 + MNN) replaces WinRT OCR, coordinate-first extraction
-
 mod pdf_engine;
-use pdf_engine::{PrinterInfo, FileData, RenderedPage, RenderedOcrPage, ComGuard, LayoutRenderRequest, OcrResult};
+use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
+#[cfg(feature = "ocr")]
+use pdf_engine::{OcrResult, RenderedOcrPage};
 
 // =====================================================
 // Tauri Commands
@@ -33,6 +33,7 @@ fn render_pdf_pages(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedPa
 
 /// Render PDF pages AND run OCR in one pass — avoids IPC round-trip.
 /// Returns preview images + OCR results together.
+#[cfg(feature = "ocr")]
 #[command]
 fn render_and_ocr_pdf(pdf_path: String, dpi: Option<u32>) -> Result<Vec<RenderedOcrPage>, String> {
     use std::sync::atomic::Ordering;
@@ -66,6 +67,7 @@ fn open_url(url: String) -> Result<(), String> {
 /// When `filePath` is provided, Rust reads the image directly from disk — skipping the
 /// expensive base64 encode→IPC→decode round-trip (saves ~30% data + CPU for large images).
 /// Falls back to `dataUrl` when `filePath` is None or file read fails.
+#[cfg(feature = "ocr")]
 #[command]
 fn ocr_image(data_url: String, file_path: Option<String>) -> Result<OcrResult, String> {
     use std::sync::atomic::Ordering;
@@ -78,6 +80,7 @@ fn ocr_image(data_url: String, file_path: Option<String>) -> Result<OcrResult, S
 /// Render a single PDF page and run OCR on it — zero IPC round-trip.
 /// The frontend calls this instead of `render_pdf_pages` + `ocr_image` for PDF pages,
 /// avoiding the expensive Rust→base64→IPC→frontend→downsample→base64→IPC→Rust cycle.
+#[cfg(feature = "ocr")]
 #[command]
 fn ocr_pdf_page(pdf_path: String, page_index: u32, dpi: Option<u32>) -> Result<OcrResult, String> {
     use std::sync::atomic::Ordering;
@@ -85,6 +88,13 @@ fn ocr_pdf_page(pdf_path: String, page_index: u32, dpi: Option<u32>) -> Result<O
         return Err("应用正在关闭".to_string());
     }
     pdf_engine::ocr_pdf_page(&pdf_path, page_index, dpi)
+}
+
+/// Check whether OCR feature is available at runtime.
+/// Frontend calls this once at startup to decide whether to show OCR UI.
+#[command]
+fn check_ocr_available() -> bool {
+    pdf_engine::check_ocr_available()
 }
 
 /// Get backend configuration (for runtime DPI validation)
@@ -173,9 +183,6 @@ async fn generate_pdf_from_layout(
     });
 
     let output_for_print = output.clone();
-    // Move the CPU-heavy PDF generation onto a blocking thread.
-    // The async fn returns immediately, freeing the IPC thread so
-    // frontend can receive progress events and repaint the UI.
     let request = request;
     tauri::async_runtime::spawn_blocking(move || {
         pdf_engine::generate_pdf_from_layout(&request, &output, Some(progress_cb))
@@ -190,9 +197,9 @@ async fn generate_pdf_from_layout(
     #[cfg(target_os = "windows")]
     if should_print {
         if is_direct {
-            shell_execute_print(&output_for_print, printer_name.as_deref())?;
-        } else {
             shell_execute("print", &output_for_print.to_string_lossy())?;
+        } else {
+            shell_execute_print(&output_for_print, printer_name.as_deref())?;
         }
     }
 
@@ -233,9 +240,9 @@ fn print_pdf_file(
     #[cfg(target_os = "windows")]
     {
         if is_direct {
-            shell_execute_print(output, printer_name.as_deref())?;
-        } else {
             shell_execute("print", &output.to_string_lossy())?;
+        } else {
+            shell_execute_print(output, printer_name.as_deref())?;
         }
     }
 
@@ -287,9 +294,6 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
 }
 
 /// Print a PDF file via ShellExecuteW.
-/// - Direct mode with specific printer: uses "printto" verb (prints silently)
-/// - Direct mode without printer: uses "print" verb with SW_HIDE (prints to default)
-/// - Dialog mode: uses "print" verb with SW_SHOWNORMAL (shows print dialog)
 #[cfg(target_os = "windows")]
 fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
     use windows::core::HSTRING;
@@ -298,12 +302,9 @@ fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -
 
     let _com = ComGuard::init();
     unsafe {
-        // "printto" verb: prints to a specific printer without dialog
-        // "print" verb with SW_HIDE: prints to default printer without dialog
         let verb: HSTRING = if printer_name.is_some() { "printto" } else { "print" }.into();
         let file: HSTRING = pdf_path.to_string_lossy().to_string().into();
 
-        // Printer name goes into lpParameters for "printto" verb
         let printer_hstring: Option<HSTRING> = printer_name.map(|n| n.into());
         let params = printer_hstring.as_ref()
             .map(|h| windows::core::PCWSTR::from_raw(h.as_ptr()))
@@ -330,7 +331,7 @@ fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
@@ -348,9 +349,6 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
-            // Window starts hidden via tauri.conf.json "visible: false" — no white flash.
-            // The frontend will call show_window once the UI is fully rendered.
-            // Handle window events: close + drag-and-drop
             {
                 use tauri::Manager;
                 let window = app.get_webview_window("main").unwrap();
@@ -358,43 +356,23 @@ pub fn run() {
 
                 window.on_window_event(move |event| {
                     match event {
-                        // --- Close event: force-exit with short delay ---
-                        // ROOT CAUSE of residual processes:
-                        // Tauri sync commands run inside tokio's spawn_blocking pool.
-                        // WinRT .get() blocks the OS thread (OCR/PDF rendering can take seconds).
-                        // When the user closes the window, tokio's Runtime::drop() waits for
-                        // ALL spawn_blocking tasks to finish before allowing the process to exit.
-                        // If OCR is still running, tokio waits forever → the main process hangs.
-                        // WebView2 child processes (msedgewebview2.exe) then become orphans.
-                        //
-                        // FIX: Set SHUTTING_DOWN so in-flight loops check it on next iteration,
-                        // notify frontend to stop queuing new OCR work, then spawn a watchdog
-                        // that calls std::process::exit(0) after a short grace period.
-                        // std::process::exit(0) calls the Windows ExitProcess API, which
-                        // immediately terminates the process and ALL its threads — tokio cannot
-                        // block it. WebView2 jobs are cleaned up by the OS within milliseconds.
                         tauri::WindowEvent::CloseRequested { .. } => {
                             use std::sync::atomic::Ordering;
                             if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
-                                return; // Already shutting down — let close proceed
+                                return;
                             }
-                            // Signal all Rust long-running operations to abort on next checkpoint
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
-                            // Notify frontend to clear OCR queues and stop new work (best-effort)
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
-                            // Unconditional immediate process termination.
-                            // Do NOT use a delayed thread — if tokio is blocked on a
-                            // spawn_blocking WinRT .get() call, the delay thread may
-                            // race with the runtime drop and never get scheduled.
+                            // win.eval() is async — it posts JS to WebView2's event queue
+                            // but doesn't wait for execution. Without this sleep,
+                            // process::exit(0) kills the process before _tauriCleanup()
+                            // has a chance to run, leaving OCR queues dangling.
+                            std::thread::sleep(std::time::Duration::from_millis(100));
                             std::process::exit(0);
                         }
                         tauri::WindowEvent::Destroyed => {
-                            // Fallback: if CloseRequested was somehow bypassed
-                            // (e.g. programmatic close, system shutdown), ensure
-                            // the process dies immediately when the window is gone.
                             std::process::exit(0);
                         }
-                        // --- Drag-and-drop file handling ---
                         tauri::WindowEvent::DragDrop(drop_event) => {
                             if let tauri::DragDropEvent::Drop { paths, .. } = drop_event {
                                 let valid: Vec<String> = paths.iter()
@@ -418,23 +396,45 @@ pub fn run() {
                 });
             }
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            open_invoice_files,
-            get_printers,
-            render_pdf_pages,
-            render_and_ocr_pdf,
-            open_url,
-            open_file,
-            ocr_image,
-            ocr_pdf_page,
-            get_config,
-            get_temp_dir,
-            show_window,
-            trim_image,
-            generate_pdf_from_layout,
-            print_pdf_file,
-        ])
+        });
+
+    // Register commands — OCR commands are conditionally included
+    #[cfg(feature = "ocr")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        open_invoice_files,
+        get_printers,
+        render_pdf_pages,
+        render_and_ocr_pdf,
+        open_url,
+        open_file,
+        ocr_image,
+        ocr_pdf_page,
+        check_ocr_available,
+        get_config,
+        get_temp_dir,
+        show_window,
+        trim_image,
+        generate_pdf_from_layout,
+        print_pdf_file,
+    ]);
+
+    #[cfg(not(feature = "ocr"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        open_invoice_files,
+        get_printers,
+        render_pdf_pages,
+        open_url,
+        open_file,
+        check_ocr_available,
+        get_config,
+        get_temp_dir,
+        show_window,
+        trim_image,
+        generate_pdf_from_layout,
+        print_pdf_file,
+    ]);
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

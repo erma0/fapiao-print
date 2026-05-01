@@ -55,8 +55,11 @@
         <div class="sec-title">🗂 版面布局</div>
         <div class="grid-sel" id="gridSel" style="grid-template-columns:repeat(3,1fr)">
           <div class="go active" data-cols="1" data-rows="1" onclick="setLayoutPreset(1,1,null,this)">1×1</div>
+          <div class="go" data-cols="2" data-rows="1" onclick="setLayoutPreset(2,1,null,this)">2×1</div>
+          <div class="go" data-cols="3" data-rows="1" onclick="setLayoutPreset(3,1,null,this)">3×1</div>
           <div class="go" data-cols="1" data-rows="2" onclick="setLayoutPreset(1,2,null,this)">1×2</div>
           <div class="go" data-cols="2" data-rows="2" onclick="setLayoutPreset(2,2,null,this)">2×2</div>
+          <div class="go" data-cols="3" data-rows="3" onclick="setLayoutPreset(3,3,null,this)">3×3</div>
         </div>
         <div class="row" style="margin-top:4px;margin-bottom:0">
           <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
@@ -145,7 +148,7 @@
 
     <!-- Settings / Preferences panel -->
     <div class="sidebar-panel hidden" id="panel-prefs">
-      <div class="sec">
+      <div class="sec" id="ocrSection">
         <div class="sec-title">🔍 OCR 识别</div>
         <div class="trow"><label class="tlbl">自动识别</label><button class="tgl" id="toggleOcrEnabled" onclick="togglePref('ocrEnabled',this)"></button></div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后添加发票时自动 OCR 识别金额、销售方等信息；关闭后可手动点击识别按钮触发。</div>
@@ -189,8 +192,11 @@
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
         <button class="btn btn-sm ql-btn active" data-cols="1" data-rows="1" onclick="quickLayout(1,1)" title="1行1列">1×1</button>
+        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="1" onclick="quickLayout(2,1)" title="1行2列">2×1</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="1" onclick="quickLayout(3,1)" title="1行3列">3×1</button>
         <button class="btn btn-sm ql-btn" data-cols="1" data-rows="2" onclick="quickLayout(1,2)" title="2行1列">1×2</button>
         <button class="btn btn-sm ql-btn" data-cols="2" data-rows="2" onclick="quickLayout(2,2)" title="2行2列">2×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="3" onclick="quickLayout(3,3)" title="3行3列">3×3</button>
         <button class="btn btn-sm ql-btn ql-custom" onclick="showCustomLayoutModal()" title="自定义布局" style="font-size:12px">⚙</button>
       </div>
       <div class="toolbar-sep"></div>

@@ -303,7 +303,7 @@ function applyOcrResult(fileObj, ocrResult) {
  * @param {string} [filePath] - Disk path to the image file (preferred — skips base64)
  */
 async function applyOcr(fileObj, dataUrl, filePath) {
-  if (!isTauri || !invoke) return;
+  if (!hasOcr || !isTauri || !invoke) return;
   try {
     var ocrResult = await invoke('ocr_image', {
       dataUrl: dataUrl || '',
@@ -323,7 +323,7 @@ async function applyOcr(fileObj, dataUrl, filePath) {
  * Instead: Rust render → decode in memory → OCR → return result directly.
  */
 async function applyOcrPdfPage(fileObj) {
-  if (!isTauri || !invoke) return;
+  if (!hasOcr || !isTauri || !invoke) return;
   try {
     var ocrResult = await invoke('ocr_pdf_page', {
       pdfPath: fileObj._pdfPath,

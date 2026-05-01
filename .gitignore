@@ -33,3 +33,5 @@ desktop.ini
 
 # Temp screenshots
 screenshot_*.png
+
+dist/

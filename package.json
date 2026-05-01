@@ -1,12 +1,14 @@
 {
   "name": "fapiao-print",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "description": "电子发票批量打印工具 - Tauri 桌面应用",
   "scripts": {
     "dev": "tauri dev",
+    "dev:ocr": "tauri dev --features ocr",
     "build": "tauri build",
+    "build:ocr": "tauri build --features ocr --config src-tauri/tauri.ocr.conf.json",
+    "build:all": "node scripts/build-all.js",
     "build:debug": "tauri build --debug",
-    "release": "tauri build -- --config src-tauri/Cargo.toml",
     "tauri": "tauri"
   },
   "devDependencies": {

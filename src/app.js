@@ -6,7 +6,8 @@
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
-console.log('发票批量打印 v1.7.4 | isTauri:', isTauri);
+var hasOcr  = false; // Set to true at startup if OCR feature is available
+console.log('发票批量打印 v1.7.7 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
@@ -351,6 +352,7 @@ async function processFiles(files) {
 window._tauriCleanup = function() {
   window.__TAURI_CLOSING__ = true;
   _ocrQueue = [];
+  _ocrRunning = 0;
   _ocrToastActive = false;
   console.log('[Cleanup] OCR queue cleared, closing flag set');
 };
@@ -374,6 +376,7 @@ function _onOcrTaskDone() {
 }
 
 function _drainOcrQueue() {
+  if (window.__TAURI_CLOSING__) return;
   while (_ocrRunning < _ocrMaxConcurrent && _ocrQueue.length > 0) {
     var task = _ocrQueue.shift();
     _ocrRunning++;
@@ -407,7 +410,7 @@ function updateOcrAllBtn() {
 }
 
 function applyOcrAsync(fileObj, dataUrl) {
-  if (!isTauri || !invoke || window.__TAURI_CLOSING__) return;
+  if (!hasOcr || !isTauri || !invoke || window.__TAURI_CLOSING__) return;
   fileObj._ocrPending = true;
   updateFileItem(fileObj);
   updateOcrAllBtn();
@@ -640,11 +643,14 @@ function renderFileList() {
     var safePreviewUrl = escHtml(f.previewUrl || '');
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4');
+    var ocrBtnHtml = hasOcr
+      ? (f._ocrPending
+        ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
+        : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>')
+      : '';
     var actionBtns = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : (f._ocrPending
-        ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-        : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>');
+      : ocrBtnHtml + '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
     return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
@@ -671,10 +677,12 @@ function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; re
 function ocrFile(i) {
   var f = S.files[i];
   if (f._loading || f._ocrPending) return;
+  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
   applyOcrAsync(f, f.previewUrl);
 }
 function ocrAll() {
+  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
   var running = _ocrQueue.length + _ocrRunning;
   if (running > 0) { toast('正在识别中，请稍候'); return; }
@@ -1407,15 +1415,24 @@ document.getElementById('orientation').value = 'landscape';
 (function() {
   function showApp() {
     if (isTauri && invoke) {
+      // Check OCR availability at startup
+      invoke('check_ocr_available').then(function(available) {
+        hasOcr = !!available;
+        // Hide OCR-specific UI if OCR is not available
+        if (!hasOcr) {
+          var ocrAllBtn = document.getElementById('ocrAllBtn');
+          if (ocrAllBtn) ocrAllBtn.style.display = 'none';
+          var ocrSection = document.getElementById('ocrSection');
+          if (ocrSection) ocrSection.style.display = 'none';
+        }
+      }).catch(function() {});
       try { invoke('show_window'); } catch(e) {}
     }
   }
-  // Show window as soon as DOM is rendered — no splash, no flash
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', showApp);
   } else {
     showApp();
   }
-  // Fallback: show after 2s no matter what
   setTimeout(showApp, 2000);
 })();

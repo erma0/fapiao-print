@@ -1,5 +1,52 @@
 # 📋 更新日志
 
+## v1.7.7 — OCR Feature Flag（轻量版/OCR版双构建）
+
+### 🚀 重大变更
+
+- **OCR 功能改为可选 Feature Flag**：同一套代码，编译时决定是否包含 OCR
+  - 轻量版 `npm run build`：无 OCR，安装包 ~3.5MB
+  - OCR 版 `npm run build:ocr`：含 PP-OCRv5，安装包 ~24MB
+- **`check_ocr_available` 命令**：前端启动时检测 OCR 可用性，无 OCR 时自动隐藏相关 UI
+  - 隐藏：一键识别按钮、每张发票的 🔍 按钮、设置面板 OCR 区域
+  - 点击 OCR 功能时提示"此版本不支持 OCR 识别"
+- **模型文件不再默认打包**：`tauri.conf.json` 移除 `models/` 资源，OCR 版通过 `tauri.ocr.conf.json` 注入
+- **`ocr-rs` 改为 optional 依赖**：不启用 `ocr` feature 时不编译 MNN 推理引擎，exe 体积大幅缩小（~14MB → 无 OCR 版本无需模型）
+- **一键全量构建脚本** (`scripts/build-all.js`)：`npm run build:all` 自动编译轻量版 + OCR 版，产出 4 个发布产物
+- **双配置文件**：`tauri.conf.json`（轻量版，无 models）+ `tauri.ocr.conf.json`（OCR 版，含 models 资源）
+- **Rust 条件编译**：所有 OCR 相关代码用 `#[cfg(feature = "ocr")]` 包裹，`invoke_handler` 按 feature 注册不同命令集
+
+### 🐛 修复
+
+- **修复打印模式分支反转**：直接打印和对话框打印的函数调用搞反了，导致"直接打印"实际弹出对话框、"对话框打印"实际直接打印
+- **修复关闭时 OCR 队列残留**：`_tauriCleanup` 增加 `_ocrRunning = 0`，`_drainOcrQueue` 增加 `__TAURI_CLOSING__` 检查
+- **修复关闭时 JS 清理未执行**：`process::exit(0)` 前增加 100ms sleep，让 `_tauriCleanup()` 有机会执行
+
+### 🔧 改进
+
+- **布局预设增加 2×1 / 3×1 / 3×3**：侧边栏和工具栏快捷按钮同步增加三个常用布局
+- **PDF 生成前 shutdown 检查**：`generate_pdf_from_layout` 保存前检查 `SHUTTING_DOWN`，避免关闭时继续生成
+- **`dist/` 加入 .gitignore**：构建产物不再被 git 跟踪
+
+### 🔧 开发命令
+
+- `npm run dev` — 开发模式（轻量版）
+- `npm run dev:ocr` — 开发模式（OCR 版，`--features ocr`）
+- `npm run build` — 编译轻量版（NSIS 安装包 ~3.5MB）
+- `npm run build:ocr` — 编译 OCR 版（NSIS 安装包 ~24MB）
+- `npm run build:all` — 一键全量构建，产出 4 个发布文件
+
+### 📦 发布产物（4 个文件）
+
+| 文件 | 说明 | 大小 |
+|------|------|------|
+| `发票打印工具_x64-setup.exe` | 轻量版安装包（无 OCR） | ~3.5MB |
+| `发票打印工具_x64_绿色版.zip` | 轻量版绿色便携（仅 exe） | ~5MB |
+| `发票打印工具_x64-setup.exe` | OCR 版安装包 | ~24MB |
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版绿色便携（exe + models/） | ~22MB |
+
+---
+
 ## v1.7.6 — 一键识别 + OCR 准确率恢复
 
 ### 🆕 新功能

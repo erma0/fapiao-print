@@ -4,14 +4,14 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
 
-一个轻量级的桌面应用，专为批量打印电子发票设计。单文件 exe，无需安装，即开即用。
+一个轻量级的桌面应用，专为批量打印电子发票设计。提供**轻量版**（~3.5MB，无 OCR）和 **OCR 版**（~24MB，含 PP-OCRv5 智能识别）两个版本，单文件 exe 即开即用。
 
 ## ✨ 功能特性
 
 ### 📥 文件管理
 - **多格式支持**：PDF、OFD、JPG、PNG、BMP、WebP、TIFF
 - **智能渲染**：WinRT 原生渲染（`Windows.Data.Pdf`），支持中文系统字体
-- **PP-OCRv5 智能识别**：基于 ocr-rs (PaddleOCR + MNN) 的坐标感知 OCR，自动识别发票金额和销售方信息
+- **PP-OCRv5 智能识别**（OCR 版）：基于 ocr-rs (PaddleOCR + MNN) 的坐标感知 OCR，自动识别发票金额和销售方信息
   - 文本优先提取 + 坐标回退的双重架构
   - 含税价/不含税价/税额 三值数学验证配对
   - 发票区域自动分类（买方/卖方/金额/备注）
@@ -75,7 +75,7 @@
 |------|------|------|
 | 前端 | 原生 HTML / CSS / JS | 模块化拆分（app/ocr/layout/print），无框架依赖 |
 | PDF 渲染 | WinRT `Windows.Data.Pdf` | 原生渲染，支持中文系统字体 |
-| OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 坐标感知提取，文本优先+坐标回退 |
+| OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 坐标感知提取，文本优先+坐标回退（OCR 版可选） |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
 | PDF 生成 | printpdf 0.9 | Rust 原生 PDF 生成 |
 | 打印 | ShellExecuteW (Win32) | 对话框打印或直接打印到指定打印机 |
@@ -96,14 +96,17 @@ fapiao-print/
 │   ├── src/
 │   │   ├── main.rs             # 入口（隐藏控制台窗口）
 │   │   ├── lib.rs              # 命令定义、拖放处理、进程管理
-│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、OCR、文件读取
-│   ├── models/                 # PP-OCRv5 MNN 模型文件
+│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、OCR（feature-gated）
+│   ├── models/                 # PP-OCRv5 MNN 模型文件（OCR 版打包时使用）
 │   ├── capabilities/
 │   │   └── default.json        # Tauri 权限配置
 │   ├── icons/                  # 应用图标
-│   ├── Cargo.toml              # Rust 依赖
+│   ├── Cargo.toml              # Rust 依赖（ocr-rs 为 optional）
 │   ├── build.rs                # Tauri 构建脚本
-│   └── tauri.conf.json         # Tauri 配置
+│   ├── tauri.conf.json         # Tauri 配置（轻量版，无 models）
+│   └── tauri.ocr.conf.json     # Tauri 配置（OCR 版，含 models 资源）
+├── scripts/
+│   └── build-all.js            # 一键全量构建脚本（4 产物）
 ├── package.json                # Node.js 依赖（Tauri CLI）
 ├── CHANGELOG.md                # 更新日志
 ├── LICENSE                     # MIT 许可证
@@ -127,16 +130,36 @@ npm install
 ### 开发模式
 
 ```bash
+# 轻量版（无 OCR）
 npm run dev
+
+# OCR 版（含 PP-OCRv5）
+npm run dev:ocr
 ```
 
 ### 构建发布
 
 ```bash
+# 仅轻量版
 npm run build
+
+# 仅 OCR 版
+npm run build:ocr
+
+# 一键全量构建（推荐，产出 4 个发布文件）
+npm run build:all
 ```
 
-构建产物位于 `src-tauri/target/release/fapiao-print.exe`。
+构建产物位于 `dist/` 目录。
+
+### 发布产物
+
+| 文件 | 说明 | 大小 |
+|------|------|------|
+| `发票打印工具_x64-setup.exe` | 轻量版 NSIS 安装包 | ~3.5MB |
+| `发票打印工具_x64_绿色版.zip` | 轻量版绿色便携（仅 exe） | ~5MB |
+| `发票打印工具_x64-setup.exe` | OCR 版 NSIS 安装包 | ~24MB |
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版绿色便携（exe + models/） | ~22MB |
 
 ## 📋 使用说明
 
@@ -167,8 +190,12 @@ npm run build
 
 | 文件 | 说明 |
 |------|------|
-| `发票打印工具_x64-setup.exe` | NSIS 安装包（推荐，自动处理 WebView2 安装） |
-| `fapiao-print.exe` | 免安装绿色版（需系统已安装 WebView2） |
+| `发票打印工具_x64-setup.exe` | 轻量版 NSIS 安装包（~3.5MB，无 OCR） |
+| `发票打印工具_x64_绿色版.zip` | 轻量版绿色便携（仅 exe，无需安装） |
+| `发票打印工具_x64-setup.exe` | OCR 版 NSIS 安装包（~24MB，含 PP-OCRv5 智能识别） |
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版绿色便携（exe + models/，无需安装） |
+
+> 💡 **选哪个？** 只需打印发票选轻量版；需要自动识别发票金额、销售方信息选 OCR 版。
 
 **运行依赖**：
 - Windows 11：✅ 直接运行（自带 WebView2）
@@ -183,7 +210,7 @@ npm run build
 - WebView2 拖放文件事件失效（`dataTransfer.files` 为空）
 - Tauri 注入脚本与前端 `const` 变量冲突
 - WinRT `IBufferByteAccess` COM 接口查询失败（`E_NOINTERFACE`），改用 `DataReader` 读取渲染数据
-- ocr-rs 2.2 (PP-OCRv5 + MNN) 集成：MNN 模型转换、并行配置、Nearest resize 优化
+- ocr-rs 2.2 (PP-OCRv5 + MNN) 集成：Cargo Feature Flag 条件编译，轻量版不含 OCR 代码
 - 文本优先+坐标回退的双重 OCR 提取架构
 - 含税价/不含税价/税额三值数学验证配对（数学关系不可伪造）
 - PDF 渲染与 OCR 分离：即时预览 + 后台异步 OCR 队列

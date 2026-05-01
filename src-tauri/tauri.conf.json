@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "发票打印工具",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "identifier": "com.fapiao.print",
   "build": {
     "frontendDist": "../src"
@@ -36,11 +36,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": [
-      "models/PP-OCRv5_mobile_det.mnn",
-      "models/PP-OCRv5_mobile_rec.mnn",
-      "models/ppocr_keys_v5.txt"
     ],
     "windows": {
       "nsis": {
