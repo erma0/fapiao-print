@@ -1,5 +1,45 @@
 # 📋 更新日志
 
+## v1.8.1 — OCR 准确率优化 + PDF 空白页修复 + 静默打印
+
+### 🚀 新功能
+
+- **Print Spooler API 静默打印**：绕过 PDF 阅读器，直接将 PDF 字节写入打印队列
+  - `OpenPrinterW` → `StartDocPrinterW(RAW)` → `WritePrinter` → `EndDocPrinterW` → `ClosePrinter`
+  - `PrinterHandle` RAII guard 确保 `ClosePrinter` 正确调用
+  - 失败自动回退 `ShellExecuteW("printto")` + `SW_HIDE`
+  - `confirmPrint` 确认弹窗：打印前显示发票数量/版面/纸张/打印机/模式/份数
+- **发票查验平台修正**：主平台改回国家税务总局官方 `inv-veri.chinatax.gov.cn`，仿真平台 `fz.chinaive.com` 降为备用
+
+### 🐛 修复
+
+- **PDF 空白页根因修复**：资源继承缺失 + 双重压缩 + MediaBox 继承
+  - `get_page_resources` 陷阱：返回 `(Option<&Dictionary>, Vec<ObjectId>)`，第一个只含页面内联 Resources（Reference 被跳过），必须合并 ref_ids + resources_opt 才能得到完整资源
+  - Stream 双重压缩：已有 Filter 的流 `allows_compression = false`，避免对已压缩流再次 FlateDecode
+  - MediaBox 继承：部分 PDF 的 MediaBox 在父 Pages 节点上，需向上遍历 Parent
+  - CropBox 优先于 MediaBox：`get_page_effective_box()` 优先 CropBox → 回退 MediaBox；非零原点时内容流前加 `1 0 0 1 -x1 -y1 cm` 平移
+- **PDF 合成遗漏修复**：修复合成 PDF 时部分页面遗漏的问题
+
+### 🔧 OCR 准确率优化
+
+- **OCR_MAX_DIM**: 960 → 1280px，保留更多小字细节
+- **Resize 滤波器**: Triangle → Lanczos3，文字边缘更锐利
+- **对比度增强**: `enhance_contrast_ocr()` 直方图拉伸（1%-99%），低对比度发票效果显著
+- **恢复 v1.6.7 关键修正**: `_normTextForExtract` 中关键词后 ¥→1 误读修正
+- **卖家名提取增强**: 恢复信用代码锚定、销方名称缩写、收款单位、公司后缀等策略
+- **前端降采样**: 960 → 1280，JPEG 质量 0.85 → 0.92
+
+### 📦 发布产物
+
+| 文件 | 说明 | 大小 |
+|------|------|------|
+| `发票打印工具_x64-setup.exe` | 轻量版安装包 | ~3.5MB |
+| `发票打印工具_x64_绿色版.exe` | 轻量版便携（单文件） | ~5MB |
+| `发票打印工具_x64_OCR版-setup.exe` | OCR 版安装包 | ~24MB |
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版便携 | ~22MB |
+
+---
+
 ## v1.8.0 — PDF 引擎优化（JPEG 直通 / 无损压缩 / PDF 全布局直通）
 
 ### 🚀 重大变更

@@ -6,7 +6,7 @@
 
 轻量桌面应用，专为批量打印电子发票设计。提供**轻量版**（~3.5MB，无 OCR）和 **OCR 版**（~24MB，含 PP-OCRv5 智能识别），单文件 exe 即开即用。
 
-> 🆕 v1.8.0：PDF 引擎三大优化 — JPEG 零质量损失直通、FlateDecode 无损压缩、PDF 全布局直通（lopdf Form XObject）
+> 🆕 v1.8.1：OCR 准确率优化（1280/Lanczos3/对比度增强）+ PDF 空白页根因修复 + Print Spooler 静默打印
 
 ## ✨ 功能特性
 
@@ -58,7 +58,7 @@
 | OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先+坐标回退（OCR 版可选） |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
 | PDF 生成 | printpdf 0.9 + lopdf 0.39 | JPEG 直通零质量损失、PDF 页面 Form XObject 直通 |
-| 打印 | ShellExecuteW (Win32) | 对话框/直接打印 |
+| 打印 | ShellExecuteW + Print Spooler API (Win32) | 对话框/静默打印 |
 | 图像处理 | image 0.25 (Rust) | 原生 WebP 支持 |
 
 ## 📦 项目结构
@@ -127,7 +127,7 @@ npm run build:all    # 一键全量构建（4 产物）
 
 ## 🗺 路线图
 
-- [ ] 重写打印流程：直接调用 Win32 Print Spooler API，绕过 PDF 阅读器
+- [x] 重写打印流程：直接调用 Win32 Print Spooler API，绕过 PDF 阅读器
 - [ ] 完善 OCR：全电发票版式、通行费字段、识别缓存、准确率优化
 - [ ] 发票去重检测（发票号码+开票日期）
 - [ ] 批量打印进度反馈
