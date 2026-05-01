@@ -1,13 +1,13 @@
 // =====================================================
 // 发票批量打印工具 — 主入口
-// v1.8.0 — PDF 引擎优化
+// v1.8.2 — 进程退出修复 + CropBox优先 + 加载进度优化
 // =====================================================
 
 // Detect Tauri — use var to avoid conflict with Tauri's injected scripts
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
 var hasOcr  = false; // Set to true at startup if OCR feature is available
-console.log('发票批量打印 v1.8.1 | isTauri:', isTauri);
+console.log('发票批量打印 v1.8.2 | isTauri:', isTauri);
 
 // =====================================================
 // Constants
