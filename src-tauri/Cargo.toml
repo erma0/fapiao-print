@@ -1,6 +1,6 @@
 [package]
 name = "fapiao-print"
-version = "1.7.7"
+version = "1.8.0"
 description = "电子发票批量打印工具"
 authors = ["fapiao-print"]
 license = "MIT"

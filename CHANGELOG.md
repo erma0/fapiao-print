@@ -1,5 +1,39 @@
 # 📋 更新日志
 
+## v1.8.0 — PDF 引擎优化（JPEG 直通 / 无损压缩 / PDF 全布局直通）
+
+### 🚀 重大变更
+
+- **JPEG 直通**：`ImageSource::JpegPassthrough` + `ExternalXObject{Filter=DCTDecode}`，零质量损失
+  - 工具函数 `is_jpeg_bytes` / `parse_jpeg_info`（SOF 标记解析宽高 + 颜色分量）
+  - 直通条件：JPEG + 无裁白边 + 无色彩模式变更 + 旋转 0°/180°
+  - 90°/270° 回退解码旋转，180° 用 PDF 变换矩阵
+- **FlateDecode 无损压缩**：含 PDF/OFD 页面时 `ImageCompression::Flate`
+  - FileSpec 扩展：`source_type`（image / pdf-page / ofd-page）、`pdf_path`、`pdf_page_idx`
+  - 前端 `buildLayoutRequest()` 传递 sourceType / pdfPath / pdfPageIdx
+- **PDF 全布局直通**：lopdf Form XObject + cm/Do 变换矩阵
+  - 新增依赖 `lopdf = "0.39"`（printpdf 传递依赖已有）
+  - 核心函数：`can_passthrough_pdf` / `extract_page_as_form_xobject` / `build_nup_content_stream` / `generate_pdf_passthrough`
+  - 支持所有布局（1×1 到 N×M）+ 任意旋转
+  - 资源深拷贝：`deep_copy_object` + `remap_references`（ObjectId 重映射）
+  - 任何错误自动回退渲染管道
+
+### 🔧 改进
+
+- `decode_base64_to_bytes` 新函数（与现有 `decode_base64_image` 并存）
+- 版本号全面统一至 v1.8.0（UI 右下角、Cargo.toml、package.json、tauri.conf.json）
+
+### 📦 发布产物
+
+| 文件 | 说明 | 大小 |
+|------|------|------|
+| `发票打印工具_x64-setup.exe` | 轻量版安装包 | ~3.5MB |
+| `发票打印工具_x64_绿色版.zip` | 轻量版便携 | ~5MB |
+| `发票打印工具_x64_OCR版-setup.exe` | OCR 版安装包 | ~24MB |
+| `发票打印工具_x64_OCR绿色版.zip` | OCR 版便携 | ~22MB |
+
+---
+
 ## v1.7.7 — OCR Feature Flag（轻量版/OCR版双构建）
 
 ### 🚀 重大变更

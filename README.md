@@ -6,6 +6,8 @@
 
 轻量桌面应用，专为批量打印电子发票设计。提供**轻量版**（~3.5MB，无 OCR）和 **OCR 版**（~24MB，含 PP-OCRv5 智能识别），单文件 exe 即开即用。
 
+> 🆕 v1.8.0：PDF 引擎三大优化 — JPEG 零质量损失直通、FlateDecode 无损压缩、PDF 全布局直通（lopdf Form XObject）
+
 ## ✨ 功能特性
 
 ### 📥 文件管理
@@ -55,7 +57,7 @@
 | PDF 渲染 | WinRT `Windows.Data.Pdf` | 原生渲染，支持中文系统字体 |
 | OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先+坐标回退（OCR 版可选） |
 | 后端 | Tauri 2.x (Rust) | 轻量桌面框架 |
-| PDF 生成 | printpdf 0.9 | Rust 原生 PDF 生成 |
+| PDF 生成 | printpdf 0.9 + lopdf 0.39 | JPEG 直通零质量损失、PDF 页面 Form XObject 直通 |
 | 打印 | ShellExecuteW (Win32) | 对话框/直接打印 |
 | 图像处理 | image 0.25 (Rust) | 原生 WebP 支持 |
 
@@ -73,9 +75,9 @@ fapiao-print/
 │   ├── src/
 │   │   ├── main.rs             # 入口
 │   │   ├── lib.rs              # 命令、拖放、进程管理
-│   │   └── pdf_engine.rs       # PDF 生成、WinRT 渲染、OCR
+│   │   └── pdf_engine.rs       # PDF 生成（JPEG 直通/FlateDecode/PDF 全布局直通）、WinRT 渲染、OCR
 │   ├── models/                 # PP-OCRv5 MNN 模型（OCR 版打包用）
-│   ├── Cargo.toml              # ocr-rs 为 optional 依赖
+│   ├── Cargo.toml              # ocr-rs 为 optional 依赖，lopdf 0.39
 │   ├── tauri.conf.json         # 轻量版配置（无 models）
 │   └── tauri.ocr.conf.json     # OCR 版配置（含 models）
 ├── scripts/
@@ -133,7 +135,7 @@ npm run build:all    # 一键全量构建（4 产物）
 
 ## 🤖 关于此项目
 
-本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，历经 60+ 轮迭代。主要攻克：Tauri 2.x 对话框死锁、WebView2 拖放失效、WinRT COM 接口适配、ocr-rs 集成与条件编译、文本优先+坐标回退 OCR 架构、金额三值数学验证、零 IPC 往返优化、进程残留根治等。
+本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，历经 60+ 轮迭代。主要攻克：Tauri 2.x 对话框死锁、WebView2 拖放失效、WinRT COM 接口适配、ocr-rs 集成与条件编译、文本优先+坐标回退 OCR 架构、金额三值数学验证、零 IPC 往返优化、进程残留根治、PDF 引擎 JPEG 直通与 lopdf Form XObject 全布局直通等。
 
 ## 📄 许可证
 
