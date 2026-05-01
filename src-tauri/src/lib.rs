@@ -356,19 +356,42 @@ pub fn run() {
 
                 window.on_window_event(move |event| {
                     match event {
-                        tauri::WindowEvent::CloseRequested { .. } => {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
                             use std::sync::atomic::Ordering;
+                            // CRITICAL: Prevent Tauri's default close sequence from running
+                            // concurrently with our cleanup. Without this, WebView2 starts
+                            // its own shutdown while we're still trying to eval() JS and
+                            // call process::exit(0), causing deadlocks.
+                            api.prevent_close();
+
                             if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
-                                return;
+                                return; // Exit thread already running
                             }
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
-                            // win.eval() is async — it posts JS to WebView2's event queue
-                            // but doesn't wait for execution. Without this sleep,
-                            // process::exit(0) kills the process before _tauriCleanup()
-                            // has a chance to run, leaving OCR queues dangling.
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            std::process::exit(0);
+
+                            // Spawn exit in a separate thread — ensures process::exit(0) runs
+                            // even if the main thread gets stuck in WebView2 or COM cleanup.
+                            // Previously we called process::exit(0) on the main thread with
+                            // sleep(100ms), which could deadlock if WebView2 cleanup blocked.
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                std::process::exit(0);
+                            });
+
+                            // Backup: if ExitProcess hangs (e.g. DLL_PROCESS_DETACH deadlock),
+                            // force-kill with TerminateProcess after 5 seconds.
+                            // TerminateProcess skips all DLL cleanup and terminates immediately.
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                #[cfg(target_os = "windows")]
+                                unsafe {
+                                    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                                    let _ = TerminateProcess(GetCurrentProcess(), 0);
+                                }
+                                #[allow(unreachable_code)]
+                                std::process::exit(1);
+                            });
                         }
                         tauri::WindowEvent::Destroyed => {
                             std::process::exit(0);

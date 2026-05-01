@@ -202,6 +202,14 @@ npm run build:all
 - Windows 10（较新版本）：✅ 大部分已预装 WebView2
 - Windows 10（老版本）/ Windows Server：⚠️ 可能需要安装 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
 
+## 🗺 路线图
+
+- [ ] **重写打印流程**：当前"直接打印"仍通过 `ShellExecuteW("printto")` 依赖系统 PDF 阅读器中转，计划改为直接调用 Win32 Print Spooler API，绕过 PDF 阅读器，实现真正的静默直接打印
+- [ ] **完善 OCR 识别**：支持全电发票（数电票）版式、通行费发票字段提取、识别结果缓存、特殊版式/低质量图片准确率优化
+- [ ] **发票去重检测**：基于发票号码 + 开票日期自动检测重复发票
+- [ ] **批量打印进度反馈**：多份打印时显示实时打印进度
+- [ ] **国际化支持**：界面多语言（英文）
+
 ## 🤖 关于此项目
 
 本项目由 [WorkBuddy](https://www.codebuddy.cn/) AI 辅助生成，从零开始到可发布版本，历经 **60+ 轮** 调试迭代。主要攻克的技术难点包括：

@@ -9,15 +9,31 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # 确保 Node.js 子进程使用 UTF-8
+  PYTHONIOENCODING: utf-8
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup UTF-8 encoding
+        shell: pwsh
+        run: |
+          # 设置控制台代码页为 UTF-8，确保中文文件名正确
+          chcp 65001
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          # 验证
+          Write-Host "代码页: $(chcp)"
+          Write-Host "测试中文输出: 发票打印工具"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,22 +58,94 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          releaseBody: |
-            See [CHANGELOG](https://github.com/erma0/fapiao-print/commits/main) for details.
-          releaseDraft: false
-          prerelease: false
+      - name: Build all (4 products)
+        shell: pwsh
+        run: |
+          # 确保构建过程使用 UTF-8
+          $env:PYTHONIOENCODING = "utf-8"
+          chcp 65001
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          npm run build:all
 
-      - name: Upload portable exe
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          Write-Host "`n=== 验证构建产物 ==="
+          $dist = "dist"
+          $expected = @(
+            "发票打印工具_*_x64-setup.exe",
+            "发票打印工具_*_x64_绿色版.zip",
+            "发票打印工具_*_x64_OCR版-setup.exe",
+            "发票打印工具_*_x64_OCR绿色版.zip"
+          )
+          $files = Get-ChildItem -Path $dist -File
+          if ($files.Count -ne 4) {
+            Write-Host "❌ 期望 4 个产物，实际找到 $($files.Count) 个"
+            $files | ForEach-Object { Write-Host "  - $($_.Name)" }
+            exit 1
+          }
+          $files | ForEach-Object {
+            $sizeMB = [math]::Round($_.Length / 1MB, 1)
+            Write-Host "✅ $($_.Name) ($sizeMB MB)"
+          }
+
+      - name: Rename if Chinese lost (fallback)
+        shell: pwsh
+        run: |
+          # 兜底：如果 NSIS 安装包文件名丢失了中文，强制重命名
+          $dist = "dist"
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+
+          $renameMap = @{
+            # 模式: 不含中文的文件名 → 正确的中文名
+            "_${version}_x64-setup.exe"                = "发票打印工具_${version}_x64-setup.exe"
+            "_${version}_x64_OCR.-setup.exe"           = "发票打印工具_${version}_x64_OCR版-setup.exe"
+            "_${version}_x64_OCR-setup.exe"            = "发票打印工具_${version}_x64_OCR版-setup.exe"
+          }
+
+          foreach ($entry in $renameMap.GetEnumerator()) {
+            $oldPath = Join-Path $dist $entry.Key
+            $newPath = Join-Path $dist $entry.Value
+            if (Test-Path $oldPath) {
+              Move-Item -Force $oldPath $newPath
+              Write-Host "🔄 重命名: $($entry.Key) → $($entry.Value)"
+            }
+          }
+
+          # 也检查 zip 文件名
+          $zipRenameMap = @{
+            "_${version}_x64_.zip"                     = "发票打印工具_${version}_x64_绿色版.zip"
+            "_${version}_x64_OCR.zip"                  = "发票打印工具_${version}_x64_OCR绿色版.zip"
+          }
+
+          foreach ($entry in $zipRenameMap.GetEnumerator()) {
+            $oldPath = Join-Path $dist $entry.Key
+            $newPath = Join-Path $dist $entry.Value
+            if (Test-Path $oldPath) {
+              Move-Item -Force $oldPath $newPath
+              Write-Host "🔄 重命名: $($entry.Key) → $($entry.Value)"
+            }
+          }
+
+      - name: List final artifacts
+        shell: pwsh
+        run: |
+          Write-Host "`n=== 最终产物列表 ==="
+          Get-ChildItem -Path dist -File | ForEach-Object {
+            $sizeMB = [math]::Round($_.Length / 1MB, 1)
+            Write-Host "  $($_.Name)  ($sizeMB MB)"
+          }
+
+      - name: Create Release & Upload
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: src-tauri/target/release/fapiao-print.exe
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            See [CHANGELOG](https://github.com/erma0/fapiao-print/commits/main) for details.
+          draft: false
+          prerelease: false
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

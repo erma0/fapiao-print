@@ -11,7 +11,7 @@
   - 隐藏：一键识别按钮、每张发票的 🔍 按钮、设置面板 OCR 区域
   - 点击 OCR 功能时提示"此版本不支持 OCR 识别"
 - **模型文件不再默认打包**：`tauri.conf.json` 移除 `models/` 资源，OCR 版通过 `tauri.ocr.conf.json` 注入
-- **`ocr-rs` 改为 optional 依赖**：不启用 `ocr` feature 时不编译 MNN 推理引擎，exe 体积大幅缩小（~14MB → 无 OCR 版本无需模型）
+- **`ocr-rs` 改为 optional 依赖**：不启用 `ocr` feature 时不编译 MNN 推理引擎，exe 体积大幅缩小
 - **一键全量构建脚本** (`scripts/build-all.js`)：`npm run build:all` 自动编译轻量版 + OCR 版，产出 4 个发布产物
 - **双配置文件**：`tauri.conf.json`（轻量版，无 models）+ `tauri.ocr.conf.json`（OCR 版，含 models 资源）
 - **Rust 条件编译**：所有 OCR 相关代码用 `#[cfg(feature = "ocr")]` 包裹，`invoke_handler` 按 feature 注册不同命令集
@@ -20,11 +20,11 @@
 
 - **修复打印模式分支反转**：直接打印和对话框打印的函数调用搞反了，导致"直接打印"实际弹出对话框、"对话框打印"实际直接打印
 - **修复关闭时 OCR 队列残留**：`_tauriCleanup` 增加 `_ocrRunning = 0`，`_drainOcrQueue` 增加 `__TAURI_CLOSING__` 检查
-- **修复关闭时 JS 清理未执行**：`process::exit(0)` 前增加 100ms sleep，让 `_tauriCleanup()` 有机会执行
+- **根治关闭时进程残留/死锁**：`CloseRequested` 中调用 `api.prevent_close()` 阻止 Tauri 默认关闭序列与 `process::exit` 并发导致死锁；`exit(0)` 在独立线程 200ms 后执行，避免主线程阻塞；新增 `TerminateProcess` 5 秒兜底，防止 `ExitProcess` 在 `DLL_PROCESS_DETACH` 阶段死锁
 
 ### 🔧 改进
 
-- **布局预设增加 2×1 / 3×1 / 3×3**：侧边栏和工具栏快捷按钮同步增加三个常用布局
+- **布局预设调整**：原 3×1 预设改为更常用的 3×2（侧边栏和工具栏同步更新）
 - **PDF 生成前 shutdown 检查**：`generate_pdf_from_layout` 保存前检查 `SHUTTING_DOWN`，避免关闭时继续生成
 - **`dist/` 加入 .gitignore**：构建产物不再被 git 跟踪
 
@@ -42,8 +42,20 @@
 |------|------|------|
 | `发票打印工具_x64-setup.exe` | 轻量版安装包（无 OCR） | ~3.5MB |
 | `发票打印工具_x64_绿色版.zip` | 轻量版绿色便携（仅 exe） | ~5MB |
-| `发票打印工具_x64-setup.exe` | OCR 版安装包 | ~24MB |
+| `发票打印工具_x64_OCR版-setup.exe` | OCR 版安装包 | ~24MB |
 | `发票打印工具_x64_OCR绿色版.zip` | OCR 版绿色便携（exe + models/） | ~22MB |
+
+### 📋 待办计划
+
+- [ ] **重写打印流程**：当前"直接打印"仍通过 `ShellExecuteW("printto")` 依赖系统 PDF 阅读器中转，计划改为直接调用 Win32 Print Spooler API（`StartDoc`/`StartPage`/`EndPage`），绕过 PDF 阅读器，实现真正的静默直接打印
+- [ ] **完善 OCR 识别**：
+  - 支持全电发票（数电票）版式识别
+  - 通行费发票字段提取
+  - OCR 识别结果缓存，避免重复识别同一文件
+  - 识别准确率持续优化（特殊版式、低质量图片）
+- [ ] **发票去重检测**：基于发票号码 + 开票日期检测重复发票
+- [ ] **批量打印进度反馈**：多份打印时显示打印进度
+- [ ] **国际化支持**：界面多语言（英文）
 
 ---
 
