@@ -7,7 +7,7 @@
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
 var hasOcr  = false; // Set to true at startup if OCR feature is available
-console.log('发票批量打印 v1.8.2 | isTauri:', isTauri);
+var APP_VERSION = ''; // Filled at startup from Rust get_app_version()
 
 // =====================================================
 // Constants
@@ -1525,7 +1525,18 @@ document.getElementById('orientation').value = 'landscape';
           if (ocrSection) ocrSection.style.display = 'none';
         }
       }).catch(function() {});
+      // Get app version from Rust (compiled from Cargo.toml)
+      invoke('get_app_version').then(function(v) {
+        APP_VERSION = v;
+        var el = document.getElementById('stVersion');
+        if (el) el.textContent = 'v' + v;
+        console.log('发票批量打印 v' + v + ' | isTauri:', isTauri);
+      }).catch(function() {});
       try { invoke('show_window'); } catch(e) {}
+    } else {
+      // Non-Tauri (browser) fallback
+      var el = document.getElementById('stVersion');
+      if (el) el.textContent = 'web';
     }
   }
   if (document.readyState === 'loading') {

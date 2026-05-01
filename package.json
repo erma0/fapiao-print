@@ -9,6 +9,7 @@
     "build:ocr": "tauri build --features ocr --config src-tauri/tauri.ocr.conf.json",
     "build:all": "node scripts/build-all.js",
     "build:debug": "tauri build --debug",
+    "bump": "node scripts/bump-version.js",
     "tauri": "tauri"
   },
   "devDependencies": {

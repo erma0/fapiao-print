@@ -97,6 +97,12 @@ fn check_ocr_available() -> bool {
     pdf_engine::check_ocr_available()
 }
 
+/// Get app version from Cargo.toml (compiled in at build time)
+#[command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Get backend configuration (for runtime DPI validation)
 #[command]
 fn get_config() -> Result<serde_json::Value, String> {
@@ -548,6 +554,7 @@ pub fn run() {
         ocr_image,
         ocr_pdf_page,
         check_ocr_available,
+        get_app_version,
         get_config,
         get_temp_dir,
         show_window,
@@ -564,6 +571,7 @@ pub fn run() {
         open_url,
         open_file,
         check_ocr_available,
+        get_app_version,
         get_config,
         get_temp_dir,
         show_window,
