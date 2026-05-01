@@ -1179,9 +1179,13 @@ async function pickSaveDir() {
 }
 function clearSaveDir() { setSaveDir(''); toast('已清除保存目录'); }
 
-async function verifyInvoice() {
-  // 官方平台 inv-veri.chinatax.gov.cn 证书已失效，改用仿真平台（证书有效）
-  var url = 'https://fz.chinaive.com/fpcy/';
+async function verifyInvoice(backup) {
+  // 主：国家税务总局官方查验平台；备：仿真平台（证书有效）
+  var urls = {
+    primary: 'https://inv-veri.chinatax.gov.cn/',
+    backup: 'https://fz.chinaive.com/fpcy/'
+  };
+  var url = backup ? urls.backup : urls.primary;
   if (isTauri && invoke) {
     try { await invoke('open_url', { url: url }); } catch(e) { toast('打开查验网站失败: ' + String(e)); }
   } else { window.open(url, '_blank'); }
