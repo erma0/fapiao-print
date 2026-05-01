@@ -1,5 +1,25 @@
 # 📋 更新日志
 
+## v1.8.2 — 进程退出安全修复 + CropBox 优先 + 加载进度优化
+
+### 🐛 修复
+
+- **进程退出死锁修复**：用 `TerminateProcess` 替代 `process::exit(0)`（ExitProcess）
+  - ExitProcess 先杀所有线程再走 DLL_PROCESS_DETACH，若 MNN/OCR 引擎死锁则进程永远残留
+  - TerminateProcess 跳过 DLL_PROCESS_DETACH，立即终止，永不挂起
+  - `CloseRequested` 和 `Destroyed` 事件统一使用 TerminateProcess
+- **PDF CropBox 优先**：passthrough 模式下 CropBox 优先于 MediaBox（PDF 规范 7.7.3.3）
+  - 修复含 CropBox 的 PDF（如仅显示页面下半部分）缩放计算错误
+  - CropBox 非零原点时自动添加 `1 0 0 1 -x1 -y1 cm` 平移
+
+### 🔧 优化
+
+- **加载进度显示**：toast 显示 "加载中 X/Y，识别中 X/Y" 格式，进度一目了然
+- **并行加载 + 顺序渲染**：所有文件并行加载（快），结果逐个渲染并 yield 给浏览器（用户看到逐个出现）
+- **OCR 批次追踪改进**：`_ocrFromButton` 区分单文件/批量 OCR，单文件显示识别金额，批量显示总数
+
+---
+
 ## v1.8.1 — OCR 准确率优化 + PDF 空白页修复 + 静默打印
 
 ### 🚀 新功能

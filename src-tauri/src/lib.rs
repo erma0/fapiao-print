@@ -475,30 +475,40 @@ pub fn run() {
                             pdf_engine::SHUTTING_DOWN.store(true, Ordering::SeqCst);
                             let _ = win.eval("if(window._tauriCleanup)window._tauriCleanup();");
 
-                            // Spawn exit in a separate thread — ensures process::exit(0) runs
-                            // even if the main thread gets stuck in WebView2 or COM cleanup.
-                            // Previously we called process::exit(0) on the main thread with
-                            // sleep(100ms), which could deadlock if WebView2 cleanup blocked.
+                            // Spawn exit in a separate thread.
+                            //
+                            // We use TerminateProcess instead of process::exit(0) (ExitProcess)
+                            // because ExitProcess has a fatal flaw: it first kills ALL other
+                            // threads, then runs DLL_PROCESS_DETACH for each loaded DLL.
+                            // If DLL_PROCESS_DETACH hangs (e.g. MNN/OCR engine deadlock),
+                            // the process is stuck forever — and the "backup" thread was
+                            // already killed, so TerminateProcess never runs.
+                            //
+                            // TerminateProcess skips DLL_PROCESS_DETACH entirely and terminates
+                            // the process immediately — it can never hang.
+                            // The 300ms delay gives pending I/O (file writes, OCR cancellation)
+                            // time to complete before we pull the plug.
                             std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(200));
-                                std::process::exit(0);
-                            });
-
-                            // Backup: if ExitProcess hangs (e.g. DLL_PROCESS_DETACH deadlock),
-                            // force-kill with TerminateProcess after 5 seconds.
-                            // TerminateProcess skips all DLL cleanup and terminates immediately.
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                std::thread::sleep(std::time::Duration::from_millis(300));
                                 #[cfg(target_os = "windows")]
                                 unsafe {
                                     use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
                                     let _ = TerminateProcess(GetCurrentProcess(), 0);
                                 }
-                                #[allow(unreachable_code)]
-                                std::process::exit(1);
+                                #[cfg(not(target_os = "windows"))]
+                                std::process::exit(0);
                             });
                         }
                         tauri::WindowEvent::Destroyed => {
+                            // Use TerminateProcess instead of process::exit(0) for the same
+                            // reason as CloseRequested: ExitProcess can deadlock in
+                            // DLL_PROCESS_DETACH (e.g. MNN/OCR engine holding a lock).
+                            #[cfg(target_os = "windows")]
+                            unsafe {
+                                use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                                let _ = TerminateProcess(GetCurrentProcess(), 0);
+                            }
+                            #[cfg(not(target_os = "windows"))]
                             std::process::exit(0);
                         }
                         tauri::WindowEvent::DragDrop(drop_event) => {

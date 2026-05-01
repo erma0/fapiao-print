@@ -2346,16 +2346,17 @@ fn can_passthrough_pdf(request: &LayoutRenderRequest) -> bool {
     true
 }
 
-/// Extract the MediaBox from a PDF page, returning (width_pt, height_pt).
-/// Walks up the page tree to inherit MediaBox from parent nodes if not on the page itself.
-fn get_page_mediabox(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Result<(f32, f32), String> {
-    // Walk up the page tree to find MediaBox (handles inheritance from parent Pages nodes)
+/// Extract the effective visible box from a PDF page, respecting CropBox over MediaBox.
+/// Returns ((x1, y1, x2, y2), (width_pt, height_pt)).
+/// CropBox takes precedence over MediaBox (PDF spec 7.7.3.3).
+/// Walks up the page tree to inherit from parent nodes if not on the page itself.
+fn get_page_effective_box(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Result<((f32, f32, f32, f32), (f32, f32)), String> {
     let mut current_id = page_id;
     let mut visited = std::collections::HashSet::new();
 
     loop {
         if !visited.insert(current_id) {
-            return Err("MediaBox查找遇到循环引用".to_string());
+            return Err("页面box查找遇到循环引用".to_string());
         }
 
         let dict = match source.get_object(current_id) {
@@ -2369,51 +2370,79 @@ fn get_page_mediabox(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Resu
             _ => return Err("页面对象不是字典".to_string()),
         };
 
-        // Check this node for MediaBox
+        // CropBox takes precedence over MediaBox (PDF spec)
+        let cropbox = dict.get(b"CropBox")
+            .or_else(|_| dict.get(b"cropbox"))
+            .ok();
+        if let Some(cb) = cropbox {
+            if let Ok(box_val) = parse_box_array(cb, source) {
+                return Ok(box_val);
+            }
+        }
+
         let mediabox = dict.get(b"MediaBox")
             .or_else(|_| dict.get(b"mediabox"))
             .ok();
-
         if let Some(mb) = mediabox {
-            return parse_mediabox(mb, source);
+            if let Ok(box_val) = parse_box_array(mb, source) {
+                return Ok(box_val);
+            }
         }
 
         // Not found — walk up to parent
         match dict.get(b"Parent").and_then(|v| v.as_reference()) {
             Ok(parent_id) => current_id = parent_id,
-            Err(_) => return Err("页面及父节点均缺少MediaBox".to_string()),
+            Err(_) => return Err("页面及父节点均缺少MediaBox/CropBox".to_string()),
         }
     }
 }
 
-/// Parse a MediaBox value (Array or Reference to Array) into (width_pt, height_pt).
-fn parse_mediabox(mediabox: &lopdf::Object, source: &lopdf::Document) -> Result<(f32, f32), String> {
-    match mediabox {
+/// Parse a box array (MediaBox/CropBox) into ((x1, y1, x2, y2), (width, height)).
+fn parse_box_array(box_obj: &lopdf::Object, source: &lopdf::Document) -> Result<((f32, f32, f32, f32), (f32, f32)), String> {
+    match box_obj {
         lopdf::Object::Array(arr) => {
             if arr.len() >= 4 {
-                let w = match &arr[2] {
+                let x1 = match &arr[0] {
                     lopdf::Object::Integer(i) => *i as f32,
                     lopdf::Object::Real(r) => *r as f32,
-                    _ => return Err("MediaBox宽度不是数字".to_string()),
+                    _ => return Err("box x1不是数字".to_string()),
                 };
-                let h = match &arr[3] {
+                let y1 = match &arr[1] {
                     lopdf::Object::Integer(i) => *i as f32,
                     lopdf::Object::Real(r) => *r as f32,
-                    _ => return Err("MediaBox高度不是数字".to_string()),
+                    _ => return Err("box y1不是数字".to_string()),
                 };
-                Ok((w, h))
+                let x2 = match &arr[2] {
+                    lopdf::Object::Integer(i) => *i as f32,
+                    lopdf::Object::Real(r) => *r as f32,
+                    _ => return Err("box x2不是数字".to_string()),
+                };
+                let y2 = match &arr[3] {
+                    lopdf::Object::Integer(i) => *i as f32,
+                    lopdf::Object::Real(r) => *r as f32,
+                    _ => return Err("box y2不是数字".to_string()),
+                };
+                Ok(((x1, y1, x2, y2), (x2 - x1, y2 - y1)))
             } else {
-                Err("MediaBox数组长度不足".to_string())
+                Err("box数组长度不足".to_string())
             }
         }
         lopdf::Object::Reference(id) => {
             match source.get_object(*id) {
-                Ok(obj) => parse_mediabox(obj, source),
-                Err(e) => Err(format!("MediaBox引用解引用失败: {}", e)),
+                Ok(obj) => parse_box_array(obj, source),
+                Err(e) => Err(format!("box引用解引用失败: {}", e)),
             }
         }
-        _ => Err("MediaBox不是数组".to_string()),
+        _ => Err("box不是数组".to_string()),
     }
+}
+
+/// Extract the MediaBox from a PDF page, returning (width_pt, height_pt).
+/// Walks up the page tree to inherit MediaBox from parent nodes if not on the page itself.
+#[allow(dead_code)]
+fn get_page_mediabox(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Result<(f32, f32), String> {
+    let ((_x1, _y1, _x2, _y2), (w, h)) = get_page_effective_box(source, page_id)?;
+    Ok((w, h))
 }
 
 /// Recursively copy an object from source doc to dest doc, remapping ObjectId references.
@@ -2553,8 +2582,24 @@ fn extract_page_as_form_xobject(
     let content_bytes = source.get_page_content(page_id)
         .map_err(|e| format!("提取内容流失败: {}", e))?;
 
-    // 2. Get page dimensions from MediaBox
-    let (page_w_pt, page_h_pt) = get_page_mediabox(source, page_id)?;
+    // 2. Get effective visible box — CropBox takes precedence over MediaBox.
+    // This fixes the bug where PDFs with CropBox (e.g., only showing the bottom
+    // half of the page) would appear shrunk, because we were using MediaBox
+    // dimensions for scaling but the visible content was only a portion.
+    let ((box_x1, box_y1, _box_x2, _box_y2), (page_w_pt, page_h_pt)) =
+        get_page_effective_box(source, page_id)?;
+
+    // If CropBox has a non-zero origin, we need to translate the content stream
+    // so that the visible area aligns with the BBox origin (0, 0).
+    // Prepend: "1 0 0 1 -box_x1 -box_y1 cm" to shift content.
+    let final_content = if box_x1.abs() > 0.01 || box_y1.abs() > 0.01 {
+        let translate = format!("1 0 0 1 {:.4} {:.4} cm\n", -box_x1, -box_y1);
+        let mut combined = translate.into_bytes();
+        combined.extend_from_slice(&content_bytes);
+        combined
+    } else {
+        content_bytes
+    };
 
     // 3. Get page resources — merge ALL resource dictionaries including inherited ones.
     //
@@ -2591,6 +2636,8 @@ fn extract_page_as_form_xobject(
     };
 
     // 5. Build Form XObject stream
+    // BBox uses the effective visible dimensions (CropBox or MediaBox).
+    // For CropBox=[0, 433.75, 595, 842], this becomes [0, 0, 595, 408.25].
     let mut dict = lopdf::Dictionary::new();
     dict.set("Type", lopdf::Object::Name(b"XObject".to_vec()));
     dict.set("Subtype", lopdf::Object::Name(b"Form".to_vec()));
@@ -2609,7 +2656,7 @@ fn extract_page_as_form_xobject(
     group_dict.set("S", lopdf::Object::Name(b"Transparency".to_vec()));
     dict.set("Group", lopdf::Object::Dictionary(group_dict));
 
-    let stream = lopdf::Stream::new(dict, content_bytes).with_compression(true);
+    let stream = lopdf::Stream::new(dict, final_content).with_compression(true);
     let xobj_id = output_doc.add_object(lopdf::Object::Stream(stream));
 
     Ok((xobj_id, page_w_pt, page_h_pt))

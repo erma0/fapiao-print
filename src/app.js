@@ -200,6 +200,8 @@ async function handleFileInput(fl) {
 }
 
 // Process FileData array from Rust backend — instant placeholders, incremental replace
+// Loads all files in parallel (fast), but processes results sequentially with browser yields
+// so the user sees each file appear incrementally instead of all at once.
 async function processFileDataList(fileDataList) {
   var total = fileDataList.length;
   var completed = 0;
@@ -222,58 +224,87 @@ async function processFileDataList(fileDataList) {
   // Render placeholders immediately — user sees skeleton items right away
   renderFileList(); updatePreview(); updatePrintBtn();
 
-  // Show "识别中" toast immediately with spinner
+  // Show "加载中" toast immediately with spinner
   if (S.feat.ocrEnabled) {
-    toastLoading('已添加 ' + total + ' 张发票，识别中...');
+    toastLoading('加载中 0/' + total + '，识别中...');
   } else {
-    toastLoading('已添加 ' + total + ' 张发票...');
+    toastLoading('加载中 0/' + total);
   }
 
-  // 2. Load files and replace placeholders incrementally
-  var promises = fileDataList.map(function(fd) {
-    return loadFileFromDataUrlFast(fd).then(function(r) {
-      completed++;
+  // Count how many files will need OCR (for batch tracking)
+  var ocrEligibleCount = S.feat.ocrEnabled ? fileDataList.length : 0;
+  if (ocrEligibleCount >= 1) {
+    _ocrBatchTotal = ocrEligibleCount;
+  }
 
-      // Find placeholder by key
-      var phIdx = -1;
-      for (var i = 0; i < S.files.length; i++) {
-        if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
-      }
-
-      if (phIdx >= 0 && r) {
-        var items = Array.isArray(r) ? r : [r];
-        // Mark new items for entrance animation
-        items.forEach(function(it) { _newFileIds[it.id] = true; });
-        // Replace placeholder with real items (handles multi-page PDF expansion)
-        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
-        added += items.length;
-      } else if (phIdx >= 0) {
-        // Remove placeholder for failed/empty file
-        S.files.splice(phIdx, 1);
-      }
-
-      renderFileList(); updatePreview(); updatePrintBtn();
-    }).catch(function(err) {
-      completed++;
+  // 2. Start all loads in parallel (for speed), catch errors as null
+  var loadPromises = fileDataList.map(function(fd) {
+    return loadFileFromDataUrlFast(fd).catch(function(err) {
       console.error('Load file error:', fd.name, err);
-
-      // Remove placeholder on error
-      for (var i = 0; i < S.files.length; i++) {
-        if (S.files[i]._placeholderKey === fd._phKey) { S.files.splice(i, 1); break; }
-      }
-      renderFileList(); updatePreview(); updatePrintBtn();
+      return null;
     });
   });
 
-  await Promise.all(promises);
+  // 3. Process results sequentially — each file appears one by one
+  for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
+    var fd = fileDataList[fdIdx];
+    var r = await loadPromises[fdIdx];
+    completed++;
+
+    // Find placeholder by key
+    var phIdx = -1;
+    for (var i = 0; i < S.files.length; i++) {
+      if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
+    }
+
+    if (phIdx >= 0 && r) {
+      var items = Array.isArray(r) ? r : [r];
+      items.forEach(function(it) { _newFileIds[it.id] = true; });
+      S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+      added += items.length;
+    } else if (phIdx >= 0) {
+      // Remove placeholder for failed/empty file
+      S.files.splice(phIdx, 1);
+    }
+
+    // Update loading progress toast
+    var ocrRemaining = _ocrQueue.length + _ocrRunning;
+    if (_ocrToastActive && ocrRemaining > 0 && completed < total) {
+      var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+      toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+    } else if (_ocrToastActive && ocrRemaining > 0 && completed === total) {
+      var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+      toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
+    } else if (completed < total) {
+      var loadMsg = '加载中 ' + completed + '/' + total;
+      if (S.feat.ocrEnabled) loadMsg += '，识别中...';
+      toastLoading(loadMsg);
+    } else if (completed === total) {
+      toastLoading('加载中 ' + completed + '/' + total);
+    }
+
+    renderFileList(); updatePreview(); updatePrintBtn();
+
+    // Yield to browser for painting — ensures user sees each file appear incrementally
+    if (fdIdx < fileDataList.length - 1) {
+      await nextFrame();
+    }
+  }
+
   // If no OCR queued (e.g. non-Tauri), dismiss toast now
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
-    toastDone('已添加 ' + added + ' 张发票');
+    _ocrBatchTotal = 0;
+    _ocrBatchAddedCount = 0;
+    toastDone('已加载 ' + added + ' 张发票');
+  } else if (_ocrQueue.length > 0 || _ocrRunning > 0) {
+    // OCR still running — save added count for _drainOcrQueue's final toast
+    _ocrBatchAddedCount = added;
   }
 }
 
-// Process an array of File objects (browser fallback) — instant placeholders
+// Process an array of File objects (browser fallback) — instant placeholders, incremental replace
+// Same pattern as processFileDataList: parallel loads, sequential renders with browser yields.
 async function processFiles(files) {
   var total = files.length;
   var completed = 0;
@@ -295,47 +326,79 @@ async function processFiles(files) {
   });
   renderFileList(); updatePreview(); updatePrintBtn();
 
-  // Show "识别中" toast immediately with spinner
+  // Show "加载中" toast immediately with spinner
   if (S.feat.ocrEnabled) {
-    toastLoading('已添加 ' + total + ' 张发票，识别中...');
+    toastLoading('加载中 0/' + total + '，识别中...');
   } else {
-    toastLoading('已添加 ' + total + ' 张发票...');
+    toastLoading('加载中 0/' + total);
   }
 
-  var promises = files.map(function(file) {
-    return loadFileFast(file).then(function(r) {
-      completed++;
+  // Count how many files will need OCR (for batch tracking)
+  var ocrEligibleCount = S.feat.ocrEnabled ? files.length : 0;
+  if (ocrEligibleCount >= 1) {
+    _ocrBatchTotal = ocrEligibleCount;
+  }
 
-      var phIdx = -1;
-      for (var i = 0; i < S.files.length; i++) {
-        if (S.files[i]._placeholderKey === file._phKey) { phIdx = i; break; }
-      }
-
-      if (phIdx >= 0 && r) {
-        var items = Array.isArray(r) ? r : [r];
-        items.forEach(function(it) { _newFileIds[it.id] = true; });
-        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
-        added += items.length;
-      } else if (phIdx >= 0) {
-        S.files.splice(phIdx, 1);
-      }
-
-      renderFileList(); updatePreview(); updatePrintBtn();
-    }).catch(function(err) {
-      completed++;
+  // Start all loads in parallel, catch errors as null
+  var loadPromises = files.map(function(file) {
+    return loadFileFast(file).catch(function(err) {
       console.error('Load file error:', file.name, err);
-      for (var i = 0; i < S.files.length; i++) {
-        if (S.files[i]._placeholderKey === file._phKey) { S.files.splice(i, 1); break; }
-      }
-      renderFileList(); updatePreview(); updatePrintBtn();
+      return null;
     });
   });
 
-  await Promise.all(promises);
+  // Process results sequentially — each file appears one by one
+  for (var fIdx = 0; fIdx < files.length; fIdx++) {
+    var file = files[fIdx];
+    var r = await loadPromises[fIdx];
+    completed++;
+
+    var phIdx = -1;
+    for (var i = 0; i < S.files.length; i++) {
+      if (S.files[i]._placeholderKey === file._phKey) { phIdx = i; break; }
+    }
+
+    if (phIdx >= 0 && r) {
+      var items = Array.isArray(r) ? r : [r];
+      items.forEach(function(it) { _newFileIds[it.id] = true; });
+      S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+      added += items.length;
+    } else if (phIdx >= 0) {
+      S.files.splice(phIdx, 1);
+    }
+
+    // Update loading progress toast
+    var ocrRemaining = _ocrQueue.length + _ocrRunning;
+    if (_ocrToastActive && ocrRemaining > 0 && completed < total) {
+      var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+      toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+    } else if (_ocrToastActive && ocrRemaining > 0 && completed === total) {
+      var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+      toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
+    } else if (completed < total) {
+      var loadMsg = '加载中 ' + completed + '/' + total;
+      if (S.feat.ocrEnabled) loadMsg += '，识别中...';
+      toastLoading(loadMsg);
+    } else if (completed === total) {
+      toastLoading('加载中 ' + completed + '/' + total);
+    }
+
+    renderFileList(); updatePreview(); updatePrintBtn();
+
+    // Yield to browser for painting — ensures user sees each file appear incrementally
+    if (fIdx < files.length - 1) {
+      await nextFrame();
+    }
+  }
+
   // If no OCR queued (e.g. non-Tauri), dismiss toast now
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
-    toastDone('已添加 ' + added + ' 张发票');
+    _ocrBatchTotal = 0;
+    _ocrBatchAddedCount = 0;
+    toastDone('已加载 ' + added + ' 张发票');
+  } else if (_ocrQueue.length > 0 || _ocrRunning > 0) {
+    _ocrBatchAddedCount = added;
   }
 }
 
@@ -355,22 +418,33 @@ window._tauriCleanup = function() {
   _ocrQueue = [];
   _ocrRunning = 0;
   _ocrToastActive = false;
+  _ocrFromButton = false;
   console.log('[Cleanup] OCR queue cleared, closing flag set');
 };
 var _ocrQueue = [];
 var _ocrRunning = 0;
 var _ocrMaxConcurrent = 1; // OCR引擎是Mutex，同时只有1个请求能执行
 var _ocrToastActive = false; // track if "识别中" toast is showing
+var _ocrFromButton = false;  // true = OCR triggered by single-file button click (show per-file result toast)
 var _ocrBatchTotal = 0;     // Total files in current batch (for progress display)
+var _ocrBatchAddedCount = 0; // Total added files in current loading batch (for final toast message)
 var _lastPdfPath = null;   // Path of last generated/saved PDF (for print cache)
 var _pdfDirty = true;      // Whether PDF content has changed since last generation
+
+/** Yield to browser for one paint frame — ensures UI updates are visible to user */
+function nextFrame() { return new Promise(function(r) { requestAnimationFrame(r); }); }
 var _activeFileIdx = -1;   // Index of currently active/highlighted file in sidebar
 
 function _onOcrTaskDone() {
   _ocrRunning--;
   var remaining = _ocrQueue.length + _ocrRunning;
   if (remaining > 0 && _ocrToastActive) {
-    toastLoading('识别中，剩余 ' + remaining + ' 张...');
+    var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
+    if (_ocrBatchTotal > 0) {
+      toastLoading('识别中 ' + done + '/' + _ocrBatchTotal);
+    } else {
+      toastLoading('识别中，剩余 ' + remaining + ' 张');
+    }
   }
   updateOcrAllBtn();
   if (!window.__TAURI_CLOSING__) _drainOcrQueue();
@@ -386,9 +460,22 @@ function _drainOcrQueue() {
   // All OCR done — dismiss loading toast
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
+    var wasBatchTotal = _ocrBatchTotal;
+    var wasAddedCount = _ocrBatchAddedCount;
+    var wasFromButton = _ocrFromButton;
     _ocrBatchTotal = 0;
+    _ocrBatchAddedCount = 0;
+    _ocrFromButton = false;
     updateOcrAllBtn();
-    toastDone('识别完成');
+    // Single-file OCR from button click shows its own result toast in applyOcrAsync
+    // For batch operations (loading or ocrAll), show completion toast here
+    if (!wasFromButton) {
+      if (wasAddedCount > 0) {
+        toastDone('已加载并识别 ' + wasAddedCount + ' 张发票');
+      } else if (wasBatchTotal > 0) {
+        toastDone('识别完成');
+      }
+    }
   }
 }
 
@@ -435,15 +522,17 @@ function applyOcrAsync(fileObj, dataUrl) {
       fileObj._ocrPending = false;
       updateFileItem(fileObj);
       updateAmountSummary();
-      // Show result toast only for single-file OCR (batch shows progress via _onOcrTaskDone)
-      if (_ocrBatchTotal <= 1 && _ocrQueue.length === 0 && _ocrRunning <= 1) {
+      // Show result toast only for single-file OCR triggered by button click
+      // (_ocrFromButton === true means user clicked OCR on one file)
+      // During batch loading or ocrAll, progress is shown via _onOcrTaskDone
+      if (_ocrFromButton && _ocrQueue.length === 0 && _ocrRunning <= 1) {
         var amt = fileObj.amountTax || fileObj.amountNoTax;
         toast(amt > 0 ? '识别成功 \u00A5' + amt.toFixed(2) : '识别完成，未识别到金额', 2500);
       }
     }).catch(function(e) {
       fileObj._ocrPending = false;
       console.warn('[OCR] 后台识别失败:', e);
-      if (_ocrBatchTotal <= 1 && _ocrQueue.length === 0 && _ocrRunning <= 1) {
+      if (_ocrFromButton && _ocrQueue.length === 0 && _ocrRunning <= 1) {
         toast('识别失败', 2500);
       }
     });
@@ -451,7 +540,8 @@ function applyOcrAsync(fileObj, dataUrl) {
   // Show toast with remaining count
   var remaining = _ocrQueue.length + _ocrRunning;
   if (_ocrToastActive) {
-    toastLoading('识别中，剩余 ' + remaining + ' 张...');
+    var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
+    toastLoading(_ocrBatchTotal > 0 ? '识别中 ' + done + '/' + _ocrBatchTotal : '识别中，剩余 ' + remaining + ' 张');
   }
   _drainOcrQueue();
 }
@@ -680,6 +770,10 @@ function ocrFile(i) {
   if (f._loading || f._ocrPending) return;
   if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
+  // Mark as single-file OCR from button click so per-file result toast shows correctly
+  _ocrBatchTotal = 1;
+  _ocrFromButton = true;
+  _ocrToastActive = true;
   applyOcrAsync(f, f.previewUrl);
 }
 function ocrAll() {
