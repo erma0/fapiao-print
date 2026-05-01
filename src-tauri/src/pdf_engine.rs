@@ -1,3 +1,4 @@
+use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -727,7 +728,7 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
         if ext == "ofd" {
             match extract_ofd_images(&path_str) {
                 Ok(images) => {
-                    for (idx, (img_data_url, img_ext)) in images.iter().enumerate() {
+                    for (idx, (img_data_url, img_ext, img_w, img_h)) in images.iter().enumerate() {
                         let base_name = if name.to_uppercase().ends_with(".OFD") && name.len() > 4 {
                             &name[..name.len()-4]
                         } else if name.len() > 4 {
@@ -745,8 +746,8 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
                             size,
                             data_url: img_data_url.clone(),
                             path: None,
-                            orig_w: None,
-                            orig_h: None,
+                            orig_w: Some(*img_w),
+                            orig_h: Some(*img_h),
                         });
                     }
                 }
@@ -1528,7 +1529,15 @@ pub fn check_ocr_available() -> bool { false }
 /// Extract embedded images from an OFD file (Chinese electronic invoice format)
 /// OFD is a ZIP archive containing XML page descriptions and image resources.
 /// For electronic invoices, the content is typically a full-page image.
-fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
+///
+/// Filtering strategy:
+/// 1. Path-based: exclude Seals/, Signs/ directories (stamp/signature images)
+/// 2. Dimension-based: prefer images where the longest side >= 500px
+///    (QR codes ~100-200px, seal stamps ~300-400px; full invoice pages > 800px)
+///    If large images exist, small ones are filtered out.
+///    If NO large images exist (vector-based OFD), fall back to including all path-filtered images.
+/// 3. Per-page dedup: keep only the largest image per page index
+fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String, u32, u32)>, String> {
     use base64::Engine;
     use std::io::Read;
 
@@ -1538,12 +1547,12 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| format!("解析OFD ZIP失败: {}", e))?;
 
-    // Strategy: find all image files in the archive and return them
-    // OFD images are typically in paths like:
-    //   - Pages/Page_0/Res/xxx.jpg (per-page resources)
-    //   - Res/xxx.jpg (document-level resources)
-    //   - DocumentRes/xxx.jpg
-    // Common image extensions: jpg, jpeg, png
+    // Collect candidate image entries with path-based filtering
+    // OFD structure:
+    //   Doc_0/Pages/Page_0/Res/xxx.jpg   — per-page resources (invoice image, QR code)
+    //   Doc_0/Res/xxx.jpg                 — document-level resources
+    //   Doc_0/Seals/xxx.jpg               — seal/stamp images (EXCLUDE)
+    //   Doc_0/Signs/xxx.jpg               — signature images (EXCLUDE)
     let mut image_entries: Vec<String> = Vec::new();
 
     for i in 0..archive.len() {
@@ -1551,10 +1560,16 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
         let name = entry.name().to_string();
         let lower = name.to_lowercase();
 
-        // Look for image files (not in signature or annotation paths)
+        // Path-based exclusion: skip Seals/, Signs/ directories and sign_/seal_ filenames
+        let path_has_seal_or_sign = lower.contains("/seals/")
+            || lower.contains("/signs/")
+            || lower.contains("\\seals\\")
+            || lower.contains("\\signs\\")
+            || lower.contains("sign_")
+            || lower.contains("seal_");
+
         if (lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png"))
-            && !lower.contains("sign_")
-            && !lower.contains("seal_")
+            && !path_has_seal_or_sign
         {
             image_entries.push(name);
         }
@@ -1564,10 +1579,8 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
         return Err("OFD文件中未找到图片资源".to_string());
     }
 
-    // Sort entries: prioritize page-ordered paths, then alphabetical
-    // OFD pages are typically: Pages/Page_0/Res/..., Pages/Page_1/Res/..., etc.
+    // Extract page index from path for grouping
     fn extract_page_index(path: &str) -> u32 {
-        // Look for "Page_N" pattern in path
         let lower = path.to_lowercase();
         if let Some(pos) = lower.find("page_") {
             let rest = &path[pos + 5..];
@@ -1578,12 +1591,11 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
         }
         u32::MAX // no page index found, sort last
     }
-    image_entries.sort_by(|a, b| {
-        extract_page_index(a).cmp(&extract_page_index(b)).then(a.cmp(b))
-    });
 
-    // Read and encode each image
-    let mut results = Vec::new();
+    // Read and decode all candidate images, collect (data_url, ext, w, h, page_idx)
+    const MIN_LONGEST_SIDE: u32 = 500; // Full invoice pages are always > 500px; QR codes/seals are smaller
+    let mut all_decoded: Vec<(String, String, u32, u32, u32)> = Vec::new(); // (data_url, ext, w, h, page_idx)
+
     for entry_name in &image_entries {
         let mut entry = archive.by_name(entry_name)
             .map_err(|e| format!("读取OFD图片失败: {}", e))?;
@@ -1591,7 +1603,16 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
         entry.read_to_end(&mut data)
             .map_err(|e| format!("读取OFD图片数据失败: {}", e))?;
 
-        // Determine MIME type and extension based on actual image format
+        // Decode image to get dimensions
+        let (w, h) = match image::load_from_memory(&data) {
+            Ok(img) => img.dimensions(),
+            Err(_) => {
+                log::warn!("OFD: 无法解码图片 {}, 跳过", entry_name);
+                continue;
+            }
+        };
+
+        // Determine MIME type and extension
         let lower = entry_name.to_lowercase();
         let (mime, img_ext) = if lower.ends_with(".png") {
             ("image/png", "png")
@@ -1601,10 +1622,56 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String)>, String> {
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
         let data_url = format!("data:{};base64,{}", mime, b64);
-        results.push((data_url, img_ext.to_string()));
+        let page_idx = extract_page_index(entry_name);
+        let longest_side = w.max(h);
+
+        log::info!("OFD: 图片 {} ({}x{}, longest={}, page_idx={})",
+            entry_name, w, h, longest_side, page_idx);
+        all_decoded.push((data_url, img_ext.to_string(), w, h, page_idx));
     }
 
-    log::info!("OFD extracted {} images from {}", results.len(), ofd_path);
+    if all_decoded.is_empty() {
+        return Err("OFD文件中未找到可解码的图片资源".to_string());
+    }
+
+    // Two-pass strategy:
+    // Pass 1: Try to find large images (>= MIN_LONGEST_SIDE) — these are likely full invoice pages
+    // Pass 2: If no large images found (vector-based OFD), fall back to all decoded images
+    let large_images: Vec<_> = all_decoded.iter()
+        .filter(|c| c.2.max(c.3) >= MIN_LONGEST_SIDE)
+        .cloned()
+        .collect();
+
+    let candidates = if !large_images.is_empty() {
+        log::info!("OFD: 找到{}张大图(>={}px)，过滤小图片", large_images.len(), MIN_LONGEST_SIDE);
+        large_images
+    } else {
+        log::warn!("OFD: 未找到大图(>={}px)，可能是矢量版式OFD，回退到包含所有图片", MIN_LONGEST_SIDE);
+        all_decoded
+    };
+
+    // Per-page dedup: keep only the largest image (by pixel count) per page index
+    let mut sorted = candidates;
+    sorted.sort_by(|a, b| {
+        a.4.cmp(&b.4) // sort by page_idx first
+            .then((b.2 * b.3).cmp(&(a.2 * a.3))) // then by pixel count descending
+    });
+
+    let mut seen_pages = std::collections::HashSet::new();
+    let mut results = Vec::new();
+    for (data_url, img_ext, w, h, page_idx) in sorted {
+        if seen_pages.insert(page_idx) {
+            results.push((data_url, img_ext, w, h));
+        } else {
+            log::info!("OFD: 页面{}已保留最大图片，跳过重复", page_idx);
+        }
+    }
+
+    if results.is_empty() {
+        return Err("OFD文件中未找到有效的发票页面图片（可能为矢量版式OFD，建议转换为PDF后使用）".to_string());
+    }
+
+    log::info!("OFD extracted {} page images from {}", results.len(), ofd_path);
     Ok(results)
 }
 
