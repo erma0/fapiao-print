@@ -2245,6 +2245,13 @@ pub fn generate_pdf_from_layout(
             &mut xobj_cache,
         );
 
+        // Skip empty pages — avoid generating blank PDF pages when
+        // all slots have no valid images (e.g. last page with fewer files)
+        if ops.is_empty() {
+            log::info!("Skipping empty page {}", i + 1);
+            continue;
+        }
+
         let page = printpdf::PdfPage::new(
             printpdf::Mm(pw),
             printpdf::Mm(ph),

@@ -197,9 +197,11 @@ async fn generate_pdf_from_layout(
     #[cfg(target_os = "windows")]
     if should_print {
         if is_direct {
-            shell_execute("print", &output_for_print.to_string_lossy())?;
-        } else {
+            // Direct print: use "printto" verb + SW_HIDE to print silently
             shell_execute_print(&output_for_print, printer_name.as_deref())?;
+        } else {
+            // Dialog mode: use "print" verb + SW_SHOWNORMAL to show print dialog
+            shell_execute("print", &output_for_print.to_string_lossy())?;
         }
     }
 
@@ -240,9 +242,11 @@ fn print_pdf_file(
     #[cfg(target_os = "windows")]
     {
         if is_direct {
-            shell_execute("print", &output.to_string_lossy())?;
-        } else {
+            // Direct print: use "printto" verb + SW_HIDE to print silently
             shell_execute_print(output, printer_name.as_deref())?;
+        } else {
+            // Dialog mode: use "print" verb + SW_SHOWNORMAL to show print dialog
+            shell_execute("print", &output.to_string_lossy())?;
         }
     }
 
@@ -294,21 +298,28 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
 }
 
 /// Print a PDF file via ShellExecuteW.
+/// Uses "printto" verb with SW_HIDE for silent printing.
+/// If no printer_name is provided, automatically resolves the system default printer.
 #[cfg(target_os = "windows")]
 fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
+    // Auto-resolve default printer if none specified
+    let resolved_printer: Option<String> = match printer_name {
+        Some(name) => Some(name.to_string()),
+        None => pdf_engine::get_default_printer_name(),
+    };
+    let printer_str = resolved_printer.as_deref()
+        .ok_or("未找到默认打印机，请在系统设置中配置打印机，或在打印设置中手动选择。")?;
+
     let _com = ComGuard::init();
     unsafe {
-        let verb: HSTRING = if printer_name.is_some() { "printto" } else { "print" }.into();
+        let verb: HSTRING = "printto".into();
         let file: HSTRING = pdf_path.to_string_lossy().to_string().into();
-
-        let printer_hstring: Option<HSTRING> = printer_name.map(|n| n.into());
-        let params = printer_hstring.as_ref()
-            .map(|h| windows::core::PCWSTR::from_raw(h.as_ptr()))
-            .unwrap_or(windows::core::PCWSTR::null());
+        let printer_hstring: HSTRING = printer_str.into();
+        let params = windows::core::PCWSTR::from_raw(printer_hstring.as_ptr());
 
         let ret = ShellExecuteW(
             None,

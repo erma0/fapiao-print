@@ -23,7 +23,7 @@ function buildLayoutRequest(files, settings) {
     // otherwise fall back to previewUrl
     var key = fileObj._filePath || fileObj.previewUrl || '';
     if (!key) return null;
-    if (!fileMap[key]) {
+    if (!(key in fileMap)) {
       fileMap[key] = fileSpecs.length;
       var spec = {
         ow: fileObj.ow || 0,
@@ -64,11 +64,12 @@ function buildLayoutRequest(files, settings) {
   // Pre-calculate layout so we know slot dimensions
   var layout = calculateLayout(settings);
 
+  var perPage = settings.cols * settings.rows;
   for (var i = 0; i < expanded.length; i++) {
     var slots = [];
     var pageFiles = expanded[i];
-    for (var j = 0; j < pageFiles.length; j++) {
-      var f = pageFiles[j];
+    for (var j = 0; j < perPage; j++) {
+      var f = j < pageFiles.length ? pageFiles[j] : null;
       if (f) {
         var rot = getEffectiveRotation(f, j, settings, layout);
         slots.push({ fileIndex: getFileIndex(f), rotation: rot });
@@ -137,13 +138,34 @@ async function doPrint() {
   if (!files.length) { toast('请先添加发票！'); return; }
   var s = getSettings();
   var printMode = document.getElementById('printMode').value;
+  var isDirect = printMode === 'direct';
+
+  // Confirm before printing (if enabled)
+  if (S.feat.confirmPrint) {
+    var totalChecked = S.files.filter(function(f) { return f.checked && !f._loading; }).length;
+    var printerLabel = s.printerName || '默认打印机';
+    var modeLabel = isDirect ? '静默打印' : '弹出对话框';
+    var layoutLabel = s.rows + '×' + s.cols;
+    var paperLabel = document.getElementById('paperSize').value;
+    if (document.getElementById('orientation').value === 'landscape') paperLabel += ' 横向';
+    else paperLabel += ' 纵向';
+    var copiesInfo = s.copies > 1 ? ('，' + s.copies + '份' + (s.collate ? ' 逐份' : '')) : '';
+
+    var confirmMsg = '确认打印？\n\n' +
+      '发票：' + totalChecked + ' 张\n' +
+      '版面：' + layoutLabel + ' (' + paperLabel + ')\n' +
+      '打印机：' + printerLabel + '\n' +
+      '模式：' + modeLabel + copiesInfo;
+
+    if (!confirm(confirmMsg)) return;
+  }
 
   // Cache hit: PDF unchanged since last generation, reuse directly
   if (!_pdfDirty && _lastPdfPath && isTauri && invoke) {
     try {
       var cacheResult = await invoke('print_pdf_file', {
         pdfPath: _lastPdfPath,
-        directPrint: printMode === 'direct',
+        directPrint: isDirect,
         printerName: s.printerName || null
       });
       if (cacheResult.success) {
@@ -170,7 +192,7 @@ async function doPrint() {
       var result = await invoke('generate_pdf_from_layout', {
         request: layoutReq,
         outputPath: outputPath,
-        directPrint: printMode === 'direct',
+        directPrint: isDirect,
         printerName: s.printerName || null
       });
       if (unlisten) unlisten();
