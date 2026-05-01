@@ -2347,26 +2347,47 @@ fn can_passthrough_pdf(request: &LayoutRenderRequest) -> bool {
 }
 
 /// Extract the MediaBox from a PDF page, returning (width_pt, height_pt).
+/// Walks up the page tree to inherit MediaBox from parent nodes if not on the page itself.
 fn get_page_mediabox(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Result<(f32, f32), String> {
-    let page_obj = source.get_object(page_id)
-        .map_err(|e| format!("获取页面对象失败: {}", e))?;
+    // Walk up the page tree to find MediaBox (handles inheritance from parent Pages nodes)
+    let mut current_id = page_id;
+    let mut visited = std::collections::HashSet::new();
 
-    let dict = match page_obj {
-        lopdf::Object::Dictionary(d) => d,
-        lopdf::Object::Reference(id) => {
-            match source.get_object(*id) {
-                Ok(lopdf::Object::Dictionary(d)) => d,
-                _ => return Err("页面对象不是字典".to_string()),
-            }
+    loop {
+        if !visited.insert(current_id) {
+            return Err("MediaBox查找遇到循环引用".to_string());
         }
-        _ => return Err("页面对象不是字典".to_string()),
-    };
 
-    // MediaBox is typically [0 0 width height] in points
-    let mediabox = dict.get(b"MediaBox")
-        .or_else(|_| dict.get(b"mediabox"))
-        .map_err(|_| "页面缺少MediaBox".to_string())?;
+        let dict = match source.get_object(current_id) {
+            Ok(lopdf::Object::Dictionary(d)) => d,
+            Ok(lopdf::Object::Reference(id)) => {
+                match source.get_object(*id) {
+                    Ok(lopdf::Object::Dictionary(d)) => d,
+                    _ => return Err("页面对象不是字典".to_string()),
+                }
+            }
+            _ => return Err("页面对象不是字典".to_string()),
+        };
 
+        // Check this node for MediaBox
+        let mediabox = dict.get(b"MediaBox")
+            .or_else(|_| dict.get(b"mediabox"))
+            .ok();
+
+        if let Some(mb) = mediabox {
+            return parse_mediabox(mb, source);
+        }
+
+        // Not found — walk up to parent
+        match dict.get(b"Parent").and_then(|v| v.as_reference()) {
+            Ok(parent_id) => current_id = parent_id,
+            Err(_) => return Err("页面及父节点均缺少MediaBox".to_string()),
+        }
+    }
+}
+
+/// Parse a MediaBox value (Array or Reference to Array) into (width_pt, height_pt).
+fn parse_mediabox(mediabox: &lopdf::Object, source: &lopdf::Document) -> Result<(f32, f32), String> {
     match mediabox {
         lopdf::Object::Array(arr) => {
             if arr.len() >= 4 {
@@ -2386,26 +2407,9 @@ fn get_page_mediabox(source: &lopdf::Document, page_id: lopdf::ObjectId) -> Resu
             }
         }
         lopdf::Object::Reference(id) => {
-            // Try to dereference
             match source.get_object(*id) {
-                Ok(lopdf::Object::Array(arr)) => {
-                    if arr.len() >= 4 {
-                        let w = match &arr[2] {
-                            lopdf::Object::Integer(i) => *i as f32,
-                            lopdf::Object::Real(r) => *r as f32,
-                            _ => return Err("MediaBox宽度不是数字".to_string()),
-                        };
-                        let h = match &arr[3] {
-                            lopdf::Object::Integer(i) => *i as f32,
-                            lopdf::Object::Real(r) => *r as f32,
-                            _ => return Err("MediaBox高度不是数字".to_string()),
-                        };
-                        Ok((w, h))
-                    } else {
-                        Err("MediaBox数组长度不足".to_string())
-                    }
-                }
-                _ => Err("MediaBox引用不是数组".to_string()),
+                Ok(obj) => parse_mediabox(obj, source),
+                Err(e) => Err(format!("MediaBox引用解引用失败: {}", e)),
             }
         }
         _ => Err("MediaBox不是数组".to_string()),
@@ -2460,10 +2464,80 @@ fn remap_references(
             let dict: lopdf::Dictionary = stream.dict.into_iter()
                 .map(|(k, v)| (k, remap_references(v, source, dest, id_map)))
                 .collect();
+            // If the stream dict already has a Filter entry, the content is already
+            // compressed. Set allows_compression = false to prevent lopdf from
+            // compressing it AGAIN during save (which would cause double compression
+            // and corrupt the stream data, leading to blank pages).
+            let already_compressed = dict.get(b"Filter").is_ok();
             Object::Stream(lopdf::Stream::new(dict, stream.content)
-                .with_compression(stream.allows_compression))
+                .with_compression(!already_compressed && stream.allows_compression))
         }
         other => other,
+    }
+}
+
+/// Merge a source resource dictionary into a merged dictionary.
+/// Handles both inline Dictionary and Reference entries by dereferencing them.
+/// Child entries override parent entries with the same key (correct PDF inheritance semantics).
+fn merge_resource_dict(
+    merged: &mut lopdf::Dictionary,
+    source_dict: &lopdf::Dictionary,
+    doc: &lopdf::Document,
+) {
+    for (key, value) in source_dict.iter() {
+        // Dereference if it's a Reference to get the actual dictionary
+        let dict_value = match value {
+            lopdf::Object::Reference(id) => {
+                match doc.get_object(*id) {
+                    Ok(obj) => obj.clone(),
+                    Err(_) => value.clone(),
+                }
+            }
+            _ => value.clone(),
+        };
+
+        // For sub-dictionaries (Font, XObject, ColorSpace, etc.), merge entries
+        match dict_value {
+            lopdf::Object::Dictionary(sub_dict) => {
+                // Check if merged already has this category (lopdf dict.get returns Result)
+                let existing_opt = merged.get(key).ok().cloned();
+                match existing_opt {
+                    Some(existing) => {
+                        let existing_dict = match existing {
+                            lopdf::Object::Dictionary(d) => d,
+                            lopdf::Object::Reference(id) => {
+                                match doc.get_object(id) {
+                                    Ok(lopdf::Object::Dictionary(d)) => d.clone(),
+                                    _ => {
+                                        // Can't merge, just override
+                                        merged.set(key.clone(), lopdf::Object::Dictionary(sub_dict));
+                                        continue;
+                                    }
+                                }
+                            }
+                            _ => {
+                                merged.set(key.clone(), lopdf::Object::Dictionary(sub_dict));
+                                continue;
+                            }
+                        };
+
+                        // Merge sub-dictionary entries (child overrides parent)
+                        let mut combined = existing_dict;
+                        for (sub_key, sub_value) in sub_dict.iter() {
+                            combined.set(sub_key.clone(), sub_value.clone());
+                        }
+                        merged.set(key.clone(), lopdf::Object::Dictionary(combined));
+                    }
+                    None => {
+                        merged.set(key.clone(), lopdf::Object::Dictionary(sub_dict));
+                    }
+                }
+            }
+            other => {
+                // Non-dictionary entries (ProcSet, etc.) — just override
+                merged.set(key.clone(), other);
+            }
+        }
     }
 }
 
@@ -2482,18 +2556,38 @@ fn extract_page_as_form_xobject(
     // 2. Get page dimensions from MediaBox
     let (page_w_pt, page_h_pt) = get_page_mediabox(source, page_id)?;
 
-    // 3. Get page resources (handles inheritance from parent nodes)
-    let (resources_opt, _ref_ids) = source.get_page_resources(page_id)
+    // 3. Get page resources — merge ALL resource dictionaries including inherited ones.
+    //
+    // CRITICAL: lopdf's get_page_resources returns:
+    //   - resources_opt: the page's OWN Resources (only if inline Dictionary, NOT Reference!)
+    //   - ref_ids: ObjectIds of ALL Resources dicts found by walking up the page tree
+    //
+    // Most PDFs store Resources as indirect References (e.g., "Resources 5 0 R"),
+    // so resources_opt is often None. We MUST also process ref_ids to include
+    // inherited resources (fonts, colorspaces, etc. from parent Pages nodes).
+    // Without this, Form XObjects have no resources → blank pages.
+    let (resources_opt, ref_ids) = source.get_page_resources(page_id)
         .map_err(|e| format!("提取资源失败: {}", e))?;
 
-    // 4. Deep-copy and remap the resources dictionary
-    let remapped_resources = match resources_opt {
-        Some(dict) => {
-            let obj = lopdf::Object::Dictionary(dict.clone());
-            let remapped = remap_references(obj, source, output_doc, id_map);
-            remapped
+    // 4. Merge all resource dictionaries: page's own + all inherited from parents.
+    // We build a merged dictionary, then deep-copy + remap the whole thing.
+    let mut merged = lopdf::Dictionary::new();
+
+    // Add inherited resources FIRST (parent-level, so page-level overrides take precedence)
+    for rid in &ref_ids {
+        if let Ok(res_dict) = source.get_dictionary(*rid) {
+            merge_resource_dict(&mut merged, res_dict, source);
         }
-        None => lopdf::Object::Dictionary(lopdf::Dictionary::new()),
+    }
+
+    // Add page's own resources LAST (overrides inherited ones with same keys)
+    if let Some(dict) = resources_opt {
+        merge_resource_dict(&mut merged, dict, source);
+    }
+
+    let remapped_resources = {
+        let obj = lopdf::Object::Dictionary(merged);
+        remap_references(obj, source, output_doc, id_map)
     };
 
     // 5. Build Form XObject stream
