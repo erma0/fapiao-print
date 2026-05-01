@@ -297,14 +297,13 @@ fn shell_execute(verb: &str, file: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a PDF file via ShellExecuteW.
-/// Uses "printto" verb with SW_HIDE for silent printing.
+/// Print a PDF file silently via Windows Print Spooler API.
+/// Sends PDF bytes directly to the printer queue — no application window opens.
 /// If no printer_name is provided, automatically resolves the system default printer.
+/// Falls back to ShellExecuteW "printto" verb if the Spooler approach fails.
 #[cfg(target_os = "windows")]
 fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -> Result<(), String> {
-    use windows::core::HSTRING;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::{HSTRING, PCWSTR};
 
     // Auto-resolve default printer if none specified
     let resolved_printer: Option<String> = match printer_name {
@@ -314,25 +313,120 @@ fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -
     let printer_str = resolved_printer.as_deref()
         .ok_or("未找到默认打印机，请在系统设置中配置打印机，或在打印设置中手动选择。")?;
 
+    // Read PDF file bytes
+    let pdf_bytes = std::fs::read(pdf_path)
+        .map_err(|e| format!("读取PDF文件失败: {}", e))?;
+
+    // Try Print Spooler API first (truly silent, no window)
+    match spool_print_pdf(&pdf_bytes, printer_str) {
+        Ok(()) => return Ok(()),
+        Err(spool_err) => {
+            log::warn!("Spooler printing failed, falling back to ShellExecute: {}", spool_err);
+            // Fall through to ShellExecuteW fallback
+        }
+    }
+
+    // Fallback: ShellExecuteW "printto" + SW_HIDE
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
     let _com = ComGuard::init();
     unsafe {
         let verb: HSTRING = "printto".into();
         let file: HSTRING = pdf_path.to_string_lossy().to_string().into();
         let printer_hstring: HSTRING = printer_str.into();
-        let params = windows::core::PCWSTR::from_raw(printer_hstring.as_ptr());
+        let params = PCWSTR::from_raw(printer_hstring.as_ptr());
 
         let ret = ShellExecuteW(
             None,
             &verb,
             &file,
             params,
-            windows::core::PCWSTR::null(),
+            PCWSTR::null(),
             SW_HIDE,
         );
         if ret.0 as isize <= 32 {
             return Err(format!("打印失败，错误码: {}。请确认已安装PDF阅读器且关联了打印功能。", ret.0 as isize));
         }
     }
+    Ok(())
+}
+
+/// RAII wrapper for printer handle — ensures ClosePrinter is called on drop.
+#[cfg(target_os = "windows")]
+struct PrinterHandle(windows::Win32::Foundation::HANDLE);
+#[cfg(target_os = "windows")]
+impl Drop for PrinterHandle {
+    fn drop(&mut self) {
+        use windows::Win32::Graphics::Printing::ClosePrinter;
+        if !self.0.is_invalid() {
+            unsafe { let _ = ClosePrinter(self.0); }
+        }
+    }
+}
+
+/// Send PDF bytes directly to printer via Windows Print Spooler API.
+/// No application window opens — the spooler handles everything.
+#[cfg(target_os = "windows")]
+fn spool_print_pdf(pdf_bytes: &[u8], printer_name: &str) -> Result<(), String> {
+    use windows::core::{HSTRING, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{BOOL, HANDLE};
+    use windows::Win32::Graphics::Printing::{DOC_INFO_1W, EndDocPrinter, OpenPrinterW, StartDocPrinterW, WritePrinter};
+
+    let printer_hstring: HSTRING = printer_name.into();
+    let mut h_printer: HANDLE = HANDLE(std::ptr::null_mut());
+
+    unsafe {
+        // Open printer
+        OpenPrinterW(
+            PCWSTR::from_raw(printer_hstring.as_ptr()),
+            &mut h_printer as *mut HANDLE,
+            None,
+        ).map_err(|e| format!("打开打印机失败: {}", e))?;
+
+        // RAII guard: close printer handle on any exit path
+        let _guard = PrinterHandle(h_printer);
+
+        // Prepare document info: use "RAW" data type to pass bytes directly to printer driver
+        let doc_name = HSTRING::from("发票打印");
+        let data_type = HSTRING::from("RAW");
+        let doc_info = DOC_INFO_1W {
+            pDocName: PWSTR::from_raw(doc_name.as_ptr() as *mut _),
+            pOutputFile: PWSTR::null(),
+            pDatatype: PWSTR::from_raw(data_type.as_ptr() as *mut _),
+        };
+
+        // Start document
+        let doc_id = StartDocPrinterW(h_printer, 1, &doc_info);
+        if doc_id == 0 {
+            return Err(format!("StartDocPrinter 失败，打印机可能不支持RAW数据类型"));
+        }
+
+        // Write PDF bytes in chunks (WritePrinter has a u32 size limit per call)
+        let mut offset: usize = 0;
+        let total = pdf_bytes.len();
+        while offset < total {
+            let chunk_size = std::cmp::min(total - offset, 64 * 1024) as u32; // 64KB chunks
+            let mut written: u32 = 0;
+            let result = WritePrinter(
+                h_printer,
+                pdf_bytes[offset..].as_ptr() as *const _,
+                chunk_size,
+                &mut written,
+            );
+            if result == BOOL(0) {
+                let _ = EndDocPrinter(h_printer);
+                return Err("WritePrinter 写入数据失败".to_string());
+            }
+            offset += written as usize;
+        }
+
+        // End document
+        if EndDocPrinter(h_printer) == BOOL(0) {
+            return Err("EndDocPrinter 失败".to_string());
+        }
+    }
+
     Ok(())
 }
 
