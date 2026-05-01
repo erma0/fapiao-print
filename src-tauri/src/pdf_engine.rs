@@ -726,35 +726,18 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
 
     for (path_str, name, ext, size) in valid_paths {
         if ext == "ofd" {
-            match extract_ofd_images(&path_str) {
-                Ok(images) => {
-                    for (idx, (img_data_url, img_ext, img_w, img_h)) in images.iter().enumerate() {
-                        let base_name = if name.to_uppercase().ends_with(".OFD") && name.len() > 4 {
-                            &name[..name.len()-4]
-                        } else if name.len() > 4 {
-                            &name[..name.len()-4]
-                        } else {
-                            &name
-                        };
-                        results.push(FileData {
-                            name: if images.len() > 1 {
-                                format!("{}_第{}页.ofd", base_name, idx + 1)
-                            } else {
-                                name.clone()
-                            },
-                            ext: img_ext.to_string(),
-                            size,
-                            data_url: img_data_url.clone(),
-                            path: None,
-                            orig_w: Some(*img_w),
-                            orig_h: Some(*img_h),
-                        });
-                    }
-                }
-                Err(e) => {
-                    log::warn!("OFD extraction failed for {}: {}", name, e);
-                }
-            }
+            // Return OFD as a single entry with ext="ofd" — frontend will call parse_ofd
+            // to get SVG vector rendering + structured invoice data from XML (skipping OCR).
+            // Fallback to bitmap path is handled by the frontend via open_ofd_images command.
+            results.push(FileData {
+                name: name.clone(),
+                ext: "ofd".to_string(),
+                size,
+                data_url: String::new(),
+                path: Some(path_str.clone()),
+                orig_w: None,
+                orig_h: None,
+            });
         } else {
             non_ofd_paths.push((path_str, name, ext, size));
         }
@@ -1673,6 +1656,1211 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String, u32, u32)>,
 
     log::info!("OFD extracted {} page images from {}", results.len(), ofd_path);
     Ok(results)
+}
+
+/// Public wrapper: extract OFD images and return as Vec<FileData> for frontend fallback.
+/// Called by the `open_ofd_images` Tauri command when `parse_ofd` fails.
+pub fn extract_ofd_images_as_filedata(ofd_path: &str) -> Result<Vec<FileData>, String> {
+    let path = std::path::Path::new(ofd_path);
+    let name = path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
+
+    let images = extract_ofd_images(ofd_path)?;
+    let mut results = Vec::new();
+    for (idx, (img_data_url, img_ext, img_w, img_h)) in images.iter().enumerate() {
+        let base_name = if name.len() > 4 { &name[..name.len()-4] } else { &name };
+        results.push(FileData {
+            name: if images.len() > 1 {
+                format!("{}_第{}页.ofd", base_name, idx + 1)
+            } else {
+                name.clone()
+            },
+            ext: img_ext.to_string(),
+            size,
+            data_url: img_data_url.clone(),
+            path: None,
+            orig_w: Some(*img_w),
+            orig_h: Some(*img_h),
+        });
+    }
+    Ok(results)
+}
+
+// =====================================================
+// OFD Vector Parsing & SVG Rendering
+// =====================================================
+
+/// Invoice data extracted from OFD XML
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OfdInvoiceInfo {
+    pub invoice_no: Option<String>,
+    pub invoice_date: Option<String>,
+    pub buyer_name: Option<String>,
+    pub buyer_tax_id: Option<String>,
+    pub seller_name: Option<String>,
+    pub seller_tax_id: Option<String>,
+    pub amount_no_tax: Option<f64>,
+    pub tax_amount: Option<f64>,
+    pub amount_tax: Option<f64>,
+    pub invoice_type: Option<String>,
+}
+
+/// Result returned by parse_ofd command
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfdResult {
+    pub svg: String,
+    pub invoice_info: OfdInvoiceInfo,
+    pub page_width: f64,
+    pub page_height: f64,
+}
+
+// ----- Internal OFD structures -----
+
+#[derive(Debug, Default)]
+struct OfdFont {
+    id: u32,
+    font_name: String,
+    family_name: String,
+}
+
+#[derive(Debug, Default)]
+struct OfdImage {
+    id: u32,
+    file_name: String,
+    base64: String,
+}
+
+#[derive(Debug, Default)]
+struct OfdTextObject {
+    id: u32,
+    boundary: (f64, f64, f64, f64), // x, y, w, h
+    font_id: u32,
+    size: f64,
+    ctm: Option<(f64, f64, f64, f64, f64, f64)>,
+    text: String,
+    delta_x: Vec<f64>,
+    text_x: f64,
+    text_y: f64,
+    fill_color: Option<(u8, u8, u8)>,
+    stroke_color: Option<(u8, u8, u8)>,
+    alpha: Option<u8>,
+    blend_mode: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct OfdPathObject {
+    id: u32,
+    boundary: (f64, f64, f64, f64),
+    line_width: f64,
+    stroke_color: Option<(u8, u8, u8)>,
+    fill_color: Option<(u8, u8, u8)>,
+    fill: bool,
+    abbreviated_data: String,
+    alpha: Option<u8>,
+}
+
+#[derive(Debug, Default)]
+struct OfdImageObject {
+    id: u32,
+    boundary: (f64, f64, f64, f64),
+    resource_id: u32,
+    ctm: Option<(f64, f64, f64, f64, f64, f64)>,
+    blend_mode: Option<String>,
+    alpha: Option<u8>,
+}
+
+/// Read a file from ZIP archive as string
+fn zip_read_str(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Option<String> {
+    use std::io::Read;
+    let mut entry = archive.by_name(name).ok()?;
+    let mut buf = String::new();
+    entry.read_to_string(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// Read a file from ZIP archive as bytes
+fn zip_read_bytes(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut entry = archive.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// Parse 4 floats from "x y w h" or "x y" string
+fn parse_f2(s: &str) -> Option<(f64, f64)> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 2 {
+        Some((parts[0].parse().ok()?, parts[1].parse().ok()?))
+    } else {
+        None
+    }
+}
+
+fn parse_f4(s: &str) -> Option<(f64, f64, f64, f64)> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 4 {
+        Some((
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+            parts[3].parse().ok()?,
+        ))
+    } else {
+        None
+    }
+}
+
+fn parse_f6(s: &str) -> Option<(f64, f64, f64, f64, f64, f64)> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 6 {
+        Some((
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+            parts[3].parse().ok()?,
+            parts[4].parse().ok()?,
+            parts[5].parse().ok()?,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Parse OFD color value "R G B" → (r, g, b)
+fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 3 {
+        Some((
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Get attribute value by local name (ignoring namespace prefix)
+fn attr_val(e: &quick_xml::events::BytesStart, local_name: &str) -> Option<String> {
+    for a in e.attributes().flatten() {
+        let key = a.key;
+        let local = if let Some(pos) = key.0.iter().position(|&b| b == b':') {
+            &key.as_ref()[pos + 1..]
+        } else {
+            key.as_ref()
+        };
+        if local == local_name.as_bytes() {
+            return std::str::from_utf8(&a.value).ok().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Get element text content from a quick-xml reader (reads until End tag)
+fn read_element_text(reader: &mut quick_xml::Reader<&[u8]>) -> String {
+    use quick_xml::events::Event;
+    let mut text = String::new();
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Text(t)) => {
+                if let Ok(s) = t.unescape() {
+                    text.push_str(&s);
+                }
+            }
+            Ok(Event::End(_)) | Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    text
+}
+
+/// Parse DeltaX attribute string into individual character offsets.
+/// DeltaX formats:
+///   - "3.175 3.175 3.175" — simple space-separated values
+///   - "g 19 1.5875" — group: repeat next spacing 19 times at 1.5875
+///   - "g 4 1.5875 3.175 g 2 1.5875 3.175" — mixed
+fn parse_delta_x(s: &str) -> Vec<f64> {
+    let mut result = Vec::new();
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "g" && i + 2 < tokens.len() {
+            // Group format: g count value [extra_value...]
+            if let (Ok(count), Ok(val)) = (tokens[i + 1].parse::<usize>(), tokens[i + 2].parse::<f64>()) {
+                for _ in 0..count {
+                    result.push(val);
+                }
+                i += 3;
+                // Check if there's an extra value after the group
+                if i < tokens.len() && tokens[i] != "g" {
+                    if let Ok(v) = tokens[i].parse::<f64>() {
+                        result.push(v);
+                        i += 1;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        } else if let Ok(v) = tokens[i].parse::<f64>() {
+            result.push(v);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Build SVG text element from an OFD TextObject
+fn build_svg_text(
+    text_obj: &OfdTextObject,
+    font_map: &std::collections::HashMap<u32, OfdFont>,
+    _color_spaces: &std::collections::HashMap<u32, String>,
+    scale_x: f64,
+    scale_y: f64,
+) -> String {
+    if text_obj.text.is_empty() {
+        return String::new();
+    }
+
+    let font = font_map.get(&text_obj.font_id);
+    let font_family = font.map(|f| {
+        if !f.family_name.is_empty() { f.family_name.clone() } else { f.font_name.clone() }
+    }).unwrap_or_else(|| "SimSun".to_string());
+
+    let font_size = text_obj.size;
+    let bold = if font_family.contains("Courier") || font_family.contains("Times") {
+        " font-weight=\"bold\""
+    } else {
+        ""
+    };
+
+    // Build text content with DeltaX spacing
+    let chars: Vec<char> = text_obj.text.chars().collect();
+    let content = if !text_obj.delta_x.is_empty() && chars.len() > 1 {
+        let mut s = esc_xml(&chars[0].to_string());
+        for (i, ch) in chars.iter().enumerate().skip(1) {
+            let dx = if i - 1 < text_obj.delta_x.len() {
+                text_obj.delta_x[i - 1]
+            } else {
+                *text_obj.delta_x.last().unwrap_or(&font_size)
+            };
+            s.push_str(&format!("<tspan dx=\"{:.4}\">{}</tspan>", dx * scale_x, esc_xml(&ch.to_string())));
+        }
+        s
+    } else {
+        esc_xml(&text_obj.text)
+    };
+
+    // CTM transform: translate to boundary origin, apply matrix, then text at local coords
+    if let Some(ctm) = text_obj.ctm {
+        return format!(
+            "<text transform=\"translate({bx},{by}) matrix({a},{b},{c},{d},{e},{f})\" x=\"{tx}\" y=\"{ty}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+            bx = text_obj.boundary.0 * scale_x,
+            by = text_obj.boundary.1 * scale_y,
+            a = ctm.0, b = ctm.1, c = ctm.2, d = ctm.3,
+            e = ctm.4 * scale_x, f = ctm.5 * scale_y,
+            tx = text_obj.text_x * scale_x,
+            ty = text_obj.text_y * scale_y,
+            ff = esc_xml_attr(&font_family),
+            fs = font_size * scale_x,
+            fc = fill_attr(text_obj.fill_color, text_obj.alpha),
+            bw = bold,
+            ct = content
+        );
+    }
+
+    // Normal: position = Boundary + TextCode offset
+    let x = (text_obj.boundary.0 + text_obj.text_x) * scale_x;
+    let y = (text_obj.boundary.1 + text_obj.text_y) * scale_y;
+    format!(
+        "<text x=\"{x}\" y=\"{y}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+        x = x, y = y,
+        ff = esc_xml_attr(&font_family),
+        fs = font_size * scale_x,
+        fc = fill_attr(text_obj.fill_color, text_obj.alpha),
+        bw = bold,
+        ct = content
+    )
+}
+
+fn fill_attr(color: Option<(u8, u8, u8)>, alpha: Option<u8>) -> String {
+    match (color, alpha) {
+        (Some((r, g, b)), Some(a)) => format!(" fill=\"rgba({},{},{},{:.2})\"", r, g, b, a as f64 / 255.0),
+        (Some((r, g, b)), None) => format!(" fill=\"rgb({},{},{})\"", r, g, b),
+        (None, Some(a)) => format!(" fill=\"rgba(0,0,0,{:.2})\"", a as f64 / 255.0),
+        (None, None) => String::new(),
+    }
+}
+
+fn stroke_attr(color: Option<(u8, u8, u8)>, alpha: Option<u8>) -> String {
+    match (color, alpha) {
+        (Some((r, g, b)), Some(a)) => format!(" stroke=\"rgba({},{},{},{:.2})\"", r, g, b, a as f64 / 255.0),
+        (Some((r, g, b)), None) => format!(" stroke=\"rgb({},{},{})\"", r, g, b),
+        (None, Some(a)) => format!(" stroke=\"rgba(0,0,0,{:.2})\"", a as f64 / 255.0),
+        (None, None) => String::new(),
+    }
+}
+
+fn esc_xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn esc_xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Convert OFD AbbreviatedData to SVG path data.
+/// OFD commands: M(moveto), L(lineto), C(cubic bezier), Q(quadratic), A(arc), B(cubic bezier alias), Z(close)
+fn ofd_path_to_svg(data: &str) -> String {
+    let mut svg = String::new();
+    let tokens: Vec<&str> = data.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "M" => {
+                if i + 2 < tokens.len() {
+                    svg.push_str(&format!("M {} {} ", tokens[i+1], tokens[i+2]));
+                    i += 3;
+                } else { i += 1; }
+            }
+            "L" => {
+                if i + 2 < tokens.len() {
+                    svg.push_str(&format!("L {} {} ", tokens[i+1], tokens[i+2]));
+                    i += 3;
+                } else { i += 1; }
+            }
+            "C" => {
+                if i + 6 < tokens.len() {
+                    svg.push_str(&format!("C {} {} {} {} {} {} ",
+                        tokens[i+1], tokens[i+2], tokens[i+3], tokens[i+4], tokens[i+5], tokens[i+6]));
+                    i += 7;
+                } else { i += 1; }
+            }
+            "B" => {
+                // OFD B is also cubic bezier (same as C)
+                if i + 6 < tokens.len() {
+                    svg.push_str(&format!("C {} {} {} {} {} {} ",
+                        tokens[i+1], tokens[i+2], tokens[i+3], tokens[i+4], tokens[i+5], tokens[i+6]));
+                    i += 7;
+                } else { i += 1; }
+            }
+            "Q" => {
+                if i + 4 < tokens.len() {
+                    svg.push_str(&format!("Q {} {} {} {} ",
+                        tokens[i+1], tokens[i+2], tokens[i+3], tokens[i+4]));
+                    i += 5;
+                } else { i += 1; }
+            }
+            "A" => {
+                if i + 7 < tokens.len() {
+                    svg.push_str(&format!("A {} {} {} {} {} {} {} ",
+                        tokens[i+1], tokens[i+2], tokens[i+3], tokens[i+4], tokens[i+5], tokens[i+6], tokens[i+7]));
+                    i += 8;
+                } else { i += 1; }
+            }
+            "S" => {
+                // Smooth cubic bezier
+                if i + 4 < tokens.len() {
+                    svg.push_str(&format!("S {} {} {} {} ",
+                        tokens[i+1], tokens[i+2], tokens[i+3], tokens[i+4]));
+                    i += 5;
+                } else { i += 1; }
+            }
+            "Z" | "z" => {
+                svg.push('Z');
+                i += 1;
+            }
+            _ => { i += 1; }
+        }
+    }
+    svg
+}
+
+/// Parse OFD content XML (Page or Template) and extract render objects.
+/// Returns (text_objects, path_objects, image_objects)
+fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<OfdImageObject>) {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut text_objs = Vec::new();
+    let mut path_objs = Vec::new();
+    let mut img_objs = Vec::new();
+
+    // We need to track context: which element we're in
+    // TextObject, PathObject, ImageObject are direct children of Layer
+    // TextCode is a child of TextObject
+    // AbbreviatedData is a child of PathObject
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut current_text: Option<OfdTextObject> = None;
+    let mut current_path: Option<OfdPathObject> = None;
+    let mut current_img: Option<OfdImageObject> = None;
+    let mut in_text_code = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let tag_local = local_tag_name(&e.name());
+                match tag_local.as_str() {
+                    "TextObject" => {
+                        let mut t = OfdTextObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { t.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { t.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "Font") { t.font_id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Size") { t.size = v.parse().unwrap_or(3.175); }
+                        if let Some(v) = attr_val(&e, "CTM") { t.ctm = parse_f6(&v); }
+                        if let Some(v) = attr_val(&e, "Alpha") { t.alpha = v.parse().ok(); }
+                        if let Some(v) = attr_val(&e, "BlendMode") { t.blend_mode = Some(v); }
+                        current_text = Some(t);
+                    }
+                    "PathObject" => {
+                        let mut p = OfdPathObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { p.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
+                        if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
+                        current_path = Some(p);
+                    }
+                    "ImageObject" => {
+                        let mut img = OfdImageObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { img.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { img.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "ResourceID") { img.resource_id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "CTM") { img.ctm = parse_f6(&v); }
+                        if let Some(v) = attr_val(&e, "BlendMode") { img.blend_mode = Some(v); }
+                        if let Some(v) = attr_val(&e, "Alpha") { img.alpha = v.parse().ok(); }
+                        current_img = Some(img);
+                    }
+                    "TextCode" => {
+                        in_text_code = true;
+                        if let Some(ref mut t) = current_text {
+                            if let Some(v) = attr_val(&e, "X") { t.text_x = v.parse().unwrap_or(0.0); }
+                            if let Some(v) = attr_val(&e, "Y") { t.text_y = v.parse().unwrap_or(0.0); }
+                            if let Some(v) = attr_val(&e, "DeltaX") {
+                                t.delta_x = parse_delta_x(&v);
+                            }
+                        }
+                    }
+                    "AbbreviatedData" => {
+                        let text = read_element_text(&mut reader);
+                        if let Some(ref mut p) = current_path {
+                            p.abbreviated_data = text;
+                        }
+                        continue;
+                    }
+                    "StrokeColor" => {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(c) = parse_color(&v) {
+                                if let Some(ref mut p) = current_path { p.stroke_color = Some(c); }
+                                if let Some(ref mut t) = current_text { t.stroke_color = Some(c); }
+                            }
+                        }
+                    }
+                    "FillColor" => {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(c) = parse_color(&v) {
+                                if let Some(ref mut p) = current_path { p.fill_color = Some(c); }
+                                if let Some(ref mut t) = current_text { t.fill_color = Some(c); }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                // Self-closing elements like <ImageObject ... /> or <TextObject ... />
+                let tag_local = local_tag_name(&e.name());
+                match tag_local.as_str() {
+                    "TextObject" => {
+                        let mut t = OfdTextObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { t.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { t.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "Font") { t.font_id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Size") { t.size = v.parse().unwrap_or(3.175); }
+                        if let Some(v) = attr_val(&e, "CTM") { t.ctm = parse_f6(&v); }
+                        if let Some(v) = attr_val(&e, "Alpha") { t.alpha = v.parse().ok(); }
+                        text_objs.push(t);
+                    }
+                    "PathObject" => {
+                        let mut p = OfdPathObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { p.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
+                        if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
+                        path_objs.push(p);
+                    }
+                    "ImageObject" => {
+                        let mut img = OfdImageObject::default();
+                        if let Some(v) = attr_val(&e, "ID") { img.id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some(f4) = parse_f4(&v) { img.boundary = f4; }
+                        }
+                        if let Some(v) = attr_val(&e, "ResourceID") { img.resource_id = v.parse().unwrap_or(0); }
+                        if let Some(v) = attr_val(&e, "CTM") { img.ctm = parse_f6(&v); }
+                        if let Some(v) = attr_val(&e, "Alpha") { img.alpha = v.parse().ok(); }
+                        img_objs.push(img);
+                    }
+                    "StrokeColor" => {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(c) = parse_color(&v) {
+                                if let Some(ref mut p) = current_path { p.stroke_color = Some(c); }
+                                if let Some(ref mut t) = current_text { t.stroke_color = Some(c); }
+                            }
+                        }
+                    }
+                    "FillColor" => {
+                        if let Some(v) = attr_val(&e, "Value") {
+                            if let Some(c) = parse_color(&v) {
+                                if let Some(ref mut p) = current_path { p.fill_color = Some(c); }
+                                if let Some(ref mut t) = current_text { t.fill_color = Some(c); }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if in_text_code {
+                    if let Ok(s) = t.unescape() {
+                        if let Some(ref mut text_obj) = current_text {
+                            text_obj.text.push_str(&s);
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag_local = local_tag_name(&e.name());
+                match tag_local.as_str() {
+                    "TextObject" => {
+                        if let Some(t) = current_text.take() {
+                            text_objs.push(t);
+                        }
+                    }
+                    "PathObject" => {
+                        if let Some(p) = current_path.take() {
+                            path_objs.push(p);
+                        }
+                    }
+                    "ImageObject" => {
+                        if let Some(img) = current_img.take() {
+                            img_objs.push(img);
+                        }
+                    }
+                    "TextCode" => {
+                        in_text_code = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    (text_objs, path_objs, img_objs)
+}
+
+/// Get local tag name (strip namespace prefix)
+fn local_tag_name(name: &quick_xml::name::QName) -> String {
+    let bytes = name.as_ref();
+    if let Some(pos) = bytes.iter().position(|&b| b == b':') {
+        String::from_utf8_lossy(&bytes[pos + 1..]).to_string()
+    } else {
+        String::from_utf8_lossy(bytes).to_string()
+    }
+}
+
+/// Parse OFD.xml CustomData entries for quick invoice data extraction
+fn parse_ofd_custom_data(xml: &str) -> std::collections::HashMap<String, String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut map = std::collections::HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "CustomData" {
+                    if let Some(name) = attr_val(&e, "Name") {
+                        let value = read_element_text(&mut reader);
+                        map.insert(name, value);
+                        continue;
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    map
+}
+
+/// Parse Tags/CustomTag.xml — maps semantic field names to TextObject IDs
+fn parse_custom_tag(xml: &str) -> std::collections::HashMap<String, Vec<u32>> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut map: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut current_field = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let tag = local_tag_name(&e.name());
+                match tag.as_str() {
+                    "InvoiceNo" | "IssueDate" | "BuyerName" | "BuyerTaxID" |
+                    "SellerName" | "SellerTaxID" | "TaxExclusiveTotalAmount" |
+                    "TaxTotalAmount" | "TaxInclusiveTotalAmount" | "Amount" |
+                    "TaxAmount" | "InvoiceClerk" | "Item" | "Price" | "Quantity" |
+                    "Note" | "TaxScheme" | "MeasurementDimension" => {
+                        current_field = tag;
+                    }
+                    "ObjectRef" => {
+                        if !current_field.is_empty() {
+                            // Read text content (the object ID)
+                            let text = read_element_text(&mut reader);
+                            if let Ok(id) = text.trim().parse::<u32>() {
+                                map.entry(current_field.clone()).or_default().push(id);
+                            }
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag = local_tag_name(&e.name());
+                match tag.as_str() {
+                    "InvoiceNo" | "IssueDate" | "BuyerName" | "BuyerTaxID" |
+                    "SellerName" | "SellerTaxID" | "TaxExclusiveTotalAmount" |
+                    "TaxTotalAmount" | "TaxInclusiveTotalAmount" | "Amount" |
+                    "TaxAmount" | "InvoiceClerk" | "Item" | "Price" | "Quantity" |
+                    "Note" | "TaxScheme" | "MeasurementDimension" | "Buyer" | "Seller" => {
+                        current_field.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    map
+}
+
+/// Parse PublicRes.xml for font definitions
+fn parse_fonts(xml: &str) -> (std::collections::HashMap<u32, OfdFont>, std::collections::HashMap<u32, String>) {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut fonts = std::collections::HashMap::new();
+    let mut color_spaces = std::collections::HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "Font" {
+                    let mut font = OfdFont::default();
+                    if let Some(v) = attr_val(&e, "ID") { font.id = v.parse().unwrap_or(0); }
+                    if let Some(v) = attr_val(&e, "FontName") { font.font_name = v; }
+                    if let Some(v) = attr_val(&e, "FamilyName") { font.family_name = v; }
+                    fonts.insert(font.id, font);
+                } else if tag == "ColorSpace" {
+                    if let (Some(id_v), Some(type_v)) = (attr_val(&e, "ID"), attr_val(&e, "Type")) {
+                        if let Ok(id) = id_v.parse::<u32>() {
+                            color_spaces.insert(id, type_v);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    (fonts, color_spaces)
+}
+
+/// Parse DocumentRes.xml for image resources
+fn parse_image_resources(xml: &str) -> std::collections::HashMap<u32, String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut images = std::collections::HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut current_id: Option<u32> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "MultiMedia" {
+                    if let Some(v) = attr_val(&e, "ID") {
+                        current_id = v.parse().ok();
+                    }
+                } else if tag == "MediaFile" {
+                    let text = read_element_text(&mut reader);
+                    if let Some(id) = current_id.take() {
+                        images.insert(id, text.trim().to_string());
+                    }
+                    continue;
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    images
+}
+
+/// Parse Annotations XML for watermark layer
+fn parse_annotations(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdImageObject>) {
+    // Annotations use the same TextObject/ImageObject structure
+    let (t, _, i) = parse_ofd_content(xml);
+    (t, i)
+}
+
+/// Main OFD parser: opens ZIP, parses all XML, builds SVG, extracts invoice data
+pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
+    use base64::Engine;
+
+    let file = std::fs::File::open(ofd_path)
+        .map_err(|e| format!("打开OFD文件失败: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("解析OFD ZIP失败: {}", e))?;
+
+    // 1. Read OFD.xml — root metadata + CustomData
+    let ofd_xml = zip_read_str(&mut archive, "OFD.xml")
+        .ok_or("OFD.xml 不存在")?;
+
+    // Find DocRoot path (usually Doc_0/Document.xml)
+    let doc_root = {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut rdr = Reader::from_str(&ofd_xml);
+        rdr.config_mut().trim_text(true);
+        let mut b = Vec::new();
+        let mut root = String::from("Doc_0/Document.xml");
+        loop {
+            match rdr.read_event_into(&mut b) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    if local_tag_name(&e.name()) == "DocRoot" {
+                        let t = read_element_text(&mut rdr);
+                        root = t.trim().to_string();
+                        break;
+                    }
+                }
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            b.clear();
+        }
+        root
+    };
+
+    // Determine base directory from doc_root (e.g., "Doc_0/Document.xml" → "Doc_0")
+    let base_dir = if let Some(pos) = doc_root.rfind('/') {
+        doc_root[..pos].to_string()
+    } else {
+        String::from("Doc_0")
+    };
+
+    // 2. Parse CustomData from OFD.xml
+    let custom_data = parse_ofd_custom_data(&ofd_xml);
+
+    // 3. Read Document.xml to find template and page content paths
+    let doc_xml = zip_read_str(&mut archive, &doc_root)
+        .ok_or_else(|| format!("{} 不存在", doc_root))?;
+
+    // Parse Document.xml to get template and page content paths
+    let (template_path, page_paths) = {
+        use quick_xml::events::Event;
+        use quick_xml::Reader;
+        let mut rdr = Reader::from_str(&doc_xml);
+        rdr.config_mut().trim_text(true);
+        let mut b = Vec::new();
+        let mut tpl = String::new();
+        let mut pages = Vec::new();
+        let mut in_template = false;
+        let mut in_page = false;
+        loop {
+            match rdr.read_event_into(&mut b) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let tag = local_tag_name(&e.name());
+                    if tag == "TemplatePage" {
+                        if let Some(v) = attr_val(&e, "BaseLoc") {
+                            tpl = format!("{}/{}", base_dir, v);
+                        }
+                        in_template = true;
+                    } else if tag == "Page" {
+                        if let Some(v) = attr_val(&e, "BaseLoc") {
+                            pages.push(format!("{}/{}", base_dir, v));
+                        }
+                        in_page = true;
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let tag = local_tag_name(&e.name());
+                    if tag == "TemplatePage" { in_template = false; }
+                    if tag == "Page" { in_page = false; }
+                }
+                Ok(Event::Eof) => break,
+                _ => {}
+            }
+            b.clear();
+        }
+        (tpl, pages)
+    };
+
+    // 4. Parse PublicRes.xml for fonts
+    let public_res_path = format!("{}/PublicRes.xml", base_dir);
+    let (font_map, color_spaces) = if let Some(xml) = zip_read_str(&mut archive, &public_res_path) {
+        parse_fonts(&xml)
+    } else {
+        (std::collections::HashMap::new(), std::collections::HashMap::new())
+    };
+
+    // 5. Parse DocumentRes.xml for image resources
+    let doc_res_path = format!("{}/DocumentRes.xml", base_dir);
+    let image_map = if let Some(xml) = zip_read_str(&mut archive, &doc_res_path) {
+        parse_image_resources(&xml)
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // Load actual image data from ZIP
+    let mut image_data: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    for (res_id, file_name) in &image_map {
+        let img_path = format!("{}/Res/{}", base_dir, file_name);
+        if let Some(bytes) = zip_read_bytes(&mut archive, &img_path) {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let mime = if file_name.to_lowercase().ends_with(".png") { "image/png" } else { "image/jpeg" };
+            image_data.insert(*res_id, format!("data:{};base64,{}", mime, b64));
+        }
+    }
+
+    // 6. Parse template content (background layer)
+    let (tpl_texts, tpl_paths, tpl_imgs) = if !template_path.is_empty() {
+        if let Some(xml) = zip_read_str(&mut archive, &template_path) {
+            parse_ofd_content(&xml)
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        }
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+
+    // 7. Parse page content (data layer)
+    // Note: avoid shadowing `page_paths` (Vec<String> from Document.xml parsing)
+    let (page_texts, page_obj_paths, page_imgs) = if let Some(page_path) = page_paths.first() {
+        if let Some(xml) = zip_read_str(&mut archive, page_path) {
+            parse_ofd_content(&xml)
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        }
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+
+    // 8. Parse annotations (watermark layer)
+    let annots_path = format!("{}/Annots/Page_0/Annotation.xml", base_dir);
+    let (annot_texts, annot_imgs) = if let Some(xml) = zip_read_str(&mut archive, &annots_path) {
+        let (t, _, i) = parse_ofd_content(&xml);
+        (t, i)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    // 9. Get page dimensions
+    let (page_w, page_h) = if let Some(page_path) = page_paths.first() {
+        if let Some(xml) = zip_read_str(&mut archive, page_path) {
+            // Parse PhysicalBox from the page XML
+            use quick_xml::events::Event;
+            use quick_xml::Reader;
+            let mut rdr = Reader::from_str(&xml);
+            rdr.config_mut().trim_text(true);
+            let mut b = Vec::new();
+            let mut dims = (210.0f64, 140.0f64);
+            loop {
+                match rdr.read_event_into(&mut b) {
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                        if local_tag_name(&e.name()) == "PhysicalBox" {
+                            let text = read_element_text(&mut rdr);
+                            if let Some((_, _, w, h)) = parse_f4(text.trim()) {
+                                dims = (w, h);
+                            }
+                            break;
+                        }
+                    }
+                    Ok(Event::Eof) => break,
+                    _ => {}
+                }
+                b.clear();
+            }
+            dims
+        } else {
+            (210.0, 140.0)
+        }
+    } else {
+        (210.0, 140.0)
+    };
+
+    // 10. Parse CustomTag.xml for semantic field mapping
+    let custom_tag_path = format!("{}/Tags/CustomTag.xml", base_dir);
+    let tag_map = if let Some(xml) = zip_read_str(&mut archive, &custom_tag_path) {
+        parse_custom_tag(&xml)
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // 11. Extract invoice info from structured data
+    let mut invoice_info = OfdInvoiceInfo::default();
+
+    // From OFD.xml CustomData
+    invoice_info.invoice_no = custom_data.get("发票号码").cloned();
+    invoice_info.invoice_date = custom_data.get("开票日期").cloned();
+    invoice_info.buyer_tax_id = custom_data.get("购买方纳税人识别号").cloned();
+    invoice_info.seller_tax_id = custom_data.get("销售方纳税人识别号").cloned();
+    invoice_info.amount_no_tax = custom_data.get("合计金额").and_then(|s| s.parse().ok());
+    invoice_info.tax_amount = custom_data.get("合计税额").and_then(|s| s.parse().ok());
+
+    // Compute total = no_tax + tax
+    if let (Some(no_tax), Some(tax)) = (invoice_info.amount_no_tax, invoice_info.tax_amount) {
+        invoice_info.amount_tax = Some((no_tax + tax * 100.0).round() / 100.0);
+    }
+
+    // From CustomTag.xml + Content.xml — get buyer/seller names
+    // Build a text lookup: TextObject ID → text content
+    let mut text_lookup: std::collections::HashMap<u32, &str> = std::collections::HashMap::new();
+    for t in &page_texts {
+        text_lookup.insert(t.id, &t.text);
+    }
+
+    // Map tag fields to text content
+    let get_tag_text = |field: &str| -> Option<String> {
+        tag_map.get(field).and_then(|ids| {
+            ids.iter().filter_map(|id| text_lookup.get(id)).map(|s| s.to_string()).collect::<Vec<_>>().into_iter().next()
+        })
+    };
+
+    if invoice_info.invoice_no.is_none() {
+        invoice_info.invoice_no = get_tag_text("InvoiceNo");
+    }
+    if invoice_info.invoice_date.is_none() {
+        invoice_info.invoice_date = get_tag_text("IssueDate");
+    }
+    if invoice_info.buyer_name.is_none() {
+        invoice_info.buyer_name = get_tag_text("BuyerName");
+    }
+    if invoice_info.seller_name.is_none() {
+        invoice_info.seller_name = get_tag_text("SellerName");
+    }
+
+    // Detect invoice type from template title
+    for t in &tpl_texts {
+        if t.text.contains("增值税专用") {
+            invoice_info.invoice_type = Some("增值税专用发票".to_string());
+            break;
+        } else if t.text.contains("增值税普通") || t.text.contains("增值税电子普通") {
+            invoice_info.invoice_type = Some("增值税普通发票".to_string());
+            break;
+        } else if t.text.contains("电子发票") {
+            invoice_info.invoice_type = Some("电子发票".to_string());
+            break;
+        }
+    }
+
+    // 12. Build SVG
+    let svg = build_ofd_svg(
+        page_w, page_h,
+        &tpl_texts, &tpl_paths, &tpl_imgs,
+        &page_texts, &page_obj_paths, &page_imgs,
+        &annot_texts, &annot_imgs,
+        &font_map, &color_spaces, &image_data,
+    );
+
+    log::info!("OFD parsed: {}x{}mm, {} template texts, {} page texts, {} paths",
+        page_w, page_h, tpl_texts.len(), page_texts.len(), tpl_paths.len() + page_obj_paths.len());
+
+    Ok(OfdResult {
+        svg,
+        invoice_info,
+        page_width: page_w,
+        page_height: page_h,
+    })
+}
+
+/// Build complete SVG from parsed OFD layers
+fn build_ofd_svg(
+    page_w: f64,
+    page_h: f64,
+    tpl_texts: &[OfdTextObject],
+    tpl_paths: &[OfdPathObject],
+    tpl_imgs: &[OfdImageObject],
+    page_texts: &[OfdTextObject],
+    page_paths: &[OfdPathObject],
+    page_imgs: &[OfdImageObject],
+    annot_texts: &[OfdTextObject],
+    annot_imgs: &[OfdImageObject],
+    font_map: &std::collections::HashMap<u32, OfdFont>,
+    color_spaces: &std::collections::HashMap<u32, String>,
+    image_data: &std::collections::HashMap<u32, String>,
+) -> String {
+    let scale = 3.5; // Scale factor: 1mm → 3.5 SVG units for good resolution
+    let vw = page_w * scale;
+    let vh = page_h * scale;
+
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 {:.1} {:.1}\" width=\"{:.1}\" height=\"{:.1}\" style=\"background:white\">",
+        vw, vh, vw, vh
+    );
+
+    // Layer 1: Template (background) — grid lines and static labels
+    svg.push_str("<g id=\"template\">");
+    for p in tpl_paths {
+        svg.push_str(&build_svg_path(p, scale));
+    }
+    for t in tpl_texts {
+        svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
+    }
+    for img in tpl_imgs {
+        svg.push_str(&build_svg_image(img, image_data, scale));
+    }
+    svg.push_str("</g>");
+
+    // Layer 2: Content (data)
+    svg.push_str("<g id=\"content\">");
+    for p in page_paths {
+        svg.push_str(&build_svg_path(p, scale));
+    }
+    for t in page_texts {
+        svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
+    }
+    for img in page_imgs {
+        svg.push_str(&build_svg_image(img, image_data, scale));
+    }
+    svg.push_str("</g>");
+
+    // Layer 3: Annotations (watermarks)
+    svg.push_str("<g id=\"annotations\">");
+    for t in annot_texts {
+        svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
+    }
+    for img in annot_imgs {
+        svg.push_str(&build_svg_image(img, image_data, scale));
+    }
+    svg.push_str("</g>");
+
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Build SVG path from OFD PathObject
+fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
+    if p.abbreviated_data.is_empty() {
+        return String::new();
+    }
+
+    let svg_d = ofd_path_to_svg(&p.abbreviated_data);
+    if svg_d.is_empty() {
+        return String::new();
+    }
+
+    // SVG path data is in local coordinates (relative to Boundary)
+    // We need to translate to the Boundary position
+    let tx = p.boundary.0 * scale;
+    let ty = p.boundary.1 * scale;
+
+    let mut attrs = String::new();
+    attrs.push_str(&format!(" transform=\"translate({:.4},{:.4})\"", tx, ty));
+    attrs.push_str(&format!(" stroke-width=\"{:.4}\"", p.line_width * scale));
+    if p.fill {
+        attrs.push_str(" fill-rule=\"nonzero\"");
+    }
+    attrs.push_str(&stroke_attr(p.stroke_color, p.alpha));
+    if p.fill {
+        attrs.push_str(&fill_attr(p.fill_color.or(p.stroke_color), p.alpha));
+    } else {
+        attrs.push_str(" fill=\"none\"");
+    }
+
+    // Need to scale the path coordinates
+    // The path data uses the local coordinate system of the Boundary
+    // We scale it by applying a scale transform
+    format!("<g{}><g transform=\"scale({:.4})\"><path d=\"{}\"/></g></g>",
+        attrs.replace(
+            &format!("transform=\"translate({:.4},{:.4})\"", tx, ty),
+            &format!("transform=\"translate({:.4},{:.4}) scale({:.4})\"", tx, ty, scale)
+        ),
+        1.0, // This is a placeholder, we handle scale in the outer transform
+        svg_d
+    )
+}
+
+/// Build SVG image from OFD ImageObject
+fn build_svg_image(img: &OfdImageObject, image_data: &std::collections::HashMap<u32, String>, scale: f64) -> String {
+    let data_url = match image_data.get(&img.resource_id) {
+        Some(url) => url,
+        None => return String::new(),
+    };
+
+    let x = img.boundary.0 * scale;
+    let y = img.boundary.1 * scale;
+    let w = img.boundary.2 * scale;
+    let h = img.boundary.3 * scale;
+
+    let mut transform = format!("translate({:.4},{:.4})", x, y);
+    if let Some(ctm) = img.ctm {
+        transform.push_str(&format!(" matrix({:.4},{:.4},{:.4},{:.4},{:.4},{:.4})",
+            ctm.0, ctm.1, ctm.2, ctm.3, ctm.4 * scale, ctm.5 * scale));
+    }
+
+    let opacity = img.alpha.map(|a| format!(" opacity=\"{:.2}\"", a as f64 / 255.0)).unwrap_or_default();
+
+    format!(
+        "<image href=\"{}\" x=\"0\" y=\"0\" width=\"{:.4}\" height=\"{:.4}\" transform=\"{}\"{}/>",
+        data_url, w, h, transform, opacity
+    )
 }
 
 // =====================================================

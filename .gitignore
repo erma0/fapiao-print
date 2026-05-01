@@ -35,3 +35,4 @@ desktop.ini
 screenshot_*.png
 
 dist/
+.claude/

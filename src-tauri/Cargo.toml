@@ -33,6 +33,7 @@ printpdf = { version = "0.9", features = ["images"] }
 lopdf = "0.39"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rayon = "1.10"
+quick-xml = { version = "0.37", features = ["serialize"] }
 ocr-rs = { version = "2.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

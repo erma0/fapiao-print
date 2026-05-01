@@ -586,6 +586,50 @@ function updateFileItem(fileObj) {
 }
 
 /**
+ * Render SVG string to PNG data URL via Canvas.
+ * @param {string} svgString - SVG markup
+ * @param {number} pageWidthMm - page width in mm
+ * @param {number} pageHeightMm - page height in mm
+ * @returns {Promise<string>} PNG data URL at 300 DPI
+ */
+function svgToPngDataUrl(svgString, pageWidthMm, pageHeightMm) {
+  return new Promise(function(resolve, reject) {
+    // OFD SVG scale=3.5, so viewBox = pageWidth * 3.5
+    var svgScale = 3.5;
+    var svgW = pageWidthMm * svgScale;
+    var svgH = pageHeightMm * svgScale;
+    // Target: 300 DPI
+    var pxW = Math.round(pageWidthMm * PDF_RENDER_DPI / 25.4);
+    var pxH = Math.round(pageHeightMm * PDF_RENDER_DPI / 25.4);
+
+    var blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas');
+      canvas.width = pxW;
+      canvas.height = pxH;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, pxW, pxH);
+      ctx.drawImage(img, 0, 0, svgW, svgH, 0, 0, pxW, pxH);
+      URL.revokeObjectURL(url);
+      try {
+        var pngUrl = canvas.toDataURL('image/png');
+        resolve(pngUrl);
+      } catch(e) {
+        reject(new Error('Canvas toDataURL failed: ' + e.message));
+      }
+    };
+    img.onerror = function() {
+      URL.revokeObjectURL(url);
+      reject(new Error('SVG image load failed'));
+    };
+    img.src = url;
+  });
+}
+
+/**
  * Fast load from FileData — show preview immediately, OCR in background.
  * @param {Object} fd - FileData from Rust: { name, dataUrl, size, ext, path, origW, origH }
  */
@@ -632,6 +676,67 @@ function loadFileFromDataUrlFast(fd) {
       }
       // Non-Tauri: PDF files require native rendering
       toast('PDF 格式请使用桌面版打开');
+      resolve(null);
+    }
+    // OFD: SVG vector rendering + structured invoice data from XML (skips OCR)
+    else if (ext === 'ofd' && isTauri && invoke && filePath) {
+      invoke('parse_ofd', { ofdPath: filePath }).then(function(result) {
+        return svgToPngDataUrl(result.svg, result.pageWidth, result.pageHeight).then(function(pngUrl) {
+          var img = new Image(); img.src = pngUrl;
+          return new Promise(function(r) { img.onload = function() { r({img: img, pngUrl: pngUrl, info: result.invoiceInfo}); }; });
+        });
+      }).then(function(payload) {
+        var info = payload.info || {};
+        var fileObj = createFileObj({
+          id: id, name: name, size: size, type: 'ofd',
+          previewUrl: payload.pngUrl, img: payload.img,
+          // Don't set filePath — OFD is a ZIP, not an image.
+          // print.js needs sourceType='ofd-page' (FlateDecode), which requires _filePath to be empty.
+          // The OFD path is only needed for parse_ofd (already done above).
+          // Structured data from OFD XML — skip OCR
+          amountTax: info.amountTax || 0,
+          amountNoTax: info.amountNoTax || 0,
+          taxAmount: info.taxAmount || 0,
+          sellerName: info.sellerName || '',
+          sellerCreditCode: info.sellerTaxId || '',
+          invoiceNo: info.invoiceNo || '',
+          invoiceDate: info.invoiceDate || '',
+          buyerName: info.buyerName || '',
+          buyerCreditCode: info.buyerTaxId || '',
+          // OFD page dimensions for layout
+          ow: payload.img.naturalWidth,
+          oh: payload.img.naturalHeight,
+          // Mark as OFD source for PDF generation (FlateDecode)
+          _ofdPage: true
+        });
+        resolve(fileObj);
+      }).catch(function(err) {
+        // Fallback: call open_ofd_images for bitmap extraction
+        console.warn('[OFD] parse_ofd failed, falling back to bitmap:', err);
+        invoke('open_ofd_images', { ofdPath: filePath }).then(function(fileDataList) {
+          if (fileDataList && fileDataList.length > 0) {
+            // Load the first page as bitmap fallback
+            var fd0 = fileDataList[0];
+            var img = new Image(); img.src = fd0.dataUrl;
+            img.onload = function() {
+              var fileObj = createFileObj({
+                id: id, name: fd0.name, size: fd0.size, type: fd0.ext,
+                previewUrl: fd0.dataUrl, img: img,
+                ow: fd0.origW || 0, oh: fd0.origH || 0
+              });
+              resolve(fileObj);
+              if (S.feat.ocrEnabled) applyOcrAsync(fileObj, fd0.dataUrl);
+            };
+            img.onerror = function() { resolve(null); };
+          } else {
+            resolve(null);
+          }
+        }).catch(function() { resolve(null); });
+      });
+      return;
+    }
+    else if (ext === 'ofd') {
+      toast('OFD 格式请使用桌面版打开');
       resolve(null);
     }
     else {

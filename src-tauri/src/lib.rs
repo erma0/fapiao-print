@@ -1,7 +1,7 @@
 use tauri::{command, Emitter};
 
 mod pdf_engine;
-use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
+use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest, OfdResult};
 #[cfg(feature = "ocr")]
 use pdf_engine::{OcrResult, RenderedOcrPage};
 
@@ -13,6 +13,20 @@ use pdf_engine::{OcrResult, RenderedOcrPage};
 #[command]
 fn open_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
     pdf_engine::read_invoice_files(paths)
+}
+
+/// Parse OFD file: returns SVG vector rendering + structured invoice data from XML.
+/// Skips OCR — invoice fields are extracted directly from OFD metadata.
+#[command]
+fn parse_ofd(ofd_path: String) -> Result<OfdResult, String> {
+    pdf_engine::parse_ofd_file(&ofd_path)
+}
+
+/// Fallback: extract OFD pages as bitmap images (legacy path).
+/// Used when parse_ofd fails (e.g., vector-only OFD with no parseable XML).
+#[command]
+fn open_ofd_images(ofd_path: String) -> Result<Vec<FileData>, String> {
+    pdf_engine::extract_ofd_images_as_filedata(&ofd_path)
 }
 
 /// List available printers
@@ -561,6 +575,8 @@ pub fn run() {
         trim_image,
         generate_pdf_from_layout,
         print_pdf_file,
+        parse_ofd,
+        open_ofd_images,
     ]);
 
     #[cfg(not(feature = "ocr"))]
@@ -578,6 +594,8 @@ pub fn run() {
         trim_image,
         generate_pdf_from_layout,
         print_pdf_file,
+        parse_ofd,
+        open_ofd_images,
     ]);
 
     builder
