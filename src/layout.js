@@ -106,7 +106,23 @@ function renderPage(pageFiles, pi, total, s) {
       var transforms = '';
       if (s.fitMode === 'custom' && s.customScale !== 1) transforms += 'scale(' + s.customScale + ') ';
       if (rot) transforms += 'rotate(' + rot + 'deg) ';
-      inner = '<img src="' + src + '" style="' + (s.fitMode === 'original' ? '' : 'max-width:100%;max-height:100%;') + 'object-fit:' + fit + ';' + filt + (transforms ? 'transform:' + transforms + ';' : '') + '">';
+      // Rotation sizing fix:
+      // CSS transform:rotate() only visually rotates — it does NOT change the element's layout box.
+      // For 90°/270° rotation, the image's visual width↔height swap, but max-width/max-height
+      // constraints still reference the unrotated slot dimensions. This causes the image to be
+      // constrained by the wrong axis, resulting in a tiny image that doesn't fill the slot.
+      // Fix: for 90°/270°, swap the max-width/max-height to match the rotated visual dimensions.
+      var isRotated90 = (rot === 90 || rot === 270);
+      var sizeStyle = '';
+      if (s.fitMode === 'original') {
+        sizeStyle = ''; // no size constraints
+      } else if (isRotated90) {
+        // After 90°/270° rotation: visual width = slot height, visual height = slot width
+        sizeStyle = 'max-width:' + imgH + 'px;max-height:' + imgW + 'px;';
+      } else {
+        sizeStyle = 'max-width:100%;max-height:100%;';
+      }
+      inner = '<img src="' + src + '" style="' + sizeStyle + 'object-fit:' + fit + ';' + filt + (transforms ? 'transform:' + transforms + ';' : '') + '">';
       if (s.number) inner += '<div class="slot-num">' + (pi * s.rows * s.cols + i + 1) + '</div>';
       if (s.watermark && s.watermarkText) {
         var ws = Math.min(slot.w * scale, slot.h * scale) * 0.15;

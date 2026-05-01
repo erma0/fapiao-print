@@ -2747,87 +2747,92 @@ fn build_nup_content_stream(
         let slot_w_pt = slot.w_mm * MM_TO_PT;
         let slot_h_pt = slot.h_mm * MM_TO_PT;
 
-        // Compute scale to fit in slot
+        // Handle rotation via transformation matrix
+        let rotation = if slot_idx < slot_rotations.len() { slot_rotations[slot_idx] } else { 0 };
+        let rot = ((rotation % 360) + 360) % 360;
+
+        // For 90°/270° rotation, the visual dimensions swap (width↔height),
+        // so scaling must be computed against the *rotated* dimensions to fit the slot correctly.
+        let (vis_w, vis_h) = if rot == 90 || rot == 270 {
+            (*src_h_pt, *src_w_pt) // rotated: visual width = original height, etc.
+        } else {
+            (*src_w_pt, *src_h_pt)
+        };
+
+        // Compute scale to fit in slot based on visual (rotated) dimensions
         let (scale_x, scale_y) = match settings.fit_mode.as_str() {
-            "fill" => (slot_w_pt / src_w_pt, slot_h_pt / src_h_pt),
+            "fill" => (slot_w_pt / vis_w, slot_h_pt / vis_h),
             "original" => (1.0, 1.0),
             "custom" => {
-                let contain_s = (slot_w_pt / src_w_pt).min(slot_h_pt / src_h_pt);
+                let contain_s = (slot_w_pt / vis_w).min(slot_h_pt / vis_h);
                 let s = contain_s * settings.custom_scale;
                 (s, s)
             }
             _ => {
                 // "contain" (default)
-                let s = (slot_w_pt / src_w_pt).min(slot_h_pt / src_h_pt);
+                let s = (slot_w_pt / vis_w).min(slot_h_pt / vis_h);
                 (s, s)
             }
         };
 
-        // Centered position in slot (bottom-left origin)
-        let draw_w = src_w_pt * scale_x;
-        let draw_h = src_h_pt * scale_y;
+        // Centered position in slot (bottom-left origin) based on visual dimensions
+        let draw_w = vis_w * scale_x;
+        let draw_h = vis_h * scale_y;
         let offset_x = slot.x_mm * MM_TO_PT + (slot_w_pt - draw_w) / 2.0;
         let offset_y = slot.y_mm * MM_TO_PT + (slot_h_pt - draw_h) / 2.0;
 
-        // Handle rotation via transformation matrix
-        let rotation = if slot_idx < slot_rotations.len() { slot_rotations[slot_idx] } else { 0 };
-        let rot = ((rotation % 360) + 360) % 360;
-
         // PDF transformation matrix: [a b c d e f]
-        // For rotation: rotate around the center of the drawn area
+        // Maps Form XObject coordinate space (0,0)-(src_w,src_h) to page area.
+        // For rotation, we derive the matrix from the desired mapping:
+        //   rot=0:   (x,y) → (sx*x+ox, sy*y+oy)
+        //   rot=90:  (x,y) → (sx*(src_h-y)+ox, sy*x+oy)  [CCW in PDF = CW visually]
+        //   rot=180: (x,y) → (sx*(src_w-x)+ox, sy*(src_h-y)+oy)
+        //   rot=270: (x,y) → (sx*y+ox, sy*(src_w-x)+oy)   [CW in PDF = CCW visually]
+        // Where sx/sy scale from source to visual dimensions:
+        let (sx, sy) = if rot == 90 || rot == 270 {
+            // After rotation: visual width = src_h, visual height = src_w
+            (draw_w / *src_h_pt, draw_h / *src_w_pt)
+        } else {
+            (draw_w / *src_w_pt, draw_h / *src_h_pt)
+        };
+
         let matrix: Vec<lopdf::Object> = match rot {
             0 => {
-                // Simple translate + scale:  scale_x 0 0 scale_y offset_x offset_y
+                // [sx 0 0 sy offset_x offset_y]
                 vec![
-                    lopdf::Object::Real(scale_x), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(scale_y),
+                    lopdf::Object::Real(sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(sy),
                     lopdf::Object::Real(offset_x), lopdf::Object::Real(offset_y),
                 ]
             }
             90 => {
-                // Rotate 90° CCW (counterclockwise in PDF coords = clockwise visually):
-                // [0 scale_y -scale_x 0 offset_x+draw_h offset_y]
-                // But we need to rotate around the center of the slot
-                let cx = offset_x + draw_w / 2.0;
-                let cy = offset_y + draw_h / 2.0;
-                // After 90° rotation, width↔height swap
-                let new_draw_w = draw_h;  // was height, now width
-                let new_draw_h = draw_w;  // was width, now height
-                let new_offset_x = cx - new_draw_w / 2.0;
-                let new_offset_y = cy - new_draw_h / 2.0;
+                // [0 sy -sx 0 offset_x+draw_w offset_y]
                 vec![
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(scale_y),
-                    lopdf::Object::Real(-scale_x), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(new_offset_x + new_draw_w), lopdf::Object::Real(new_offset_y),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(sy),
+                    lopdf::Object::Real(-sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(offset_x + draw_w), lopdf::Object::Real(offset_y),
                 ]
             }
             180 => {
-                // Rotate 180°: [-scale_x 0 0 -scale_y offset_x+draw_w offset_y+draw_h]
+                // [-sx 0 0 -sy offset_x+draw_w offset_y+draw_h]
                 vec![
-                    lopdf::Object::Real(-scale_x), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(-scale_y),
+                    lopdf::Object::Real(-sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(-sy),
                     lopdf::Object::Real(offset_x + draw_w), lopdf::Object::Real(offset_y + draw_h),
                 ]
             }
             270 => {
-                // Rotate 270° CCW (90° CW):
-                let cx = offset_x + draw_w / 2.0;
-                let cy = offset_y + draw_h / 2.0;
-                let new_draw_w = draw_h;
-                let new_draw_h = draw_w;
-                let new_offset_x = cx - new_draw_w / 2.0;
-                let new_offset_y = cy - new_draw_h / 2.0;
+                // [0 -sy sx 0 offset_x offset_y+draw_h]
                 vec![
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(-scale_y),
-                    lopdf::Object::Real(scale_x), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(new_offset_x), lopdf::Object::Real(new_offset_y + new_draw_h),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(-sy),
+                    lopdf::Object::Real(sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(offset_x), lopdf::Object::Real(offset_y + draw_h),
                 ]
             }
             _ => {
-                // Unsupported rotation, treat as 0
                 vec![
-                    lopdf::Object::Real(scale_x), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(scale_y),
+                    lopdf::Object::Real(sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(sy),
                     lopdf::Object::Real(offset_x), lopdf::Object::Real(offset_y),
                 ]
             }

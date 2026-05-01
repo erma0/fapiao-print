@@ -309,7 +309,23 @@ function fallbackPrint(files, s) {
       var x = ml + c * (slotW + ml + mr + s.gapH), y = mt + r * (slotH + mt + mb + s.gapV);
       if (f && f.previewUrl) {
         var src = S.feat.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
-        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + escHtml(src) + '"></div>';
+        // Compute effective rotation (same logic as layout.js getRotation)
+        var rot = 0;
+        var slot = { w: slotW, h: slotH };
+        if (s.globalRotation === 'auto') {
+          var isSlotL = slotW > slotH;
+          var isImgL = (f.ow || 1) > (f.oh || 1);
+          rot = (isSlotL !== isImgL) ? ((f.rotation || 0) + 90) % 360 : (f.rotation || 0);
+        } else {
+          rot = ((parseInt(s.globalRotation) || 0) + (f.rotation || 0)) % 360;
+        }
+        var rotStyle = rot ? 'transform:rotate(' + rot + 'deg);' : '';
+        // For 90°/270° rotation, swap max-width/max-height constraints (same as preview fix)
+        var isRotated90 = (rot === 90 || rot === 270);
+        var sizeStyle = isRotated90
+          ? 'max-width:' + slotH + 'mm;max-height:' + slotW + 'mm;'
+          : 'max-width:100%;max-height:100%;';
+        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + escHtml(src) + '" style="' + sizeStyle + rotStyle + '"></div>';
       }
     }
     html += '</div>';
