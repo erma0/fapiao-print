@@ -35,9 +35,17 @@ function buildLayoutRequest(files, settings) {
       if (fileObj._filePath) {
         spec.filePath = fileObj._filePath;
         spec.dataUrl = ''; // not needed — Rust reads from file
+        spec.sourceType = 'image';
       } else {
         spec.dataUrl = fileObj.previewUrl || '';
         spec.filePath = null;
+        // PDF pages have _pdfPath; OFD pages don't
+        spec.sourceType = fileObj._pdfPath ? 'pdf-page' : 'ofd-page';
+      }
+      // Pass PDF source info for passthrough optimization
+      if (fileObj._pdfPath) {
+        spec.pdfPath = fileObj._pdfPath;
+        spec.pdfPageIdx = fileObj._pdfPageIdx >= 0 ? fileObj._pdfPageIdx : null;
       }
       fileSpecs.push(spec);
     }

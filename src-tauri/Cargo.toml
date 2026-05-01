@@ -30,6 +30,7 @@ log = "0.4"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "ico", "bmp", "tiff", "webp"] }
 printpdf = { version = "0.9", features = ["images"] }
+lopdf = "0.39"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rayon = "1.10"
 ocr-rs = { version = "2.2", optional = true }
