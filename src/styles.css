@@ -171,6 +171,9 @@ body {
 }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
+.ib:disabled { opacity: 0.6; cursor: not-allowed; }
+#ocrAllBtn { min-width: 32px; font-size: 12px; transition: min-width 0.2s; }
+#ocrAllBtn:disabled { background: var(--accent-light); color: var(--accent); }
 
 /* ===== Settings ===== */
 .sec { padding: 12px; border-bottom: 1px solid var(--border); }

@@ -358,6 +358,7 @@ var _ocrQueue = [];
 var _ocrRunning = 0;
 var _ocrMaxConcurrent = 1; // OCR引擎是Mutex，同时只有1个请求能执行
 var _ocrToastActive = false; // track if "识别中" toast is showing
+var _ocrBatchTotal = 0;     // Total files in current batch (for progress display)
 var _lastPdfPath = null;   // Path of last generated/saved PDF (for print cache)
 var _pdfDirty = true;      // Whether PDF content has changed since last generation
 var _activeFileIdx = -1;   // Index of currently active/highlighted file in sidebar
@@ -368,6 +369,7 @@ function _onOcrTaskDone() {
   if (remaining > 0 && _ocrToastActive) {
     toastLoading('识别中，剩余 ' + remaining + ' 张...');
   }
+  updateOcrAllBtn();
   if (!window.__TAURI_CLOSING__) _drainOcrQueue();
 }
 
@@ -380,13 +382,35 @@ function _drainOcrQueue() {
   // All OCR done — dismiss loading toast
   if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive) {
     _ocrToastActive = false;
+    _ocrBatchTotal = 0;
+    updateOcrAllBtn();
     toastDone('识别完成');
+  }
+}
+
+function updateOcrAllBtn() {
+  var btn = document.getElementById('ocrAllBtn');
+  if (!btn) return;
+  var remaining = _ocrQueue.length + _ocrRunning;
+  if (remaining > 0) {
+    var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
+    btn.innerHTML = _ocrBatchTotal > 0
+      ? '<span class="ocr-spinner"></span> ' + done + '/' + _ocrBatchTotal
+      : '<span class="ocr-spinner"></span> ' + remaining;
+    btn.disabled = true;
+    btn.title = '识别中 ' + (_ocrBatchTotal > 0 ? done + '/' + _ocrBatchTotal : '剩余' + remaining);
+  } else {
+    btn.textContent = '\uD83D\uDD0D';
+    btn.disabled = false;
+    btn.title = '一键识别';
   }
 }
 
 function applyOcrAsync(fileObj, dataUrl) {
   if (!isTauri || !invoke || window.__TAURI_CLOSING__) return;
   fileObj._ocrPending = true;
+  updateFileItem(fileObj);
+  updateOcrAllBtn();
   var hasFilePath = !!(fileObj._filePath);
   var isPdfPage = !!(fileObj._pdfPath && fileObj._pdfPageIdx >= 0);
   _ocrQueue.push(function() {
@@ -399,7 +423,7 @@ function applyOcrAsync(fileObj, dataUrl) {
       ocrPromise = applyOcr(fileObj, '', fileObj._filePath);
     } else {
       // No file path (e.g. browser-mode image) — downsample for faster IPC
-      ocrPromise = downsampleForOcr(dataUrl, 720).then(function(ocrDataUrl) {
+      ocrPromise = downsampleForOcr(dataUrl, 960).then(function(ocrDataUrl) {
         return applyOcr(fileObj, ocrDataUrl);
       });
     }
@@ -407,9 +431,17 @@ function applyOcrAsync(fileObj, dataUrl) {
       fileObj._ocrPending = false;
       updateFileItem(fileObj);
       updateAmountSummary();
+      // Show result toast only for single-file OCR (batch shows progress via _onOcrTaskDone)
+      if (_ocrBatchTotal <= 1 && _ocrQueue.length === 0 && _ocrRunning <= 1) {
+        var amt = fileObj.amountTax || fileObj.amountNoTax;
+        toast(amt > 0 ? '识别成功 \u00A5' + amt.toFixed(2) : '识别完成，未识别到金额', 2500);
+      }
     }).catch(function(e) {
       fileObj._ocrPending = false;
       console.warn('[OCR] 后台识别失败:', e);
+      if (_ocrBatchTotal <= 1 && _ocrQueue.length === 0 && _ocrRunning <= 1) {
+        toast('识别失败', 2500);
+      }
     });
   });
   // Show toast with remaining count
@@ -440,6 +472,21 @@ function updateFileItem(fileObj) {
   if (sellerEl) {
     sellerEl.innerHTML = sb;
     sellerEl.style.display = sb ? '' : 'none';
+  }
+  // Update per-file OCR button state
+  var ocrBtn = items[idx].querySelector('.ocr-btn');
+  if (ocrBtn) {
+    if (f._ocrPending) {
+      ocrBtn.innerHTML = '<span class="ocr-spinner"></span>';
+      ocrBtn.disabled = true;
+      ocrBtn.title = '识别中';
+      ocrBtn.onclick = null;
+    } else {
+      ocrBtn.textContent = '\uD83D\uDD0D';
+      ocrBtn.disabled = false;
+      ocrBtn.title = 'OCR识别';
+      ocrBtn.onclick = (function(i) { return function() { ocrFile(i); }; })(idx);
+    }
   }
 }
 
@@ -595,7 +642,9 @@ function renderFileList() {
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : '\uD83D\uDCC4');
     var actionBtns = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<button class="ib" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
+      : (f._ocrPending
+        ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
+        : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button><button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>');
     return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
@@ -624,6 +673,19 @@ function ocrFile(i) {
   if (f._loading || f._ocrPending) return;
   if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
   applyOcrAsync(f, f.previewUrl);
+}
+function ocrAll() {
+  if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
+  var running = _ocrQueue.length + _ocrRunning;
+  if (running > 0) { toast('正在识别中，请稍候'); return; }
+  var targets = S.files.filter(function(f) {
+    return !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
+  });
+  if (targets.length === 0) { toast('没有需要识别的发票'); return; }
+  _ocrBatchTotal = targets.length;
+  updateOcrAllBtn();
+  toastLoading('识别中，共 ' + targets.length + ' 张...');
+  targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
 }
 function clearAll() { if (!S.files.length) return; if (!confirm('确认清除所有发票？')) return; S.files = []; _activeFileIdx = -1; renderFileList(); updatePreview(); updatePrintBtn(); }
 

@@ -470,7 +470,7 @@ pub(crate) fn render_and_ocr_pdf(pdf_path: &str, dpi: u32) -> Result<Vec<Rendere
                         let rscale = OCR_MAX_DIM as f32 / longest as f32;
                         let nw = (orig_w as f32 * rscale).round() as u32;
                         let nh = (orig_h as f32 * rscale).round() as u32;
-                        img.resize_exact(nw, nh, image::imageops::FilterType::Nearest)
+                        img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
                     } else {
                         img
                     };
@@ -1033,10 +1033,11 @@ fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrE
 }
 
 /// Maximum longest-side dimension for OCR input.
-/// PP-OCRv5 detection works best at ~720px; invoices have large, clear text
-/// that survives aggressive downscaling well. 720 vs 960 gives ~40% faster
-/// detection + ~25% faster recognition with negligible accuracy loss.
-const OCR_MAX_DIM: u32 = 720;
+/// Maximum longest-side dimension for OCR input.
+/// 960px preserves small text (密码区/备注栏/明细行) that 720 would blur out.
+/// Speed trade-off: ~40% slower detection + ~25% slower recognition vs 720,
+/// but accuracy on dense/small-text invoices is significantly better.
+const OCR_MAX_DIM: u32 = 960;
 
 /// OCR an image from a file path or base64 data URL.
 /// When `file_path` is provided, reads the image directly from disk — skipping
@@ -1127,7 +1128,7 @@ fn run_ocr_on_image(mut img: image::DynamicImage) -> Result<OcrResult, String> {
         let scale = OCR_MAX_DIM as f32 / longest as f32;
         let new_w = (orig_w as f32 * scale).round() as u32;
         let new_h = (orig_h as f32 * scale).round() as u32;
-        img = img.resize_exact(new_w, new_h, image::imageops::FilterType::Nearest);
+        img = img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
         log::info!(
             "OCR resize: {}x{} → {}x{} ({}ms)",
             orig_w, orig_h, new_w, new_h,
