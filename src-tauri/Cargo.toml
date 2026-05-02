@@ -31,10 +31,10 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "ico", "bmp", "tiff", "webp"] }
 printpdf = { version = "0.9", features = ["images"] }
 lopdf = "0.39"
-zip = { version = "2", default-features = false, features = ["deflate"] }
 rayon = "1.10"
-quick-xml = { version = "0.37", features = ["serialize"] }
+kamadak-exif = "0.5"
 ocr-rs = { version = "2.2", optional = true }
+ofd-engine = { path = "ofd-engine" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [

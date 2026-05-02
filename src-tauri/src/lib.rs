@@ -1,7 +1,7 @@
 use tauri::{command, Emitter};
 
 mod pdf_engine;
-use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest, OfdResult};
+use pdf_engine::{PrinterInfo, FileData, RenderedPage, ComGuard, LayoutRenderRequest};
 #[cfg(feature = "ocr")]
 use pdf_engine::{OcrResult, RenderedOcrPage};
 
@@ -18,15 +18,39 @@ fn open_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
 /// Parse OFD file: returns SVG vector rendering + structured invoice data from XML.
 /// Skips OCR — invoice fields are extracted directly from OFD metadata.
 #[command]
-fn parse_ofd(ofd_path: String) -> Result<OfdResult, String> {
-    pdf_engine::parse_ofd_file(&ofd_path)
+fn parse_ofd(ofd_path: String) -> Result<ofd_engine::OfdResult, String> {
+    ofd_engine::parse_ofd_file(&ofd_path)
 }
 
 /// Fallback: extract OFD pages as bitmap images (legacy path).
 /// Used when parse_ofd fails (e.g., vector-only OFD with no parseable XML).
 #[command]
 fn open_ofd_images(ofd_path: String) -> Result<Vec<FileData>, String> {
-    pdf_engine::extract_ofd_images_as_filedata(&ofd_path)
+    let path = std::path::Path::new(&ofd_path);
+    let name = path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
+
+    let images = ofd_engine::extract_ofd_images_raw(&ofd_path)?;
+    let mut results = Vec::new();
+    for (idx, img) in images.iter().enumerate() {
+        let base_name = if name.len() > 4 { &name[..name.len()-4] } else { &name };
+        results.push(FileData {
+            name: if images.len() > 1 {
+                format!("{}_第{}页.ofd", base_name, idx + 1)
+            } else {
+                name.clone()
+            },
+            ext: img.ext.clone(),
+            size,
+            data_url: img.data_url.clone(),
+            path: None,
+            orig_w: Some(img.width),
+            orig_h: Some(img.height),
+        });
+    }
+    Ok(results)
 }
 
 /// List available printers

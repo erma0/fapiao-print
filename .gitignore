@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 src-tauri/target/
+src-tauri/ofd-engine/target/
+src-tauri/ofd-engine/Cargo.lock
 
 # MNN prebuilt SDK (auto-downloaded by ocr-rs build.rs)
 mnn-dev-windows-x86_64.zip
