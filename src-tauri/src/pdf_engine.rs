@@ -1954,33 +1954,45 @@ fn build_svg_text(
         ""
     };
 
-    // Build text content with DeltaX spacing
+    // Build text content using absolute x positions (tspan x).
+    // OFD DeltaX = absolute advance from char origin to next char origin (includes char width).
+    // SVG tspan dx = ADDITIONAL offset on top of natural char advance — would double the spacing.
+    // Solution: use tspan x with absolute positions in the text element's coordinate system.
+    // base_x = the x position of the first character (set on <text> element).
+    // Subsequent chars: tspan x = base_x + accumulated DeltaX.
     let chars: Vec<char> = text_obj.text.chars().collect();
-    let content = if !text_obj.delta_x.is_empty() && chars.len() > 1 {
-        let mut s = esc_xml(&chars[0].to_string());
-        for (i, ch) in chars.iter().enumerate().skip(1) {
-            let dx = if i - 1 < text_obj.delta_x.len() {
-                text_obj.delta_x[i - 1]
-            } else {
-                *text_obj.delta_x.last().unwrap_or(&font_size)
-            };
-            s.push_str(&format!("<tspan dx=\"{:.4}\">{}</tspan>", dx * scale_x, esc_xml(&ch.to_string())));
-        }
-        s
-    } else {
-        esc_xml(&text_obj.text)
-    };
+    let has_delta = !text_obj.delta_x.is_empty() && chars.len() > 1;
+    // We'll build the tspans later, after we know the base_x coordinate.
+    // For now, just store the char data.
 
     // CTM transform: translate to boundary origin, apply matrix, then text at local coords
     if let Some(ctm) = text_obj.ctm {
+        // CTM text: x is in local coords (text_x * scale)
+        let base_x = text_obj.text_x * scale_x;
+        let base_y = text_obj.text_y * scale_y;
+        let content = if has_delta {
+            let mut s = format!("<tspan x=\"{:.4}\">{}</tspan>", base_x, esc_xml(&chars[0].to_string()));
+            let mut x_pos = base_x;
+            for (i, ch) in chars.iter().enumerate().skip(1) {
+                let dx = if i - 1 < text_obj.delta_x.len() {
+                    text_obj.delta_x[i - 1]
+                } else {
+                    *text_obj.delta_x.last().unwrap_or(&font_size)
+                };
+                x_pos += dx * scale_x;
+                s.push_str(&format!("<tspan x=\"{:.4}\">{}</tspan>", x_pos, esc_xml(&ch.to_string())));
+            }
+            s
+        } else {
+            esc_xml(&text_obj.text)
+        };
         return format!(
-            "<text transform=\"translate({bx},{by}) matrix({a},{b},{c},{d},{e},{f})\" x=\"{tx}\" y=\"{ty}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+            "<text transform=\"translate({bx},{by}) matrix({a},{b},{c},{d},{e},{f})\" y=\"{ty}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
             bx = text_obj.boundary.0 * scale_x,
             by = text_obj.boundary.1 * scale_y,
             a = ctm.0, b = ctm.1, c = ctm.2, d = ctm.3,
             e = ctm.4 * scale_x, f = ctm.5 * scale_y,
-            tx = text_obj.text_x * scale_x,
-            ty = text_obj.text_y * scale_y,
+            ty = base_y,
             ff = esc_xml_attr(&font_family),
             fs = font_size * scale_x,
             fc = fill_attr(text_obj.fill_color, text_obj.alpha),
@@ -1989,12 +2001,28 @@ fn build_svg_text(
         );
     }
 
-    // Normal: position = Boundary + TextCode offset
-    let x = (text_obj.boundary.0 + text_obj.text_x) * scale_x;
-    let y = (text_obj.boundary.1 + text_obj.text_y) * scale_y;
+    // Normal: position = Boundary + TextCode offset (absolute SVG coords)
+    let base_x = (text_obj.boundary.0 + text_obj.text_x) * scale_x;
+    let base_y = (text_obj.boundary.1 + text_obj.text_y) * scale_y;
+    let content = if has_delta {
+        let mut s = format!("<tspan x=\"{:.4}\">{}</tspan>", base_x, esc_xml(&chars[0].to_string()));
+        let mut x_pos = base_x;
+        for (i, ch) in chars.iter().enumerate().skip(1) {
+            let dx = if i - 1 < text_obj.delta_x.len() {
+                text_obj.delta_x[i - 1]
+            } else {
+                *text_obj.delta_x.last().unwrap_or(&font_size)
+            };
+            x_pos += dx * scale_x;
+            s.push_str(&format!("<tspan x=\"{:.4}\">{}</tspan>", x_pos, esc_xml(&ch.to_string())));
+        }
+        s
+    } else {
+        esc_xml(&text_obj.text)
+    };
     format!(
-        "<text x=\"{x}\" y=\"{y}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
-        x = x, y = y,
+        "<text y=\"{y}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+        y = base_y,
         ff = esc_xml_attr(&font_family),
         fs = font_size * scale_x,
         fc = fill_attr(text_obj.fill_color, text_obj.alpha),
