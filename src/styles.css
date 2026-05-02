@@ -78,11 +78,7 @@ html.dark .page-dot.active { background: #5b8def; }
 html.dark .modal-bg { background: rgba(0,0,0,0.6); }
 html.dark .invoice-slot.selected { outline-color: #5b8def; }
 html.dark .slot-handle { background: #5b8def; }
-html.dark .file-item.dragging { background: #1e2a4a !important; border-color: #5b8def !important; }
-html.dark .drag-handle { color: #636e80; }
-html.dark .drag-ghost { background: #16213e; border-color: #5b8def; }
-html.dark .file-item.drag-over-top { border-top-color: #5b8def !important; }
-html.dark .file-item.drag-over-bottom { border-bottom-color: #5b8def !important; }
+html.dark .sort-btn { color: #636e80; }
 html.dark input[type="color"] { border-color: #2a2a4a; background: #1a1a2e; }
 html.dark ::-webkit-scrollbar-thumb { background: #3a3a5a; }
 
@@ -373,28 +369,17 @@ html.dark .file-item.loading-item .file-thumb::after {
 .ocr-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 4px; }
 html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #1a1a2e; }
 
-/* ===== Drag & Drop Sorting ===== */
-.drag-handle {
-  cursor: grab; display: flex; align-items: center; justify-content: center;
-  color: var(--text-muted); font-size: 14px; flex-shrink: 0; padding: 2px;
-  opacity: 0.4; transition: opacity 0.15s; user-select: none;
-  letter-spacing: 1px;
+/* ===== Sort buttons (↑↓) ===== */
+.sort-btns {
+  display: flex; flex-direction: column; gap: 0; flex-shrink: 0;
 }
-.file-item:hover .drag-handle { opacity: 0.8; }
-.drag-handle:active { cursor: grabbing; }
-
-.file-item.dragging {
-  opacity: 0.25; background: var(--accent-light) !important;
-  border: 2px dashed var(--accent) !important;
+.sort-btn {
+  font-size: 8px; height: 16px; min-width: 18px; padding: 0;
+  color: var(--text-muted); opacity: 0.3; transition: opacity 0.15s, color 0.15s;
 }
-.drag-ghost {
-  background: var(--surface); border: 1px solid var(--accent);
-  box-shadow: var(--shadow-lg); opacity: 0.9; transform: rotate(1.5deg);
-}
-.file-item.drag-over-top { border-top: 2.5px solid var(--accent) !important; }
-.file-item.drag-over-bottom { border-bottom: 2.5px solid var(--accent) !important; }
-.file-item.drag-over-top .drag-handle,
-.file-item.drag-over-bottom .drag-handle { opacity: 1; color: var(--accent); }
+.file-item:hover .sort-btn { opacity: 0.8; }
+.sort-btn:hover { color: var(--accent) !important; opacity: 1 !important; }
+.sort-btn.disabled { opacity: 0.12; cursor: default; pointer-events: none; }
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
