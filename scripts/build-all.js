@@ -53,7 +53,19 @@ function copyFile(src, dest) {
 }
 
 /**
+ * 清空 NSIS bundle 目录，避免旧构建残留的安装包被误选
+ */
+function cleanNsisBundle() {
+  if (fs.existsSync(BUNDLE_NSIS)) {
+    for (const f of fs.readdirSync(BUNDLE_NSIS)) {
+      fs.unlinkSync(path.join(BUNDLE_NSIS, f));
+    }
+  }
+}
+
+/**
  * 在 NSIS bundle 目录中查找安装包文件
+ * 优先匹配当前版本号，兜底取第一个
  * CI 环境可能因编码问题丢失中文，所以用 glob 而非硬编码文件名
  * @returns {string} 找到的安装包完整路径
  */
@@ -65,10 +77,17 @@ function findNsisInstaller(label) {
   if (files.length === 0) {
     throw new Error(`在 ${BUNDLE_NSIS} 中未找到 *-setup.exe (${label})`);
   }
-  if (files.length > 1) {
-    console.log(`  ⚠ 发现多个 setup.exe，取第一个: ${files[0]}`);
+  // 优先选文件名包含当前版本号的
+  let found;
+  const versionMatch = files.filter(f => f.includes(VERSION));
+  if (versionMatch.length > 0) {
+    found = versionMatch[0];
+  } else {
+    found = files[0];
+    if (files.length > 1) {
+      console.log(`  ⚠ 未找到包含 v${VERSION} 的安装包，使用第一个: ${found}`);
+    }
   }
-  const found = files[0];
   const fullPath = path.join(BUNDLE_NSIS, found);
   // 如果文件名不含中文（CI 编码问题），提示用户
   if (!found.includes(PRODUCT_NAME)) {
@@ -171,6 +190,7 @@ async function main() {
   console.log(`\n${'─'.repeat(60)}`);
   console.log('  [1/4] 编译轻量版 (无 OCR)...');
   console.log(`${'─'.repeat(60)}`);
+  cleanNsisBundle();
   run('npx tauri build');
 
   // 发现 NSIS 安装包，复制到 dist/ 根目录并重命名为正确中文名
@@ -189,6 +209,7 @@ async function main() {
   console.log(`\n${'─'.repeat(60)}`);
   console.log('  [2/4] 编译 OCR 版 (含 PP-OCRv5)...');
   console.log(`${'─'.repeat(60)}`);
+  cleanNsisBundle();
   run('npx tauri build --features ocr --config src-tauri/tauri.ocr.conf.json');
 
   // 发现 NSIS 安装包，复制到 dist/ 根目录
