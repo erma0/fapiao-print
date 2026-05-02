@@ -1165,8 +1165,6 @@ function applySlotAdjToAll() {
   updatePreview();
   toast('已应用到全部 ' + S.files.length + ' 张发票');
 }
-  document.body.removeChild(ta);
-}
 
 // =====================================================
 // Layout / Settings
