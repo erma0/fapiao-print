@@ -2420,6 +2420,46 @@ fn parse_box_array(box_obj: &lopdf::Object, source: &lopdf::Document) -> Result<
     }
 }
 
+/// Read the /Rotate attribute from a PDF page dictionary.
+/// Walks up the page tree (inherits from parent if not set on page itself).
+/// Returns the rotation angle in degrees (0, 90, 180, or 270). Defaults to 0.
+fn get_page_rotation(source: &lopdf::Document, page_id: lopdf::ObjectId) -> i32 {
+    let mut current_id = page_id;
+    let mut visited = std::collections::HashSet::new();
+
+    loop {
+        if !visited.insert(current_id) {
+            return 0; // cycle protection
+        }
+
+        let dict = match source.get_object(current_id) {
+            Ok(lopdf::Object::Dictionary(d)) => d.clone(),
+            Ok(lopdf::Object::Reference(id)) => {
+                match source.get_object(*id) {
+                    Ok(lopdf::Object::Dictionary(d)) => d.clone(),
+                    _ => return 0,
+                }
+            }
+            _ => return 0,
+        };
+
+        if let Ok(rotate_val) = dict.get(b"Rotate") {
+            let r = match rotate_val {
+                lopdf::Object::Integer(i) => *i as i32,
+                lopdf::Object::Real(r) => *r as i32,
+                _ => 0,
+            };
+            return ((r % 360) + 360) % 360;
+        }
+
+        // Walk up to parent
+        match dict.get(b"Parent").and_then(|v| v.as_reference()) {
+            Ok(parent_id) => current_id = parent_id,
+            Err(_) => return 0, // no Rotate attribute found → default 0
+        }
+    }
+}
+
 /// Extract the MediaBox from a PDF page, returning (width_pt, height_pt).
 /// Walks up the page tree to inherit MediaBox from parent nodes if not on the page itself.
 #[allow(dead_code)]
@@ -2566,49 +2606,84 @@ fn extract_page_as_form_xobject(
         .map_err(|e| format!("提取内容流失败: {}", e))?;
 
     // 2. Get effective visible box — CropBox takes precedence over MediaBox.
-    // This fixes the bug where PDFs with CropBox (e.g., only showing the bottom
-    // half of the page) would appear shrunk, because we were using MediaBox
-    // dimensions for scaling but the visible content was only a portion.
     let ((box_x1, box_y1, _box_x2, _box_y2), (page_w_pt, page_h_pt)) =
         get_page_effective_box(source, page_id)?;
 
-    // If CropBox has a non-zero origin, we need to translate the content stream
-    // so that the visible area aligns with the BBox origin (0, 0).
-    // Prepend: "1 0 0 1 -box_x1 -box_y1 cm" to shift content.
-    let final_content = if box_x1.abs() > 0.01 || box_y1.abs() > 0.01 {
-        let translate = format!("1 0 0 1 {:.4} {:.4} cm\n", -box_x1, -box_y1);
-        let mut combined = translate.into_bytes();
-        combined.extend_from_slice(&content_bytes);
-        combined
+    // 3. Read /Rotate attribute from page dictionary (walks up page tree).
+    // PDF viewers auto-rotate the content based on this value. We need to bake
+    // the rotation into the Form XObject content stream so it renders correctly
+    // when the /Rotate key is stripped.
+    let page_rotation = get_page_rotation(source, page_id);
+    let rot = ((page_rotation % 360) + 360) % 360;
+
+    // For 90°/270° rotation, the effective visual dimensions swap.
+    let (effective_w, effective_h) = if rot == 90 || rot == 270 {
+        (page_h_pt, page_w_pt)
     } else {
-        content_bytes
+        (page_w_pt, page_h_pt)
     };
 
-    // 3. Get page resources — merge ALL resource dictionaries including inherited ones.
-    //
-    // CRITICAL: lopdf's get_page_resources returns:
-    //   - resources_opt: the page's OWN Resources (only if inline Dictionary, NOT Reference!)
-    //   - ref_ids: ObjectIds of ALL Resources dicts found by walking up the page tree
-    //
-    // Most PDFs store Resources as indirect References (e.g., "Resources 5 0 R"),
-    // so resources_opt is often None. We MUST also process ref_ids to include
-    // inherited resources (fonts, colorspaces, etc. from parent Pages nodes).
-    // Without this, Form XObjects have no resources → blank pages.
+    // 4. Build content stream with rotation + cropbox transforms prepended.
+    // We use "q ... cm ...content... Q" to apply transforms.
+    // Order: first translate for CropBox, then apply rotation.
+    let mut prefix = Vec::new();
+    prefix.extend_from_slice(b"q\n");
+
+    // Apply rotation transform (before CropBox shift, so rotation is in page coords)
+    match rot {
+        90 => {
+            // Rotate 90° CW: (x,y) → (y, -x) then translate to fit
+            prefix.extend_from_slice(
+                format!("0 1 -1 0 {:.4} 0 cm\n", page_w_pt).as_bytes()
+            );
+        }
+        180 => {
+            // Rotate 180°: (x,y) → (-x, -y) then translate to fit
+            prefix.extend_from_slice(
+                format!("-1 0 0 -1 {:.4} {:.4} cm\n", page_w_pt, page_h_pt).as_bytes()
+            );
+        }
+        270 => {
+            // Rotate 270° CW (= 90° CCW): (x,y) → (-y, x) then translate to fit
+            prefix.extend_from_slice(
+                format!("0 -1 1 0 0 {:.4} cm\n", page_h_pt).as_bytes()
+            );
+        }
+        _ => {} // 0°: no rotation needed
+    }
+
+    // Apply CropBox offset if non-zero origin
+    if box_x1.abs() > 0.01 || box_y1.abs() > 0.01 {
+        prefix.extend_from_slice(
+            format!("1 0 0 1 {:.4} {:.4} cm\n", -box_x1, -box_y1).as_bytes()
+        );
+    }
+
+    // Close the graphics state after content
+    let mut suffix = Vec::new();
+    suffix.extend_from_slice(b"\nQ\n");
+
+    // Combine: prefix + content + suffix
+    let mut final_content = prefix;
+    final_content.extend_from_slice(&content_bytes);
+    final_content.extend_from_slice(&suffix);
+
+    if rot != 0 {
+        log::info!("extract_page_as_form_xobject: page rotation={}°, page {:.1}x{:.1}pt → effective {:.1}x{:.1}pt",
+            rot, page_w_pt, page_h_pt, effective_w, effective_h);
+    }
+
+    // 5. Get page resources — merge ALL resource dictionaries including inherited ones.
     let (resources_opt, ref_ids) = source.get_page_resources(page_id)
         .map_err(|e| format!("提取资源失败: {}", e))?;
 
-    // 4. Merge all resource dictionaries: page's own + all inherited from parents.
-    // We build a merged dictionary, then deep-copy + remap the whole thing.
+    // 6. Merge all resource dictionaries: page's own + all inherited from parents.
     let mut merged = lopdf::Dictionary::new();
-
-    // Add inherited resources FIRST (parent-level, so page-level overrides take precedence)
     for rid in &ref_ids {
         if let Ok(res_dict) = source.get_dictionary(*rid) {
             merge_resource_dict(&mut merged, res_dict, source);
         }
     }
-
-    // Add page's own resources LAST (overrides inherited ones with same keys)
     if let Some(dict) = resources_opt {
         merge_resource_dict(&mut merged, dict, source);
     }
@@ -2618,9 +2693,7 @@ fn extract_page_as_form_xobject(
         remap_references(obj, source, output_doc, id_map)
     };
 
-    // 5. Build Form XObject stream
-    // BBox uses the effective visible dimensions (CropBox or MediaBox).
-    // For CropBox=[0, 433.75, 595, 842], this becomes [0, 0, 595, 408.25].
+    // 7. Build Form XObject stream — BBox uses EFFECTIVE (post-rotation) dimensions.
     let mut dict = lopdf::Dictionary::new();
     dict.set("Type", lopdf::Object::Name(b"XObject".to_vec()));
     dict.set("Subtype", lopdf::Object::Name(b"Form".to_vec()));
@@ -2628,8 +2701,8 @@ fn extract_page_as_form_xobject(
     dict.set("BBox", lopdf::Object::Array(vec![
         lopdf::Object::Real(0.0),
         lopdf::Object::Real(0.0),
-        lopdf::Object::Real(page_w_pt),
-        lopdf::Object::Real(page_h_pt),
+        lopdf::Object::Real(effective_w),
+        lopdf::Object::Real(effective_h),
     ]));
     dict.set("Resources", remapped_resources);
 
@@ -2642,7 +2715,7 @@ fn extract_page_as_form_xobject(
     let stream = lopdf::Stream::new(dict, final_content).with_compression(true);
     let xobj_id = output_doc.add_object(lopdf::Object::Stream(stream));
 
-    Ok((xobj_id, page_w_pt, page_h_pt))
+    Ok((xobj_id, effective_w, effective_h))
 }
 
 /// Per-slot adjustment data for passthrough rendering.
