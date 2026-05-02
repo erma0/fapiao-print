@@ -92,7 +92,7 @@ body {
 
 /* ===== Main Layout ===== */
 .main-layout {
-  display: grid; grid-template-columns: 320px 1fr;
+  display: grid; grid-template-columns: 340px 1fr;
   height: 100vh; overflow: hidden;
 }
 
@@ -159,10 +159,10 @@ body {
 }
 .file-size { font-size: 10px; flex-shrink: 0; white-space: nowrap; }
 .file-meta-left { display: flex; gap: 4px; align-items: center; min-width: 0; overflow: hidden; flex-shrink: 1; white-space: nowrap; }
-.file-meta-sep { flex-shrink: 0; width: 4px; }
+.file-meta-sep { flex: 1; }
 .file-meta-right { display: flex; gap: 2px; align-items: center; flex-shrink: 0; }
 .copy-badge { background: var(--warning-light); color: var(--warning); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
-.amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
 .seller-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 .ticket-badge { font-size: 10px; color: #1976d2; padding: 1px 4px; border-radius: 3px; background: #e3f2fd; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
