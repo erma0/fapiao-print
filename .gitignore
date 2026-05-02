@@ -36,3 +36,5 @@ screenshot_*.png
 
 dist/
 .claude/
+sample.ofd
+sample_ofd_extracted/
