@@ -1,5 +1,26 @@
 # 📋 更新日志
 
+## v1.8.3 — OFD 矢量渲染完善（文字间距 / 红章 / 字重 / 字体回退）
+
+### 🐛 修复
+
+- **OFD 文字 x 定位**：无 DeltaX 或单字符文本（¥符号、数量"台"等）必须在 `<text>` 上设置 `x` 属性，否则渲染在 x=0
+- **OFD 注解 Appearance 偏移**：`Annotation.xml` 中 `ImageObject Boundary` 是相对 `Appearance Boundary` 的局部坐标，必须叠加 Appearance 的 x/y 偏移，否则红章渲染在 (0,0)
+- **OFD DrawParam 继承链**：页面内容 Layer 无显式 DrawParam 时，自动查找根 DrawParam（被引用但自身无 Relative 的节点）作为全局回退，线条不可见问题修复
+- **OFD DrawParam 应用于文本**：`apply_draw_param_defaults` 扩展到 `TextObject`，文本 fill/stroke 颜色也继承 DrawParam
+- **OFD 填充颜色回退**：`fill=true` 但无 `fillColor` 时不再回退到 `strokeColor`（避免实心填充遮盖 ¥ 等内部笔画）
+- **旋转后图片不自适应 slot**：三处修复
+
+### 🔧 优化
+
+- **OFD 字重解析**：`TextObject Weight` 属性（400=normal, 700=bold）决定加粗，不再硬编码字体名
+- **OFD 字体 fallback**：SVG `font-family` 跨平台 fallback 链（楷体→KaiTi→STKaiti→serif 等），Windows/macOS/Linux 均可正确渲染
+- **OFD 图片提取优化**：印章过滤 + 尺寸筛选 + 页面去重
+- **加载/OCR 进度 Toast 逻辑改进**
+- **cargo check warnings 清理**
+
+---
+
 ## v1.8.2 — 进程退出安全修复 + CropBox 优先 + 加载进度优化
 
 ### 🐛 修复

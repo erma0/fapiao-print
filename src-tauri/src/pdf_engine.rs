@@ -1745,7 +1745,7 @@ struct OfdImage {
     base64: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct OfdTextObject {
     id: u32,
     boundary: (f64, f64, f64, f64), // x, y, w, h
@@ -1760,6 +1760,28 @@ struct OfdTextObject {
     stroke_color: Option<(u8, u8, u8)>,
     alpha: Option<u8>,
     blend_mode: Option<String>,
+    weight: u32, // OFD font weight: 400=normal, 700=bold
+}
+
+impl Default for OfdTextObject {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            boundary: (0.0, 0.0, 0.0, 0.0),
+            font_id: 0,
+            size: 3.175,
+            ctm: None,
+            text: String::new(),
+            delta_x: Vec::new(),
+            text_x: 0.0,
+            text_y: 0.0,
+            fill_color: None,
+            stroke_color: None,
+            alpha: None,
+            blend_mode: None,
+            weight: 400, // Normal weight by default
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1943,12 +1965,25 @@ fn build_svg_text(
     }
 
     let font = font_map.get(&text_obj.font_id);
-    let font_family = font.map(|f| {
+    let font_family_raw = font.map(|f| {
         if !f.family_name.is_empty() { f.family_name.clone() } else { f.font_name.clone() }
     }).unwrap_or_else(|| "SimSun".to_string());
 
+    // Font fallback: add generic CJK/serif/sans-serif fallbacks for cross-platform rendering.
+    // SVG font-family is CSS: names with spaces need single quotes (attr value is in double quotes).
+    let font_family = match font_family_raw.as_str() {
+        "楷体" | "KaiTi" | "STKaiti" => "楷体, KaiTi, STKaiti, serif".to_string(),
+        "宋体" | "SimSun" | "STSong" => "宋体, SimSun, STSong, serif".to_string(),
+        "黑体" | "SimHei" | "STHeiti" => "黑体, SimHei, STHeiti, sans-serif".to_string(),
+        "仿宋" | "FangSong" | "STFangsong" => "仿宋, FangSong, STFangsong, serif".to_string(),
+        "Courier New" => "'Courier New', Courier, monospace".to_string(),
+        "Times New Roman" => "'Times New Roman', Times, serif".to_string(),
+        other => other.to_string(),
+    };
+
     let font_size = text_obj.size;
-    let bold = if font_family.contains("Courier") || font_family.contains("Times") {
+    // Use OFD Weight attribute for bold detection (>= 700 = bold)
+    let bold = if text_obj.weight >= 700 {
         " font-weight=\"bold\""
     } else {
         ""
@@ -1987,11 +2022,12 @@ fn build_svg_text(
             esc_xml(&text_obj.text)
         };
         return format!(
-            "<text transform=\"translate({bx},{by}) matrix({a},{b},{c},{d},{e},{f})\" y=\"{ty}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+            "<text transform=\"translate({bx},{by}) matrix({a},{b},{c},{d},{e},{f})\" x=\"{tx}\" y=\"{ty}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
             bx = text_obj.boundary.0 * scale_x,
             by = text_obj.boundary.1 * scale_y,
             a = ctm.0, b = ctm.1, c = ctm.2, d = ctm.3,
             e = ctm.4 * scale_x, f = ctm.5 * scale_y,
+            tx = base_x,
             ty = base_y,
             ff = esc_xml_attr(&font_family),
             fs = font_size * scale_x,
@@ -2021,7 +2057,8 @@ fn build_svg_text(
         esc_xml(&text_obj.text)
     };
     format!(
-        "<text y=\"{y}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+        "<text x=\"{x}\" y=\"{y}\" font-family=\"{ff}\" font-size=\"{fs}\"{fc}{bw}>{ct}</text>",
+        x = base_x,
         y = base_y,
         ff = esc_xml_attr(&font_family),
         fs = font_size * scale_x,
@@ -2154,14 +2191,15 @@ fn extract_layer_draw_param_ids(xml: &str) -> Vec<u32> {
     ids
 }
 
-/// Apply DrawParam defaults to paths/texts that have no explicit stroke/fill color.
+/// Apply DrawParam defaults to paths and texts that have no explicit stroke/fill color.
 fn apply_draw_param_defaults(
     paths: &mut [OfdPathObject],
+    texts: &mut [OfdTextObject],
     draw_params: &std::collections::HashMap<u32, OfdDrawParam>,
     layer_dp_ids: &[u32],
 ) {
     // Resolve defaults from the first Layer DrawParam
-    let (default_lw, default_stroke, _default_fill) = if let Some(&dp_id) = layer_dp_ids.first() {
+    let (default_lw, default_stroke, default_fill) = if let Some(&dp_id) = layer_dp_ids.first() {
         resolve_draw_param(draw_params, dp_id)
     } else {
         return; // no DrawParam to inherit
@@ -2171,10 +2209,44 @@ fn apply_draw_param_defaults(
         if p.stroke_color.is_none() {
             p.stroke_color = default_stroke;
         }
+        if p.fill_color.is_none() {
+            p.fill_color = default_fill;
+        }
         if p.line_width == 0.0 {
             p.line_width = default_lw;
         }
     }
+
+    for t in texts.iter_mut() {
+        if t.fill_color.is_none() {
+            t.fill_color = default_fill;
+        }
+        if t.stroke_color.is_none() {
+            t.stroke_color = default_stroke;
+        }
+    }
+}
+
+/// Find the root DrawParam ID — the one that is referenced by others via Relative
+/// but itself has no Relative. This serves as the global document default.
+fn find_root_draw_param(draw_params: &std::collections::HashMap<u32, OfdDrawParam>) -> Option<u32> {
+    // Find all IDs that are referenced as Relative targets
+    let referenced: std::collections::HashSet<u32> = draw_params.values()
+        .filter_map(|dp| dp.relative)
+        .collect();
+    // Root = referenced but has no Relative of its own
+    for (&id, dp) in draw_params {
+        if referenced.contains(&id) && dp.relative.is_none() {
+            return Some(id);
+        }
+    }
+    // Fallback: first DrawParam with no Relative
+    for (&id, dp) in draw_params {
+        if dp.relative.is_none() {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// Parse OFD content XML (Page or Template) and extract render objects.
@@ -2217,6 +2289,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                         if let Some(v) = attr_val(&e, "CTM") { t.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Alpha") { t.alpha = v.parse().ok(); }
                         if let Some(v) = attr_val(&e, "BlendMode") { t.blend_mode = Some(v); }
+                        if let Some(v) = attr_val(&e, "Weight") { t.weight = v.parse().unwrap_or(400); }
                         current_text = Some(t);
                     }
                     "PathObject" => {
@@ -2292,6 +2365,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                         if let Some(v) = attr_val(&e, "Size") { t.size = v.parse().unwrap_or(3.175); }
                         if let Some(v) = attr_val(&e, "CTM") { t.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Alpha") { t.alpha = v.parse().ok(); }
+                        if let Some(v) = attr_val(&e, "Weight") { t.weight = v.parse().unwrap_or(400); }
                         text_objs.push(t);
                     }
                     "PathObject" => {
@@ -2642,12 +2716,123 @@ fn parse_image_resources(xml: &str) -> std::collections::HashMap<u32, String> {
     images
 }
 
-/// Parse Annotations XML for watermark layer
-#[allow(dead_code)]
+/// Parse Annotations XML for watermark layer.
+/// Each Annot contains an Appearance with a global Boundary.
+/// Inner TextObject/ImageObject boundaries are relative to the Appearance.
+/// This function adds the Appearance offset to convert to page-global coordinates.
 fn parse_annotations(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdImageObject>) {
-    // Annotations use the same TextObject/ImageObject structure
-    let (t, _, i) = parse_ofd_content(xml);
-    (t, i)
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut all_texts = Vec::new();
+    let mut all_imgs = Vec::new();
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    // Track current Appearance offset (x, y) to apply to inner objects
+    let mut appearance_offset: Option<(f64, f64)> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let tag = local_tag_name(&e.name());
+                match tag.as_str() {
+                    "Appearance" => {
+                        if let Some(v) = attr_val(&e, "Boundary") {
+                            if let Some((x, y, _w, _h)) = parse_f4(&v) {
+                                appearance_offset = Some((x, y));
+                            }
+                        }
+                    }
+                    "TextObject" | "ImageObject" => {
+                        // We're inside an Appearance — parse the inner XML fragment
+                        // by collecting until the matching End tag, then feed to parse_ofd_content
+                        // Simpler approach: reconstruct a minimal Content XML with the object
+                        let mut depth = 1u32;
+                        let mut frag = format!("<ofd:Content><ofd:Layer>");
+                        frag.push_str(&format!("<{} ", tag));
+                        // Re-add attributes from the start element
+                        for attr in e.attributes().flatten() {
+                            let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                            let val = std::str::from_utf8(&attr.value).unwrap_or("");
+                            frag.push_str(&format!("{}=\"{}\" ", key, esc_xml_attr(val)));
+                        }
+                        frag.push('>');
+                        // Read until matching End tag
+                        loop {
+                            let mut inner_buf = Vec::new();
+                            match reader.read_event_into(&mut inner_buf) {
+                                Ok(Event::Start(inner_e)) => {
+                                    depth += 1;
+                                    let inner_tag = local_tag_name(&inner_e.name());
+                                    frag.push_str(&format!("<{} ", inner_tag));
+                                    for attr in inner_e.attributes().flatten() {
+                                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                                        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+                                        frag.push_str(&format!("{}=\"{}\" ", key, esc_xml_attr(val)));
+                                    }
+                                    frag.push('>');
+                                }
+                                Ok(Event::Empty(inner_e)) => {
+                                    let inner_tag = local_tag_name(&inner_e.name());
+                                    frag.push_str(&format!("<{} ", inner_tag));
+                                    for attr in inner_e.attributes().flatten() {
+                                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                                        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+                                        frag.push_str(&format!("{}=\"{}\" ", key, esc_xml_attr(val)));
+                                    }
+                                    frag.push_str("/>");
+                                }
+                                Ok(Event::Text(t)) => {
+                                    if let Ok(s) = t.unescape() {
+                                        frag.push_str(&esc_xml(&s));
+                                    }
+                                }
+                                Ok(Event::End(_inner_e)) => {
+                                    depth -= 1;
+                                    let inner_tag = local_tag_name(&_inner_e.name());
+                                    frag.push_str(&format!("</{}>", inner_tag));
+                                    if depth == 0 { break; }
+                                }
+                                Ok(Event::Eof) => break,
+                                _ => {}
+                            }
+                        }
+                        frag.push_str("</ofd:Layer></ofd:Content>");
+
+                        let (mut texts, _, mut imgs) = parse_ofd_content(&frag);
+                        // Apply Appearance offset to convert local → global coordinates
+                        if let Some((ox, oy)) = appearance_offset {
+                            for t in &mut texts {
+                                t.boundary.0 += ox;
+                                t.boundary.1 += oy;
+                            }
+                            for i in &mut imgs {
+                                i.boundary.0 += ox;
+                                i.boundary.1 += oy;
+                            }
+                        }
+                        all_texts.extend(texts);
+                        all_imgs.extend(imgs);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "Appearance" {
+                    appearance_offset = None;
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    (all_texts, all_imgs)
 }
 
 /// Main OFD parser: opens ZIP, parses all XML, builds SVG, extracts invoice data
@@ -2761,12 +2946,15 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         }
     }
 
+    // Find the root DrawParam for global defaults (used when a layer has no DrawParam attribute)
+    let root_dp_ids: Vec<u32> = find_root_draw_param(&draw_params).into_iter().collect();
+
     // 6. Parse template content (background layer)
     let (tpl_texts, tpl_paths, tpl_imgs) = if !template_path.is_empty() {
         if let Some(xml) = zip_read_str(&mut archive, &template_path) {
             let layer_dp_ids = extract_layer_draw_param_ids(&xml);
-            let (t, mut p, i) = parse_ofd_content(&xml);
-            apply_draw_param_defaults(&mut p, &draw_params, &layer_dp_ids);
+            let (mut t, mut p, i) = parse_ofd_content(&xml);
+            apply_draw_param_defaults(&mut p, &mut t, &draw_params, &layer_dp_ids);
             (t, p, i)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
@@ -2777,21 +2965,25 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
 
     // 7. Parse page content (data layer)
     // Note: avoid shadowing `page_paths` (Vec<String> from Document.xml parsing)
-    let (page_texts, page_obj_paths, page_imgs) = if let Some(page_path) = page_paths.first() {
+    let (mut page_texts, mut page_obj_paths, page_imgs) = if let Some(page_path) = page_paths.first() {
         if let Some(xml) = zip_read_str(&mut archive, page_path) {
-            parse_ofd_content(&xml)
+            let layer_dp_ids = extract_layer_draw_param_ids(&xml);
+            let (mut t, mut p, i) = parse_ofd_content(&xml);
+            apply_draw_param_defaults(&mut p, &mut t, &draw_params, &layer_dp_ids);
+            (t, p, i)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         }
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
+    // Page content Layer may not have DrawParam attribute — apply root DrawParam as global fallback
+    apply_draw_param_defaults(&mut page_obj_paths, &mut page_texts, &draw_params, &root_dp_ids);
 
-    // 8. Parse annotations (watermark layer)
+    // 8. Parse annotations (watermark layer) — uses parse_annotations to handle Appearance offsets
     let annots_path = format!("{}/Annots/Page_0/Annotation.xml", base_dir);
     let (annot_texts, annot_imgs) = if let Some(xml) = zip_read_str(&mut archive, &annots_path) {
-        let (t, _, i) = parse_ofd_content(&xml);
-        (t, i)
+        parse_annotations(&xml)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -3004,7 +3196,13 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
     }
     attrs.push_str(&stroke_attr(p.stroke_color, p.alpha));
     if p.fill {
-        attrs.push_str(&fill_attr(p.fill_color.or(p.stroke_color), p.alpha));
+        if let Some(fc) = p.fill_color {
+            attrs.push_str(&fill_attr(Some(fc), p.alpha));
+        } else {
+            // fill=true but no explicit fill_color: don't fall back to stroke_color
+            // (that would fill the shape solid and hide internal strokes like the ¥ cross)
+            attrs.push_str(" fill=\"none\"");
+        }
     } else {
         attrs.push_str(" fill=\"none\"");
     }
