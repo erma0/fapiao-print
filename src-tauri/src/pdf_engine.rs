@@ -1728,6 +1728,7 @@ struct OfdFont {
 }
 
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 struct OfdImage {
     id: u32,
     file_name: String,
@@ -1791,7 +1792,8 @@ fn zip_read_bytes(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> O
     Some(buf)
 }
 
-/// Parse 4 floats from "x y w h" or "x y" string
+/// Parse 2 floats from "x y" string
+#[allow(dead_code)]
 fn parse_f2(s: &str) -> Option<(f64, f64)> {
     let parts: Vec<&str> = s.split_whitespace().collect();
     if parts.len() >= 2 {
@@ -2454,6 +2456,7 @@ fn parse_image_resources(xml: &str) -> std::collections::HashMap<u32, String> {
 }
 
 /// Parse Annotations XML for watermark layer
+#[allow(dead_code)]
 fn parse_annotations(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdImageObject>) {
     // Annotations use the same TextObject/ImageObject structure
     let (t, _, i) = parse_ofd_content(xml);
@@ -2521,8 +2524,6 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         let mut b = Vec::new();
         let mut tpl = String::new();
         let mut pages = Vec::new();
-        let mut in_template = false;
-        let mut in_page = false;
         loop {
             match rdr.read_event_into(&mut b) {
                 Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
@@ -2531,19 +2532,13 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
                         if let Some(v) = attr_val(&e, "BaseLoc") {
                             tpl = format!("{}/{}", base_dir, v);
                         }
-                        in_template = true;
                     } else if tag == "Page" {
                         if let Some(v) = attr_val(&e, "BaseLoc") {
                             pages.push(format!("{}/{}", base_dir, v));
                         }
-                        in_page = true;
                     }
                 }
-                Ok(Event::End(e)) => {
-                    let tag = local_tag_name(&e.name());
-                    if tag == "TemplatePage" { in_template = false; }
-                    if tag == "Page" { in_page = false; }
-                }
+                Ok(Event::End(_)) => {}
                 Ok(Event::Eof) => break,
                 _ => {}
             }
