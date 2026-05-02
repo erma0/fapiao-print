@@ -219,7 +219,7 @@ async function main() {
 
   // 保存 exe 副本到 staging
   const ocrExe = path.join(TARGET_RELEASE, EXE_NAME);
-  const ocrExeCopy = path.join(staging, 'ocr.exe');
+  const ocrExeCopy = path.join(staging, EXE_NAME);
   fs.copyFileSync(ocrExe, ocrExeCopy);
   console.log(`  ✓ OCR 版 exe (${sizeMB(ocrExe)} MB)`);
 
