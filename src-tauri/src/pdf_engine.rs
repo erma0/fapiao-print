@@ -1727,6 +1727,16 @@ struct OfdFont {
     family_name: String,
 }
 
+/// DrawParam — inherited styling for paths/text (from PublicRes.xml)
+#[derive(Debug, Default, Clone)]
+struct OfdDrawParam {
+    id: u32,
+    relative: Option<u32>,
+    line_width: f64,
+    stroke_color: Option<(u8, u8, u8)>,
+    fill_color: Option<(u8, u8, u8)>,
+}
+
 #[derive(Debug, Default)]
 #[allow(dead_code)]
 struct OfdImage {
@@ -2086,6 +2096,59 @@ fn ofd_path_to_svg(data: &str) -> String {
     svg
 }
 
+/// Extract Layer DrawParam IDs from content XML.
+/// OFD Layer has DrawParam="4" attribute pointing to a DrawParam in PublicRes.xml.
+/// Returns all DrawParam IDs found on Layer elements.
+fn extract_layer_draw_param_ids(xml: &str) -> Vec<u32> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "Layer" {
+                    if let Some(v) = attr_val(&e, "DrawParam") {
+                        if let Ok(id) = v.parse::<u32>() {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    ids
+}
+
+/// Apply DrawParam defaults to paths/texts that have no explicit stroke/fill color.
+fn apply_draw_param_defaults(
+    paths: &mut [OfdPathObject],
+    draw_params: &std::collections::HashMap<u32, OfdDrawParam>,
+    layer_dp_ids: &[u32],
+) {
+    // Resolve defaults from the first Layer DrawParam
+    let (default_lw, default_stroke, _default_fill) = if let Some(&dp_id) = layer_dp_ids.first() {
+        resolve_draw_param(draw_params, dp_id)
+    } else {
+        return; // no DrawParam to inherit
+    };
+
+    for p in paths.iter_mut() {
+        if p.stroke_color.is_none() {
+            p.stroke_color = default_stroke;
+        }
+        if p.line_width == 0.0 {
+            p.line_width = default_lw;
+        }
+    }
+}
+
 /// Parse OFD content XML (Page or Template) and extract render objects.
 /// Returns (text_objects, path_objects, image_objects)
 fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<OfdImageObject>) {
@@ -2384,19 +2447,68 @@ fn parse_custom_tag(xml: &str) -> std::collections::HashMap<String, Vec<u32>> {
 }
 
 /// Parse PublicRes.xml for font definitions
-fn parse_fonts(xml: &str) -> (std::collections::HashMap<u32, OfdFont>, std::collections::HashMap<u32, String>) {
+fn parse_fonts(xml: &str) -> (std::collections::HashMap<u32, OfdFont>, std::collections::HashMap<u32, String>, std::collections::HashMap<u32, OfdDrawParam>) {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
     let mut fonts = std::collections::HashMap::new();
     let mut color_spaces = std::collections::HashMap::new();
+    let mut draw_params = std::collections::HashMap::new();
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
+    let mut current_dp_id: Option<u32> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Start(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "Font" {
+                    let mut font = OfdFont::default();
+                    if let Some(v) = attr_val(&e, "ID") { font.id = v.parse().unwrap_or(0); }
+                    if let Some(v) = attr_val(&e, "FontName") { font.font_name = v; }
+                    if let Some(v) = attr_val(&e, "FamilyName") { font.family_name = v; }
+                    fonts.insert(font.id, font);
+                } else if tag == "ColorSpace" {
+                    if let (Some(id_v), Some(type_v)) = (attr_val(&e, "ID"), attr_val(&e, "Type")) {
+                        if let Ok(id) = id_v.parse::<u32>() {
+                            color_spaces.insert(id, type_v);
+                        }
+                    }
+                } else if tag == "DrawParam" {
+                    let mut dp = OfdDrawParam::default();
+                    if let Some(v) = attr_val(&e, "ID") { dp.id = v.parse().unwrap_or(0); }
+                    if let Some(v) = attr_val(&e, "Relative") { dp.relative = v.parse().ok(); }
+                    if let Some(v) = attr_val(&e, "LineWidth") { dp.line_width = v.parse().unwrap_or(0.25); }
+                    current_dp_id = Some(dp.id);
+                    draw_params.insert(dp.id, dp);
+                } else if tag == "StrokeColor" {
+                    if let Some(v) = attr_val(&e, "Value") {
+                        if let Some(c) = parse_color(&v) {
+                            if let Some(id) = current_dp_id {
+                                if let Some(dp) = draw_params.get_mut(&id) {
+                                    dp.stroke_color = Some(c);
+                                }
+                            }
+                        }
+                    }
+                } else if tag == "FillColor" {
+                    if let Some(v) = attr_val(&e, "Value") {
+                        if let Some(c) = parse_color(&v) {
+                            if let Some(id) = current_dp_id {
+                                if let Some(dp) = draw_params.get_mut(&id) {
+                                    dp.fill_color = Some(c);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let tag = local_tag_name(&e.name());
+                if tag == "DrawParam" { current_dp_id = None; }
+            }
+            Ok(Event::Empty(e)) => {
                 let tag = local_tag_name(&e.name());
                 if tag == "Font" {
                     let mut font = OfdFont::default();
@@ -2417,7 +2529,33 @@ fn parse_fonts(xml: &str) -> (std::collections::HashMap<u32, OfdFont>, std::coll
         }
         buf.clear();
     }
-    (fonts, color_spaces)
+    (fonts, color_spaces, draw_params)
+}
+
+/// Resolve DrawParam inheritance chain: returns fully resolved (line_width, stroke_color, fill_color)
+fn resolve_draw_param(draw_params: &std::collections::HashMap<u32, OfdDrawParam>, param_id: u32) -> (f64, Option<(u8, u8, u8)>, Option<(u8, u8, u8)>) {
+    let mut lw = 0.25f64;
+    let mut stroke: Option<(u8, u8, u8)> = None;
+    let mut fill: Option<(u8, u8, u8)> = None;
+    let mut visited = std::collections::HashSet::new();
+    let mut current_id = param_id;
+    // Walk the Relative chain: 4 → 3 → None
+    loop {
+        if !visited.insert(current_id) { break; } // prevent cycles
+        if let Some(dp) = draw_params.get(&current_id) {
+            if dp.line_width > 0.0 { lw = dp.line_width; }
+            if stroke.is_none() && dp.stroke_color.is_some() { stroke = dp.stroke_color; }
+            if fill.is_none() && dp.fill_color.is_some() { fill = dp.fill_color; }
+            if let Some(rel) = dp.relative {
+                current_id = rel;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    (lw, stroke, fill)
 }
 
 /// Parse DocumentRes.xml for image resources
@@ -2547,12 +2685,12 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         (tpl, pages)
     };
 
-    // 4. Parse PublicRes.xml for fonts
+    // 4. Parse PublicRes.xml for fonts + DrawParam
     let public_res_path = format!("{}/PublicRes.xml", base_dir);
-    let (font_map, color_spaces) = if let Some(xml) = zip_read_str(&mut archive, &public_res_path) {
+    let (font_map, color_spaces, draw_params) = if let Some(xml) = zip_read_str(&mut archive, &public_res_path) {
         parse_fonts(&xml)
     } else {
-        (std::collections::HashMap::new(), std::collections::HashMap::new())
+        (std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new())
     };
 
     // 5. Parse DocumentRes.xml for image resources
@@ -2577,7 +2715,10 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     // 6. Parse template content (background layer)
     let (tpl_texts, tpl_paths, tpl_imgs) = if !template_path.is_empty() {
         if let Some(xml) = zip_read_str(&mut archive, &template_path) {
-            parse_ofd_content(&xml)
+            let layer_dp_ids = extract_layer_draw_param_ids(&xml);
+            let (t, mut p, i) = parse_ofd_content(&xml);
+            apply_draw_param_defaults(&mut p, &draw_params, &layer_dp_ids);
+            (t, p, i)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         }
@@ -2801,14 +2942,14 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
         return String::new();
     }
 
-    // SVG path data is in local coordinates (relative to Boundary)
-    // We need to translate to the Boundary position
+    // Boundary = (x, y, w, h) in mm. Path data is in local coords within Boundary.
+    // Apply translate to Boundary position, then scale everything.
     let tx = p.boundary.0 * scale;
     let ty = p.boundary.1 * scale;
 
     let mut attrs = String::new();
-    attrs.push_str(&format!(" transform=\"translate({:.4},{:.4})\"", tx, ty));
-    attrs.push_str(&format!(" stroke-width=\"{:.4}\"", p.line_width * scale));
+    attrs.push_str(&format!(" transform=\"translate({:.4},{:.4}) scale({:.4})\"", tx, ty, scale));
+    attrs.push_str(&format!(" stroke-width=\"{:.4}\"", p.line_width));
     if p.fill {
         attrs.push_str(" fill-rule=\"nonzero\"");
     }
@@ -2819,17 +2960,7 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
         attrs.push_str(" fill=\"none\"");
     }
 
-    // Need to scale the path coordinates
-    // The path data uses the local coordinate system of the Boundary
-    // We scale it by applying a scale transform
-    format!("<g{}><g transform=\"scale({:.4})\"><path d=\"{}\"/></g></g>",
-        attrs.replace(
-            &format!("transform=\"translate({:.4},{:.4})\"", tx, ty),
-            &format!("transform=\"translate({:.4},{:.4}) scale({:.4})\"", tx, ty, scale)
-        ),
-        1.0, // This is a placeholder, we handle scale in the outer transform
-        svg_d
-    )
+    format!("<g{}><path d=\"{}\"/></g>", attrs, svg_d)
 }
 
 /// Build SVG image from OFD ImageObject
