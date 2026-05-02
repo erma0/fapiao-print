@@ -321,7 +321,10 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .modal-bg.hidden { display: none; }
 .modal { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 20px; width: 460px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; }
 .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 14px; flex-shrink: 0; }
-.modal-body { flex: 1; overflow-y: auto; min-height: 0; }
+.modal-body { flex: 1; overflow-y: auto; min-height: 0; padding-right: 8px; }
+.modal-row { display: flex; align-items: center; margin-bottom: 8px; gap: 8px; }
+.modal-lbl { font-size: 13px; color: var(--text-secondary); width: 56px; text-align: right; flex-shrink: 0; }
+.modal-ctrl { flex: 1; display: flex; gap: 4px; align-items: center; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
 
 /* ===== Loading ===== */
