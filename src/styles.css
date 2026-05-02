@@ -79,6 +79,7 @@ html.dark .modal-bg { background: rgba(0,0,0,0.6); }
 html.dark .invoice-slot.selected { outline-color: #5b8def; }
 html.dark .slot-handle { background: #5b8def; }
 html.dark .sort-btn { color: #636e80; }
+html.dark .sort-btn:hover { color: #5b8def !important; }
 html.dark input[type="color"] { border-color: #2a2a4a; background: #1a1a2e; }
 html.dark ::-webkit-scrollbar-thumb { background: #3a3a5a; }
 
@@ -369,17 +370,14 @@ html.dark .file-item.loading-item .file-thumb::after {
 .ocr-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 4px; }
 html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #1a1a2e; }
 
-/* ===== Sort buttons (↑↓) ===== */
-.sort-btns {
-  display: flex; flex-direction: column; gap: 0; flex-shrink: 0;
-}
+/* ===== Sort buttons (↑↓) — inline with action buttons ===== */
 .sort-btn {
-  font-size: 8px; height: 16px; min-width: 18px; padding: 0;
+  font-size: 9px; min-width: 22px;
   color: var(--text-muted); opacity: 0.3; transition: opacity 0.15s, color 0.15s;
 }
 .file-item:hover .sort-btn { opacity: 0.8; }
 .sort-btn:hover { color: var(--accent) !important; opacity: 1 !important; }
-.sort-btn.disabled { opacity: 0.12; cursor: default; pointer-events: none; }
+.sort-btn.disabled { opacity: 0.1; cursor: default; pointer-events: none; }
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
