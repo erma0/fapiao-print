@@ -2227,28 +2227,6 @@ fn apply_draw_param_defaults(
     }
 }
 
-/// Find the root DrawParam ID — the one that is referenced by others via Relative
-/// but itself has no Relative. This serves as the global document default.
-fn find_root_draw_param(draw_params: &std::collections::HashMap<u32, OfdDrawParam>) -> Option<u32> {
-    // Find all IDs that are referenced as Relative targets
-    let referenced: std::collections::HashSet<u32> = draw_params.values()
-        .filter_map(|dp| dp.relative)
-        .collect();
-    // Root = referenced but has no Relative of its own
-    for (&id, dp) in draw_params {
-        if referenced.contains(&id) && dp.relative.is_none() {
-            return Some(id);
-        }
-    }
-    // Fallback: first DrawParam with no Relative
-    for (&id, dp) in draw_params {
-        if dp.relative.is_none() {
-            return Some(id);
-        }
-    }
-    None
-}
-
 /// Parse OFD content XML (Page or Template) and extract render objects.
 /// Returns (text_objects, path_objects, image_objects)
 fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<OfdImageObject>) {
@@ -2946,9 +2924,6 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         }
     }
 
-    // Find the root DrawParam for global defaults (used when a layer has no DrawParam attribute)
-    let root_dp_ids: Vec<u32> = find_root_draw_param(&draw_params).into_iter().collect();
-
     // 6. Parse template content (background layer)
     let (tpl_texts, tpl_paths, tpl_imgs) = if !template_path.is_empty() {
         if let Some(xml) = zip_read_str(&mut archive, &template_path) {
@@ -2965,20 +2940,17 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
 
     // 7. Parse page content (data layer)
     // Note: avoid shadowing `page_paths` (Vec<String> from Document.xml parsing)
-    let (mut page_texts, mut page_obj_paths, page_imgs) = if let Some(page_path) = page_paths.first() {
+    // Page content Layer has no DrawParam → OFD default: black (0,0,0). Do NOT apply
+    // any DrawParam inheritance — invoice data text and ¥ symbol are naturally black.
+    let (page_texts, page_obj_paths, page_imgs) = if let Some(page_path) = page_paths.first() {
         if let Some(xml) = zip_read_str(&mut archive, page_path) {
-            let layer_dp_ids = extract_layer_draw_param_ids(&xml);
-            let (mut t, mut p, i) = parse_ofd_content(&xml);
-            apply_draw_param_defaults(&mut p, &mut t, &draw_params, &layer_dp_ids);
-            (t, p, i)
+            parse_ofd_content(&xml)
         } else {
             (Vec::new(), Vec::new(), Vec::new())
         }
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
-    // Page content Layer may not have DrawParam attribute — apply root DrawParam as global fallback
-    apply_draw_param_defaults(&mut page_obj_paths, &mut page_texts, &draw_params, &root_dp_ids);
 
     // 8. Parse annotations (watermark layer) — uses parse_annotations to handle Appearance offsets
     let annots_path = format!("{}/Annots/Page_0/Annotation.xml", base_dir);
