@@ -76,6 +76,8 @@ html.dark .page-nav { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .page-dot { background: #3a3a5a; }
 html.dark .page-dot.active { background: #5b8def; }
 html.dark .modal-bg { background: rgba(0,0,0,0.6); }
+html.dark .invoice-slot.selected { outline-color: #5b8def; }
+html.dark .slot-handle { background: #5b8def; }
 html.dark input[type="color"] { border-color: #2a2a4a; background: #1a1a2e; }
 html.dark ::-webkit-scrollbar-thumb { background: #3a3a5a; }
 
@@ -262,6 +264,30 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .cut-line { position: absolute; left: 0; right: 0; border-top: 1px dashed #94a3b8; pointer-events: none; }
 .cut-line-v { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #94a3b8; pointer-events: none; }
 .watermark { position: absolute; pointer-events: none; z-index: 10; font-weight: 900; white-space: nowrap; user-select: none; }
+
+/* ===== Per-slot adjustment ===== */
+.invoice-slot { cursor: pointer; }
+.invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; }
+.invoice-slot.dragging { opacity: 0.85; cursor: move; }
+
+.slot-handle {
+  position: absolute; width: 10px; height: 10px; background: var(--accent);
+  border: 1.5px solid white; border-radius: 2px; z-index: 20; display: none;
+  box-shadow: var(--shadow-sm);
+}
+.invoice-slot.selected .slot-handle { display: block; }
+.slot-handle-tl { top: -5px; left: -5px; cursor: nwse-resize; }
+.slot-handle-tr { top: -5px; right: -5px; cursor: nesw-resize; }
+.slot-handle-bl { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.slot-handle-br { bottom: -5px; right: -5px; cursor: nwse-resize; }
+
+.adj-section { position: relative; }
+.adj-section .adj-file-name {
+  font-size: 12px; color: var(--accent); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+  margin-bottom: 6px;
+}
+.adj-section .adj-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px 0; }
 .page-nav { padding: 8px 16px; display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--surface); border-top: 1px solid var(--border); }
 .page-info { font-size: 13px; color: var(--text-secondary); }
 .page-dots { display: flex; gap: 4px; }

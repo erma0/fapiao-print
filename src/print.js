@@ -72,7 +72,12 @@ function buildLayoutRequest(files, settings) {
       var f = j < pageFiles.length ? pageFiles[j] : null;
       if (f) {
         var rot = getEffectiveRotation(f, j, settings, layout);
-        slots.push({ fileIndex: getFileIndex(f), rotation: rot });
+        var slotSpec = { fileIndex: getFileIndex(f), rotation: rot };
+        // Per-slot adjustment: pass scale/offset if non-default
+        if (f.slotScale && f.slotScale !== 1) slotSpec.scale = f.slotScale;
+        if (f.slotOffsetX) slotSpec.offsetX = f.slotOffsetX;
+        if (f.slotOffsetY) slotSpec.offsetY = f.slotOffsetY;
+        slots.push(slotSpec);
       } else {
         slots.push({ fileIndex: null, rotation: 0 });
       }
@@ -319,13 +324,21 @@ function fallbackPrint(files, s) {
         } else {
           rot = ((parseInt(s.globalRotation) || 0) + (f.rotation || 0)) % 360;
         }
-        var rotStyle = rot ? 'transform:rotate(' + rot + 'deg);' : '';
         // For 90°/270° rotation, swap max-width/max-height constraints (same as preview fix)
         var isRotated90 = (rot === 90 || rot === 270);
         var sizeStyle = isRotated90
           ? 'max-width:' + slotH + 'mm;max-height:' + slotW + 'mm;'
           : 'max-width:100%;max-height:100%;';
-        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + escHtml(src) + '" style="' + sizeStyle + rotStyle + '"></div>';
+        // Per-slot adjustment: scale & offset combined with rotation
+        var perScale = f.slotScale || 1;
+        var perOffX = f.slotOffsetX || 0;
+        var perOffY = f.slotOffsetY || 0;
+        var transforms = '';
+        if (perOffX !== 0 || perOffY !== 0) transforms += 'translate(' + perOffX + 'mm,' + perOffY + 'mm) ';
+        if (perScale !== 1) transforms += 'scale(' + perScale + ') ';
+        if (rot) transforms += 'rotate(' + rot + 'deg) ';
+        var transformStyle = transforms ? 'transform:' + transforms + ';' : '';
+        html += '<div class="slot" style="left:' + x + 'mm;top:' + y + 'mm;width:' + slotW + 'mm;height:' + slotH + 'mm"><img src="' + escHtml(src) + '" style="' + sizeStyle + transformStyle + '"></div>';
       }
     }
     html += '</div>';

@@ -3370,6 +3370,15 @@ pub struct FileSpec {
 pub struct SlotSpec {
     pub file_index: Option<usize>,
     pub rotation: i32,
+    /// Per-slot scale override (1.0 = default). Applied to fit-mode scale.
+    #[serde(default)]
+    pub scale: Option<f32>,
+    /// Per-slot X offset in mm (0 = centered).
+    #[serde(default)]
+    pub offset_x: Option<f32>,
+    /// Per-slot Y offset in mm (0 = centered).
+    #[serde(default)]
+    pub offset_y: Option<f32>,
 }
 
 /// A page = array of slots.
@@ -3716,7 +3725,7 @@ fn build_page_ops(
         let ih_mm = cached.ih_mm;
 
         // Compute scale to fit in slot
-        let (scale_x, scale_y) = match settings.fit_mode.as_str() {
+        let (mut scale_x, mut scale_y) = match settings.fit_mode.as_str() {
             "fill" => {
                 let sx = slot_positions[slot_idx].w_mm / iw_mm;
                 let sy = slot_positions[slot_idx].h_mm / ih_mm;
@@ -3737,13 +3746,26 @@ fn build_page_ops(
             }
         };
 
+        // Per-slot scale override
+        let per_scale = slot_spec.scale.unwrap_or(1.0);
+        if per_scale != 1.0 {
+            scale_x *= per_scale;
+            scale_y *= per_scale;
+        }
+
         // Centered position in slot (bottom-left origin)
         let draw_w_mm = iw_mm * scale_x;
         let draw_h_mm = ih_mm * scale_y;
-        let offset_x_mm = slot_positions[slot_idx].x_mm
+        let mut offset_x_mm = slot_positions[slot_idx].x_mm
             + (slot_positions[slot_idx].w_mm - draw_w_mm) / 2.0;
-        let offset_y_mm = slot_positions[slot_idx].y_mm
+        let mut offset_y_mm = slot_positions[slot_idx].y_mm
             + (slot_positions[slot_idx].h_mm - draw_h_mm) / 2.0;
+
+        // Per-slot offset override
+        let per_ox = slot_spec.offset_x.unwrap_or(0.0);
+        let per_oy = slot_spec.offset_y.unwrap_or(0.0);
+        if per_ox != 0.0 { offset_x_mm += per_ox; }
+        if per_oy != 0.0 { offset_y_mm -= per_oy; }  // JS Y+ is down, PDF Y+ is up
 
         // Convert mm to Pt — XObjectTransform uses Pt
         let offset_x_pt = offset_x_mm * MM_TO_PT;
@@ -3765,6 +3787,23 @@ fn build_page_ops(
             }
         };
 
+        // Clip to slot boundary — prevents per-slot scale/offset from overflowing
+        // into adjacent slots in the PDF output. Uses raw PDF operators:
+        //   q  re  W  n  Do  Q
+        let slot_x_pt = slot_positions[slot_idx].x_mm * MM_TO_PT;
+        let slot_y_pt = slot_positions[slot_idx].y_mm * MM_TO_PT;
+        let slot_w_pt = slot_positions[slot_idx].w_mm * MM_TO_PT;
+        let slot_h_pt = slot_positions[slot_idx].h_mm * MM_TO_PT;
+
+        use printpdf::DictItem as DI;
+        ops.push(printpdf::Op::SaveGraphicsState);
+        ops.push(printpdf::Op::Unknown {
+            key: "re".into(),
+            value: vec![DI::Real(slot_x_pt), DI::Real(slot_y_pt), DI::Real(slot_w_pt), DI::Real(slot_h_pt)],
+        });
+        ops.push(printpdf::Op::Unknown { key: "W".into(), value: vec![] });
+        ops.push(printpdf::Op::Unknown { key: "n".into(), value: vec![] });
+
         ops.push(printpdf::Op::UseXobject {
             id: cached.xobj_id.clone(),
             transform: printpdf::XObjectTransform {
@@ -3776,6 +3815,8 @@ fn build_page_ops(
                 rotate: rotate_op,
             },
         });
+
+        ops.push(printpdf::Op::RestoreGraphicsState);
     }
 
     ops
@@ -3887,7 +3928,7 @@ pub fn generate_pdf_from_layout(
     let save_opts = printpdf::PdfSaveOptions {
         optimize: true,
         subset_fonts: true,
-        secure: true,
+        secure: false,  // Allow Op::Unknown for per-slot clipping paths (re/W/n)
         image_optimization: Some(printpdf::ImageOptimizationOptions {
             quality: Some(0.95),           // High quality (default 0.85 too lossy for text)
             max_image_size: None,          // NO size limit (default "2MB" downsamples invoices!)
@@ -4261,13 +4302,21 @@ fn extract_page_as_form_xobject(
     Ok((xobj_id, page_w_pt, page_h_pt))
 }
 
+/// Per-slot adjustment data for passthrough rendering.
+struct SlotAdjustment {
+    rotation: i32,
+    scale: f32,
+    offset_x: f32,
+    offset_y: f32,
+}
+
 /// Build the content stream for one output page using cm + Do operators.
 /// Each Form XObject is positioned, scaled, and rotated within its layout slot.
 fn build_nup_content_stream(
     form_xobjs: &[(lopdf::ObjectId, f32, f32)],  // (form_xobj_id, src_w_pt, src_h_pt)
     slot_positions: &[LayoutSlotMm],
     settings: &RenderSettings,
-    slot_rotations: &[i32],  // per-slot rotation degrees
+    slot_adjustments: &[SlotAdjustment],  // per-slot rotation/scale/offset
 ) -> Result<Vec<u8>, String> {
     use lopdf::content::Operation;
 
@@ -4280,7 +4329,12 @@ fn build_nup_content_stream(
         let slot_h_pt = slot.h_mm * MM_TO_PT;
 
         // Handle rotation via transformation matrix
-        let rotation = if slot_idx < slot_rotations.len() { slot_rotations[slot_idx] } else { 0 };
+        let adj = if slot_idx < slot_adjustments.len() {
+            &slot_adjustments[slot_idx]
+        } else {
+            &SlotAdjustment { rotation: 0, scale: 1.0, offset_x: 0.0, offset_y: 0.0 }
+        };
+        let rotation = adj.rotation;
         let rot = ((rotation % 360) + 360) % 360;
 
         // For 90°/270° rotation, the visual dimensions swap (width↔height),
@@ -4292,7 +4346,7 @@ fn build_nup_content_stream(
         };
 
         // Compute scale to fit in slot based on visual (rotated) dimensions
-        let (scale_x, scale_y) = match settings.fit_mode.as_str() {
+        let (mut scale_x, mut scale_y) = match settings.fit_mode.as_str() {
             "fill" => (slot_w_pt / vis_w, slot_h_pt / vis_h),
             "original" => (1.0, 1.0),
             "custom" => {
@@ -4307,11 +4361,21 @@ fn build_nup_content_stream(
             }
         };
 
+        // Per-slot scale override
+        if adj.scale != 1.0 {
+            scale_x *= adj.scale;
+            scale_y *= adj.scale;
+        }
+
         // Centered position in slot (bottom-left origin) based on visual dimensions
         let draw_w = vis_w * scale_x;
         let draw_h = vis_h * scale_y;
-        let offset_x = slot.x_mm * MM_TO_PT + (slot_w_pt - draw_w) / 2.0;
-        let offset_y = slot.y_mm * MM_TO_PT + (slot_h_pt - draw_h) / 2.0;
+        let mut offset_x = slot.x_mm * MM_TO_PT + (slot_w_pt - draw_w) / 2.0;
+        let mut offset_y = slot.y_mm * MM_TO_PT + (slot_h_pt - draw_h) / 2.0;
+
+        // Per-slot offset override (convert mm to pt)
+        if adj.offset_x != 0.0 { offset_x += adj.offset_x * MM_TO_PT; }
+        if adj.offset_y != 0.0 { offset_y -= adj.offset_y * MM_TO_PT; }  // JS Y+ is down, PDF Y+ is up
 
         // PDF transformation matrix: [a b c d e f]
         // Maps Form XObject coordinate space (0,0)-(src_w,src_h) to page area.
@@ -4373,7 +4437,16 @@ fn build_nup_content_stream(
         // Build the XObject name for this Form XObject
         let xobj_name = lopdf::Object::Name(format!("Fm{}", slot_idx).into_bytes());
 
+        // Clip to slot boundary — prevents per-slot overflow into adjacent slots
         ops.push(Operation { operator: "q".into(), operands: vec![] });
+        ops.push(Operation { operator: "re".into(), operands: vec![
+            lopdf::Object::Real(slot.x_mm * MM_TO_PT),
+            lopdf::Object::Real(slot.y_mm * MM_TO_PT),
+            lopdf::Object::Real(slot_w_pt),
+            lopdf::Object::Real(slot_h_pt),
+        ] });
+        ops.push(Operation { operator: "W".into(), operands: vec![] });
+        ops.push(Operation { operator: "n".into(), operands: vec![] });
         ops.push(Operation { operator: "cm".into(), operands: matrix });
         ops.push(Operation { operator: "Do".into(), operands: vec![xobj_name] });
         ops.push(Operation { operator: "Q".into(), operands: vec![] });
@@ -4414,7 +4487,7 @@ fn generate_pdf_passthrough(
 
         // Collect Form XObjects for each slot in this page
         let mut page_form_xobjs: Vec<(lopdf::ObjectId, f32, f32)> = Vec::new();
-        let mut slot_rotations: Vec<i32> = Vec::new();
+        let mut slot_adjustments: Vec<SlotAdjustment> = Vec::new();
         let mut xobj_names: Vec<(std::vec::Vec<u8>, lopdf::ObjectId)> = Vec::new();
 
         for (slot_idx, slot) in page_spec.slots.iter().enumerate() {
@@ -4457,7 +4530,12 @@ fn generate_pdf_passthrough(
             let xobj_name = format!("Fm{}", slot_idx);
             xobj_names.push((xobj_name.into_bytes(), xobj_id));
             page_form_xobjs.push((xobj_id, src_w_pt, src_h_pt));
-            slot_rotations.push(slot.rotation);
+            slot_adjustments.push(SlotAdjustment {
+                rotation: slot.rotation,
+                scale: slot.scale.unwrap_or(1.0),
+                offset_x: slot.offset_x.unwrap_or(0.0),
+                offset_y: slot.offset_y.unwrap_or(0.0),
+            });
         }
 
         if page_form_xobjs.is_empty() {
@@ -4466,7 +4544,7 @@ fn generate_pdf_passthrough(
 
         // Build content stream for this output page
         let content_bytes = build_nup_content_stream(
-            &page_form_xobjs, &slot_positions, &request.settings, &slot_rotations
+            &page_form_xobjs, &slot_positions, &request.settings, &slot_adjustments
         )?;
 
         // Create the content stream object

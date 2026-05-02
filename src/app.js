@@ -28,6 +28,7 @@ var S = {
   viewZoom: 0,
   layout: { cols: 1, rows: 1, orient: 'landscape' },
   editIdx: -1,
+  selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
@@ -81,7 +82,11 @@ function createFileObj(opts) {
     // PDF source info for ocr_pdf_page command (zero IPC round-trip OCR).
     // Set when this fileObj represents a PDF page rendered via render_pdf_pages.
     _pdfPath: opts.pdfPath || '',
-    _pdfPageIdx: opts.pdfPageIdx != null ? opts.pdfPageIdx : -1
+    _pdfPageIdx: opts.pdfPageIdx != null ? opts.pdfPageIdx : -1,
+    // Per-slot adjustment: scale & position within the layout slot
+    slotScale: opts.slotScale || 1,        // 1.0 = default (contain-fit size)
+    slotOffsetX: opts.slotOffsetX || 0,    // X offset in mm (0 = centered)
+    slotOffsetY: opts.slotOffsetY || 0     // Y offset in mm (0 = centered)
   };
 }
 
@@ -1017,6 +1022,12 @@ function openInvModal(i) {
     '<div class="row"><label class="lbl">销售方</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mSeller" value="' + escHtml(f.sellerName || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0"></div></div>' +
     '<div class="row"><label class="lbl">信用代码</label><div style="flex:1;display:flex;gap:4px;align-items:center"><input type="text" id="mCreditCode" value="' + escHtml(f.sellerCreditCode || '') + '" placeholder="自动识别" style="flex:1;font-size:11px;min-width:0;font-family:monospace"></div></div>' +
     '<div class="row"><label class="lbl">旋转</label><div class="ctrl"><select id="mRot"><option value="0" ' + (f.rotation === 0 ? 'selected' : '') + '>不旋转</option><option value="90" ' + (f.rotation === 90 ? 'selected' : '') + '>90\u00B0</option><option value="180" ' + (f.rotation === 180 ? 'selected' : '') + '>180\u00B0</option><option value="270" ' + (f.rotation === 270 ? 'selected' : '') + '>270\u00B0</option></select></div></div>' +
+    '<div style="border-top:1px dashed var(--border);margin-top:4px;padding-top:8px">' +
+    '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:6px">🎯 单票调整</div>' +
+    '<div class="row"><label class="lbl">缩放%</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="mSlotScale" value="' + Math.round((f.slotScale || 1) * 100) + '" min="20" max="200" style="width:60px;text-align:center"><span style="font-size:11px;color:var(--text-muted)">%</span></div></div>' +
+    '<div class="row"><label class="lbl">X偏移</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="mSlotOffX" value="' + (f.slotOffsetX || 0) + '" min="-50" max="50" step="0.5" style="width:60px;text-align:center"><span style="font-size:11px;color:var(--text-muted)">mm</span></div></div>' +
+    '<div class="row"><label class="lbl">Y偏移</label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="mSlotOffY" value="' + (f.slotOffsetY || 0) + '" min="-50" max="50" step="0.5" style="width:60px;text-align:center"><span style="font-size:11px;color:var(--text-muted)">mm</span></div></div>' +
+    '</div>' +
     ocrHtml;
   document.getElementById('invModal').classList.remove('hidden');
 }
@@ -1040,6 +1051,10 @@ function confirmInvModal() {
   f.invoiceDate = document.getElementById('mInvoiceDate').value;
   f.buyerName = document.getElementById('mBuyer').value;
   f.buyerCreditCode = document.getElementById('mBuyerCreditCode').value;
+  // Per-slot adjustments
+  f.slotScale = Math.max(0.2, Math.min(2.0, (parseInt(document.getElementById('mSlotScale').value) || 100) / 100));
+  f.slotOffsetX = parseFloat(document.getElementById('mSlotOffX').value) || 0;
+  f.slotOffsetY = parseFloat(document.getElementById('mSlotOffY').value) || 0;
   closeInvModal(); renderFileList(); updatePreview(); updateAmountSummary();
 }
 
@@ -1062,6 +1077,94 @@ function fallbackCopy(text, btn) {
   document.body.appendChild(ta); ta.select();
   try { document.execCommand('copy'); btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); }
   catch(e) { toast('复制失败'); }
+  document.body.removeChild(ta);
+}
+
+// =====================================================
+// Per-slot Adjustment
+// =====================================================
+function selectSlot(idx) {
+  S.selectedSlot = idx;
+  updateAdjPanel();
+  // Highlight in preview
+  document.querySelectorAll('.invoice-slot').forEach(function(el) { el.classList.remove('selected'); });
+  if (idx >= 0) {
+    var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
+    if (slotEl) slotEl.classList.add('selected');
+  }
+}
+
+function getSelectedFileObj() {
+  if (S.selectedSlot < 0) return null;
+  var files = getActiveFiles();
+  var settings = getSettings();
+  var perPage = settings.cols * settings.rows;
+  var pageStart = S.currentPage * perPage;
+  var fileIdx = pageStart + S.selectedSlot;
+  return fileIdx < files.length ? files[fileIdx] : null;
+}
+
+function updateAdjPanel() {
+  var f = getSelectedFileObj();
+  var empty = document.getElementById('adjEmpty');
+  var content = document.getElementById('adjContent');
+  if (!f) {
+    empty.style.display = '';
+    content.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  content.style.display = '';
+  document.getElementById('adjFileName').textContent = f.name || '未命名';
+  document.getElementById('adjScale').value = Math.round((f.slotScale || 1) * 100);
+  document.getElementById('adjScaleN').value = Math.round((f.slotScale || 1) * 100);
+  document.getElementById('adjOffX').value = f.slotOffsetX || 0;
+  document.getElementById('adjOffXN').value = f.slotOffsetX || 0;
+  document.getElementById('adjOffY').value = f.slotOffsetY || 0;
+  document.getElementById('adjOffYN').value = f.slotOffsetY || 0;
+}
+
+function onAdjScaleChange() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  f.slotScale = Math.max(0.2, Math.min(2.0, parseInt(document.getElementById('adjScale').value) / 100));
+  _pdfDirty = true;
+  updatePreview();
+}
+
+function onAdjOffsetChange() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  f.slotOffsetX = parseFloat(document.getElementById('adjOffX').value) || 0;
+  f.slotOffsetY = parseFloat(document.getElementById('adjOffY').value) || 0;
+  _pdfDirty = true;
+  updatePreview();
+}
+
+function resetSlotAdj() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  f.slotScale = 1;
+  f.slotOffsetX = 0;
+  f.slotOffsetY = 0;
+  updateAdjPanel();
+  _pdfDirty = true;
+  updatePreview();
+}
+
+function applySlotAdjToAll() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var scale = f.slotScale, ox = f.slotOffsetX, oy = f.slotOffsetY;
+  S.files.forEach(function(file) {
+    file.slotScale = scale;
+    file.slotOffsetX = ox;
+    file.slotOffsetY = oy;
+  });
+  _pdfDirty = true;
+  updatePreview();
+  toast('已应用到全部 ' + S.files.length + ' 张发票');
+}
   document.body.removeChild(ta);
 }
 
@@ -1275,6 +1378,8 @@ function updatePreview() {
   renderPage(pages[S.currentPage], S.currentPage, pages.length, settings);
   updatePageDots(pages.length);
   syncActiveFileFromPage();
+  // Sync per-slot adjustment panel
+  if (typeof updateAdjPanel === 'function') updateAdjPanel();
 }
 
 function updatePageDots(t) {
@@ -1303,9 +1408,9 @@ function updatePageDots(t) {
     d.innerHTML = html;
   }
 }
-function prevPage() { if (S.currentPage > 0) { S.currentPage--; updatePreview(); } }
-function nextPage() { if (S.currentPage < S.totalPages - 1) { S.currentPage++; updatePreview(); } }
-function gotoPage(i) { S.currentPage = i; updatePreview(); }
+function prevPage() { if (S.currentPage > 0) { S.currentPage--; S.selectedSlot = -1; updatePreview(); } }
+function nextPage() { if (S.currentPage < S.totalPages - 1) { S.currentPage++; S.selectedSlot = -1; updatePreview(); } }
+function gotoPage(i) { S.currentPage = i; S.selectedSlot = -1; updatePreview(); }
 function getFitZoom() {
   var wrap = document.getElementById('previewWrap');
   if (!wrap) return 100;

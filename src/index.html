@@ -115,6 +115,22 @@
           <div class="row"><label class="lbl">字号mm</label><div class="rr ctrl"><input type="range" id="wmSize" min="5" max="50" value="15" oninput="syncSlider(this,'wmSizeN');updatePreview()"><input type="number" id="wmSizeN" min="5" max="50" value="15" style="width:48px" onchange="syncRange(this,'wmSize');updatePreview()"></div></div>
         </div>
       </div>
+      <div class="sec adj-section">
+        <div class="sec-title">🎯 单票调整</div>
+        <div id="adjPanel">
+          <div class="adj-empty" id="adjEmpty">点击预览中的发票进行选中</div>
+          <div id="adjContent" style="display:none">
+            <span class="adj-file-name" id="adjFileName"></span>
+            <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="200" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="200" value="100" style="width:52px" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
+            <div class="row"><label class="lbl">X偏移</label><div class="rr ctrl"><input type="range" id="adjOffX" min="-50" max="50" value="0" step="0.5" oninput="syncSlider(this,'adjOffXN');onAdjOffsetChange()"><input type="number" id="adjOffXN" min="-50" max="50" value="0" step="0.5" style="width:52px" onchange="syncRange(this,'adjOffX');onAdjOffsetChange()"></div></div>
+            <div class="row"><label class="lbl">Y偏移</label><div class="rr ctrl"><input type="range" id="adjOffY" min="-50" max="50" value="0" step="0.5" oninput="syncSlider(this,'adjOffYN');onAdjOffsetChange()"><input type="number" id="adjOffYN" min="-50" max="50" value="0" step="0.5" style="width:52px" onchange="syncRange(this,'adjOffY');onAdjOffsetChange()"></div></div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button class="btn btn-sm" style="flex:1" onclick="resetSlotAdj()">重置</button>
+              <button class="btn btn-sm" style="flex:1" onclick="applySlotAdjToAll()">应用到全部</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="sidebar-panel hidden" id="panel-print">
