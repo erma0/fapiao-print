@@ -128,10 +128,10 @@ body {
 .file-count { font-size: 12px; color: var(--text-muted); }
 .file-actions { display: flex; gap: 4px; }
 .file-item {
-  display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9;
-  cursor: pointer; transition: all 0.15s; gap: 8px;
+  display: flex; align-items: center; padding: 8px 12px 8px 4px; border-bottom: 1px solid #f1f5f9;
+  cursor: pointer; transition: all 0.15s; gap: 8px; position: relative;
 }
-.file-item:hover { background: var(--surface2); }
+.file-item:hover { background: var(--surface2); padding-left: 20px; }
 .file-item.active-item { background: var(--accent-light); border-left: 3px solid var(--accent); }
 .file-item.active-item .file-name { color: var(--accent); }
 .file-check {
@@ -370,14 +370,21 @@ html.dark .file-item.loading-item .file-thumb::after {
 .ocr-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 4px; }
 html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #1a1a2e; }
 
-/* ===== Sort buttons (↑↓) — inline with action buttons ===== */
-.sort-btn {
-  font-size: 9px; min-width: 22px;
-  color: var(--text-muted); opacity: 0.3; transition: opacity 0.15s, color 0.15s;
+/* ===== Sort buttons (↑↓) — float on hover, zero space ===== */
+.sort-overlay {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0; padding: 2px 1px; background: var(--surface);
+  opacity: 0; pointer-events: none; transition: opacity 0.15s;
+  z-index: 2; border-right: 1px solid var(--border);
 }
-.file-item:hover .sort-btn { opacity: 0.8; }
-.sort-btn:hover { color: var(--accent) !important; opacity: 1 !important; }
-.sort-btn.disabled { opacity: 0.1; cursor: default; pointer-events: none; }
+.file-item:hover .sort-overlay { opacity: 1; pointer-events: auto; }
+.sort-btn {
+  font-size: 8px; min-width: 16px; height: 14px; padding: 0; line-height: 1;
+  color: var(--text-muted); transition: color 0.15s;
+}
+.sort-btn:hover { color: var(--accent) !important; }
+.sort-btn.disabled { opacity: 0.15; cursor: default; pointer-events: none; }
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
