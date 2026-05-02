@@ -128,10 +128,10 @@ body {
 .file-count { font-size: 12px; color: var(--text-muted); }
 .file-actions { display: flex; gap: 4px; }
 .file-item {
-  display: flex; align-items: center; padding: 8px 12px 8px 4px; border-bottom: 1px solid #f1f5f9;
-  cursor: pointer; transition: all 0.15s; gap: 8px; position: relative;
+  display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9;
+  cursor: pointer; transition: background 0.15s; gap: 8px;
 }
-.file-item:hover { background: var(--surface2); padding-left: 20px; }
+.file-item:hover { background: var(--surface2); }
 .file-item.active-item { background: var(--accent-light); box-shadow: inset 3px 0 0 var(--accent); }
 .file-item.active-item .file-name { color: var(--accent); }
 .file-check {
