@@ -2522,6 +2522,27 @@ fn parse_fonts(xml: &str) -> (std::collections::HashMap<u32, OfdFont>, std::coll
                             color_spaces.insert(id, type_v);
                         }
                     }
+                } else if tag == "StrokeColor" {
+                    // Self-closing: <ofd:StrokeColor Value="128 0 0" ColorSpace="2"/>
+                    if let Some(v) = attr_val(&e, "Value") {
+                        if let Some(c) = parse_color(&v) {
+                            if let Some(id) = current_dp_id {
+                                if let Some(dp) = draw_params.get_mut(&id) {
+                                    dp.stroke_color = Some(c);
+                                }
+                            }
+                        }
+                    }
+                } else if tag == "FillColor" {
+                    if let Some(v) = attr_val(&e, "Value") {
+                        if let Some(c) = parse_color(&v) {
+                            if let Some(id) = current_dp_id {
+                                if let Some(dp) = draw_params.get_mut(&id) {
+                                    dp.fill_color = Some(c);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Ok(Event::Eof) => break,
