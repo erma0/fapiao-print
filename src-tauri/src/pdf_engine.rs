@@ -2659,9 +2659,9 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     invoice_info.amount_no_tax = custom_data.get("合计金额").and_then(|s| s.parse().ok());
     invoice_info.tax_amount = custom_data.get("合计税额").and_then(|s| s.parse().ok());
 
-    // Compute total = no_tax + tax
+    // Compute total = no_tax + tax (both already in yuan, e.g. 17699.12 + 2300.88 = 20000.00)
     if let (Some(no_tax), Some(tax)) = (invoice_info.amount_no_tax, invoice_info.tax_amount) {
-        invoice_info.amount_tax = Some((no_tax + tax * 100.0).round() / 100.0);
+        invoice_info.amount_tax = Some(((no_tax + tax) * 100.0).round() / 100.0);
     }
 
     // From CustomTag.xml + Content.xml — get buyer/seller names
@@ -2839,22 +2839,21 @@ fn build_svg_image(img: &OfdImageObject, image_data: &std::collections::HashMap<
         None => return String::new(),
     };
 
+    // Boundary = (x, y, w, h) in mm — already defines where and how big the image should be.
+    // Do NOT apply CTM for images: in OFD, CTM often describes the pixel-to-mm mapping
+    // (e.g. QR 300px image with CTM [20 0 0 20 ...] means 300px → 20mm),
+    // but the Boundary already encodes the target display size.
+    // Applying CTM as SVG transform would incorrectly scale the image again.
     let x = img.boundary.0 * scale;
     let y = img.boundary.1 * scale;
     let w = img.boundary.2 * scale;
     let h = img.boundary.3 * scale;
 
-    let mut transform = format!("translate({:.4},{:.4})", x, y);
-    if let Some(ctm) = img.ctm {
-        transform.push_str(&format!(" matrix({:.4},{:.4},{:.4},{:.4},{:.4},{:.4})",
-            ctm.0, ctm.1, ctm.2, ctm.3, ctm.4 * scale, ctm.5 * scale));
-    }
-
     let opacity = img.alpha.map(|a| format!(" opacity=\"{:.2}\"", a as f64 / 255.0)).unwrap_or_default();
 
     format!(
-        "<image href=\"{}\" x=\"0\" y=\"0\" width=\"{:.4}\" height=\"{:.4}\" transform=\"{}\"{}/>",
-        data_url, w, h, transform, opacity
+        "<image href=\"{}\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\"{}/>",
+        data_url, x, y, w, h, opacity
     )
 }
 
