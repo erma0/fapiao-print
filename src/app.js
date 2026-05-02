@@ -853,7 +853,8 @@ function renderFileList() {
     var actionBtns = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
       : ocrBtnHtml + '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>';
-    return '<div class="' + cls + '" draggable="true" ondragstart="dStart(event,' + i + ')" ondragover="dOver(event)" ondrop="dDrop(event,' + i + ')" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+    return '<div class="' + cls + '" data-idx="' + i + '" onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+      '<div class="drag-handle" title="拖拽排序" onmousedown="dHandleDown(event,' + i + ')">\u2630</div>' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + safeType + '</div></div>' +
       '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div><div class="file-meta">' + fmtSize(f.size) + cb + rb + ab + '</div>' + (sb ? '<div class="file-seller">' + sb + '</div>' : '<div class="file-seller" style="display:none"></div>') + '</div>' +
@@ -957,10 +958,173 @@ function syncActiveFileFromPage() {
     }
   }
 }
-var dSrc = null;
-function dStart(e, i) { dSrc = i; e.dataTransfer.effectAllowed = 'move'; }
-function dOver(e) { e.preventDefault(); }
-function dDrop(e, i) { e.preventDefault(); if (dSrc === null || dSrc === i) return; var item = S.files.splice(dSrc, 1)[0]; S.files.splice(i, 0, item); dSrc = null; renderFileList(); updatePreview(); }
+// =====================================================
+// Enhanced Drag & Drop Sorting for file list (mouse events)
+// Uses mousedown/mousemove/mouseup — avoids HTML5 drag API conflicts with Tauri
+// =====================================================
+var _dragSrcIdx = -1;
+var _dragGhost = null;
+var _dragStartY = 0;
+var _dragStartX = 0;
+var _dragMoved = false;
+var _autoScrollTimer = null;
+var _fileListEl = null;
+
+function dHandleDown(e, i) {
+  e.preventDefault();
+  e.stopPropagation();
+  _dragSrcIdx = i;
+  _dragStartY = e.clientY;
+  _dragStartX = e.clientX;
+  _dragMoved = false;
+  _fileListEl = document.getElementById('fileList');
+  document.addEventListener('mousemove', _dMouseMove);
+  document.addEventListener('mouseup', _dMouseUp);
+}
+
+function _dMouseMove(e) {
+  var dy = Math.abs(e.clientY - _dragStartY);
+  var dx = Math.abs(e.clientX - _dragStartX);
+  if (!_dragMoved && dy < 5 && dx < 5) return;
+
+  if (!_dragMoved) {
+    // First move — activate drag mode
+    _dragMoved = true;
+    document.body.style.userSelect = 'none';
+    // Create ghost element (visual clone following cursor)
+    var items = _fileListEl.querySelectorAll('.file-item');
+    var srcItem = items[_dragSrcIdx];
+    if (!srcItem) { _cancelDrag(); return; }
+    srcItem.classList.add('dragging');
+    _dragGhost = srcItem.cloneNode(true);
+    _dragGhost.className = 'file-item drag-ghost';
+    _dragGhost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;width:' + srcItem.offsetWidth + 'px;opacity:0.85;box-shadow:var(--shadow-lg);border-radius:var(--radius-sm);';
+    document.body.appendChild(_dragGhost);
+    _dUpdateGhostPos(e);
+    _startAutoScroll();
+  }
+
+  _dUpdateGhostPos(e);
+  _dUpdateDropIndicator(e);
+  _dAutoScrollTick(e);
+}
+
+function _dUpdateGhostPos(e) {
+  if (_dragGhost) {
+    _dragGhost.style.left = e.clientX - 30 + 'px';
+    _dragGhost.style.top = e.clientY - 20 + 'px';
+  }
+}
+
+function _dUpdateDropIndicator(e) {
+  _clearIndicators();
+  var items = _fileListEl.querySelectorAll('.file-item:not(.dragging)');
+  for (var k = 0; k < items.length; k++) {
+    var rect = items[k].getBoundingClientRect();
+    if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+      var midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) {
+        items[k].classList.add('drag-over-top');
+      } else {
+        items[k].classList.add('drag-over-bottom');
+      }
+      break;
+    }
+  }
+}
+
+function _dMouseUp(e) {
+  document.removeEventListener('mousemove', _dMouseMove);
+  document.removeEventListener('mouseup', _dMouseUp);
+  _stopAutoScroll();
+  document.body.style.userSelect = '';
+
+  if (!_dragMoved) {
+    _cancelDrag();
+    return;
+  }
+
+  // Find drop target
+  var items = _fileListEl.querySelectorAll('.file-item:not(.dragging)');
+  var targetIdx = -1;
+  var insertAfter = false;
+  for (var k = 0; k < items.length; k++) {
+    var rect = items[k].getBoundingClientRect();
+    if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+      targetIdx = parseInt(items[k].dataset.idx, 10);
+      insertAfter = e.clientY >= rect.top + rect.height / 2;
+      break;
+    }
+  }
+
+  if (targetIdx >= 0 && targetIdx !== _dragSrcIdx) {
+    var finalIdx = insertAfter ? targetIdx + 1 : targetIdx;
+    if (finalIdx > _dragSrcIdx) finalIdx--;
+    var moved = S.files.splice(_dragSrcIdx, 1)[0];
+    S.files.splice(finalIdx, 0, moved);
+
+    // Update active file index to follow the moved item
+    if (_activeFileIdx === _dragSrcIdx) {
+      _activeFileIdx = finalIdx;
+    } else if (_activeFileIdx > _dragSrcIdx && _activeFileIdx <= finalIdx) {
+      _activeFileIdx--;
+    } else if (_activeFileIdx < _dragSrcIdx && _activeFileIdx >= finalIdx) {
+      _activeFileIdx++;
+    }
+  }
+
+  _cancelDrag();
+  renderFileList();
+  updatePreview();
+}
+
+function _cancelDrag() {
+  _clearIndicators();
+  if (_dragGhost && _dragGhost.parentNode) {
+    _dragGhost.parentNode.removeChild(_dragGhost);
+  }
+  _dragGhost = null;
+  // Remove dragging class from source
+  if (_fileListEl && _dragSrcIdx >= 0) {
+    var items = _fileListEl.querySelectorAll('.file-item');
+    if (items[_dragSrcIdx]) items[_dragSrcIdx].classList.remove('dragging');
+  }
+  _dragSrcIdx = -1;
+  _dragMoved = false;
+}
+
+function _clearIndicators() {
+  if (!_fileListEl) return;
+  var items = _fileListEl.querySelectorAll('.file-item');
+  for (var k = 0; k < items.length; k++) {
+    items[k].classList.remove('drag-over-top', 'drag-over-bottom');
+  }
+}
+
+// Auto-scroll when near edges
+function _startAutoScroll() {
+  _stopAutoScroll();
+  _autoScrollTimer = setInterval(function() {
+    // Only keep running while dragging
+    if (_dragSrcIdx < 0) { _stopAutoScroll(); return; }
+  }, 30);
+}
+
+function _dAutoScrollTick(e) {
+  if (!_fileListEl || _dragSrcIdx < 0) return;
+  var rect = _fileListEl.getBoundingClientRect();
+  var threshold = 40;
+  var speed = 10;
+  if (e.clientY < rect.top + threshold) {
+    _fileListEl.scrollTop -= speed;
+  } else if (e.clientY > rect.bottom - threshold) {
+    _fileListEl.scrollTop += speed;
+  }
+}
+
+function _stopAutoScroll() {
+  if (_autoScrollTimer) { clearInterval(_autoScrollTimer); _autoScrollTimer = null; }
+}
 
 // Amount statistics
 function updateAmountSummary() {
