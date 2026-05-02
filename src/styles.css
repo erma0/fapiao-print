@@ -39,7 +39,7 @@ html.dark select option { background: #16213e; color: #e2e8f0; }
 html.dark .upload-zone { background: #1a1a2e; }
 html.dark .file-item { border-bottom-color: #2a2a4a; }
 html.dark .file-item:hover { background: #1e2a4a; }
-html.dark .file-item.active-item { background: #1e2a4a; border-left-color: #5b8def; }
+html.dark .file-item.active-item { background: #1e2a4a; box-shadow: inset 3px 0 0 #5b8def; }
 html.dark .file-item.active-item .file-name { color: #5b8def; }
 html.dark .file-check { background: #1a1a2e; border-color: #3a3a5a; }
 html.dark .file-check.checked { background: #5b8def; border-color: #5b8def; }
@@ -132,7 +132,7 @@ body {
   cursor: pointer; transition: all 0.15s; gap: 8px; position: relative;
 }
 .file-item:hover { background: var(--surface2); padding-left: 20px; }
-.file-item.active-item { background: var(--accent-light); border-left: 3px solid var(--accent); }
+.file-item.active-item { background: var(--accent-light); box-shadow: inset 3px 0 0 var(--accent); }
 .file-item.active-item .file-name { color: var(--accent); }
 .file-check {
   width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
