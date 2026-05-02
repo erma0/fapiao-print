@@ -3060,6 +3060,31 @@ fn build_lopdf_image_xobject(
         _ => b"DeviceRGB",
     };
 
+    let expected_size = (width as usize) * (height as usize) * (num_components as usize);
+    log::info!("build_lopdf_image_xobject: {}x{} {}nc, raw={}B, expected={}B",
+        width, height, num_components, raw_pixel_bytes.len(), expected_size);
+
+    // Manually zlib-compress the raw pixel data.
+    // We do NOT rely on lopdf's Stream::compress() because:
+    // 1. It skips compression if the dict already has Filter set
+    // 2. It skips if savings < 19 bytes (can happen with small images)
+    // 3. with_compression(true) + save_to() does NOT auto-compress
+    // Instead: compress ourselves, set Filter:FlateDecode, use with_compression(false).
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    use std::io::Write;
+    let compressed = match encoder.write_all(raw_pixel_bytes).and_then(|_| encoder.finish()) {
+        Ok(c) => {
+            log::info!("build_lopdf_image_xobject: zlib {}B → {}B ({:.1}%)",
+                raw_pixel_bytes.len(), c.len(),
+                c.len() as f64 / raw_pixel_bytes.len() as f64 * 100.0);
+            c
+        }
+        Err(e) => {
+            log::warn!("build_lopdf_image_xobject: zlib failed: {}, storing uncompressed", e);
+            raw_pixel_bytes.to_vec()
+        }
+    };
+
     let mut dict = lopdf::Dictionary::new();
     dict.set("Type", lopdf::Object::Name(b"XObject".to_vec()));
     dict.set("Subtype", lopdf::Object::Name(b"Image".to_vec()));
@@ -3067,16 +3092,11 @@ fn build_lopdf_image_xobject(
     dict.set("Height", lopdf::Object::Integer(height as i64));
     dict.set("BitsPerComponent", lopdf::Object::Integer(8));
     dict.set("ColorSpace", lopdf::Object::Name(color_space.to_vec()));
-    // NOTE: Do NOT pre-set Filter. lopdf's Stream::compress() checks if Filter
-    // already exists — if it does, compress() is a no-op, leaving raw uncompressed
-    // pixels tagged as FlateDecode → black image in PDF reader.
-    // Instead: create stream without Filter, then call compress() which will
-    // zlib-compress the data and auto-add Filter:FlateDecode.
+    dict.set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
 
-    let mut stream = lopdf::Stream::new(dict, raw_pixel_bytes.to_vec()).with_compression(true);
-    if let Err(e) = stream.compress() {
-        log::warn!("FlateDecode compression failed: {}, storing uncompressed", e);
-    }
+    // with_compression(false) — we already compressed manually.
+    // Prevents lopdf from skipping or double-compressing.
+    let stream = lopdf::Stream::new(dict, compressed).with_compression(false);
     output_doc.add_object(lopdf::Object::Stream(stream))
 }
 

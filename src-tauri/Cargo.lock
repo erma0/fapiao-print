@@ -1340,6 +1340,7 @@ name = "fapiao-print"
 version = "1.9.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "image",
  "kamadak-exif",
  "log",

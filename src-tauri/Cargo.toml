@@ -35,6 +35,7 @@ rayon = "1.10"
 kamadak-exif = "0.5"
 ocr-rs = { version = "2.2", optional = true }
 ofd-engine = { path = "ofd-engine" }
+flate2 = "1.1.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
