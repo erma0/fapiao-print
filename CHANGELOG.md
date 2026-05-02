@@ -1,5 +1,29 @@
 # 📋 更新日志
 
+## v1.9.0 — 单票独立调整 + PDF统一直通 + UI全面优化
+
+### 🚀 新功能
+
+- **单票独立调整大小/位置**：每张发票可在预览中拖拽移动 + 角落 handle 缩放，侧边栏「单票调整」面板 + 发票弹窗参数编辑，PDF 裁剪输出
+  - 数据模型 `fileObj.{slotScale, slotOffsetX, slotOffsetY}` — slot 内独立缩放/偏移
+  - CSS transform (translate+scale+rotate) 预览 → Rust `SlotSpec.scale/offset_x/offset_y` PDF 生成
+- **发票列表排序**：↑↓ 按钮替换拖拽排序（Tauri webview 拖拽卡顿），hover 浮动显示不占空间
+
+### 🔧 重构
+
+- **PDF 生成统一 lopdf 混合直通路径**：图片用 JPEG XObject，删除 `can_passthrough_pdf` 分支，代码路径更简洁
+- **文件列表 UI 重构**：操作按钮 + 大小标签合入 meta 行，文件名/销售方独占整行宽度，侧边栏 340px
+
+### 🐛 修复
+
+- **弹窗输入框全面对齐**：双行布局 — 固定行右对齐 140px + 自适应行 flex 填满 + 标签左对齐 + 单票 % 与 mm 对齐
+- **meta 行金额过长**：标签区可收缩 + 操作区不换行，金额输入框自适应宽度
+- **列表选中抖动**：hover padding-left 变化 + border-left 导致内容右移 → 改用 box-shadow
+- **app.js 语法错误**：移除 fallbackCopy 编辑残余的重复代码
+- **构建脚本**：OCR 绿色版 zip 内 exe 使用原始文件名 + 修复全量构建误选旧版安装包
+
+---
+
 ## v1.8.4 — 页面内容层 DrawParam 继承修复
 
 ### 🐛 修复
