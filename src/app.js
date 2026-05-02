@@ -181,16 +181,21 @@ async function triggerUpload() {
       var paths = typeof result === 'string' ? [result] : (Array.isArray(result) ? result : []);
       if (paths.length === 0) return;
 
-      showLoading('读取 ' + paths.length + ' 个文件...');
-      var fileDataList = await invoke('open_invoice_files', { paths: paths });
-      hideLoading();
-
-      if (fileDataList && fileDataList.length > 0) {
-        await processFileDataList(fileDataList);
+      // Incremental loading: read + render one file at a time for instant visual feedback
+      if (paths.length <= 3) {
+        // Few files: batch read is fast, use original flow
+        toastLoading('读取 ' + paths.length + ' 个文件...');
+        var fileDataList = await invoke('open_invoice_files', { paths: paths });
+        if (fileDataList && fileDataList.length > 0) {
+          await processFileDataList(fileDataList);
+        }
+      } else {
+        // Many files: incremental — read one by one so first preview appears immediately
+        await processFilesIncremental(paths);
       }
     } catch (err) {
       console.error('Dialog error:', err);
-      hideLoading();
+      hideToast();
       toast('打开文件对话框失败: ' + String(err));
     }
   } else {
@@ -401,6 +406,135 @@ async function processFiles(files) {
     toastDone('已加载 ' + added + ' 张发票');
   } else {
     // OCR still running — save added count for _drainOcrQueue's final toast
+    _ocrBatchAddedCount = added;
+  }
+}
+
+// Incremental loading: read files one-by-one, render in small batches.
+// Strategy: skeleton placeholders (stable layout) + parallel background load + batch render every 3 files.
+async function processFilesIncremental(paths) {
+  var total = paths.length;
+  var completed = 0;
+  var added = 0;
+  var BATCH_RENDER_INTERVAL = 1; // Render every N files — 1 = each file, stable skeleton keeps layout from jumping
+  var _dirty = false;
+  _loadingBatchActive = true;
+
+  // 1. Create ALL skeleton placeholders immediately — stable layout from the start
+  var placeholders = [];
+  paths.forEach(function(p) {
+    var nameParts = p.split(/[/\\]/);
+    var name = nameParts[nameParts.length - 1];
+    var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
+    ph._placeholderKey = ph.id;
+    S.files.push(ph);
+    _newFileIds[ph.id] = true;
+    placeholders.push(ph);
+  });
+  renderFileList(); updatePreview(); updatePrintBtn();
+
+  // 2. Block interaction + show persistent spinner toast
+  document.getElementById('fileList').classList.add('batch-loading');
+  toastLoading('加载中 0/' + total);
+
+  // Count how many files will need OCR (for batch tracking)
+  if (S.feat.ocrEnabled) {
+    _ocrBatchTotal = total;
+  }
+
+  // 3. Load files one by one, replace placeholders in-place, batch-render periodically
+  for (var pi = 0; pi < paths.length; pi++) {
+    if (window.__TAURI_CLOSING__) break;
+    var path = paths[pi];
+    var ph = placeholders[pi];
+    try {
+      var fileDataList = await invoke('open_invoice_files', { paths: [path] });
+      if (!fileDataList || fileDataList.length === 0) {
+        // Remove placeholder for failed file
+        var failIdx = S.files.indexOf(ph);
+        if (failIdx >= 0) S.files.splice(failIdx, 1);
+        completed++;
+        continue;
+      }
+
+      // Load each file data (render image, queue OCR)
+      for (var fi = 0; fi < fileDataList.length; fi++) {
+        var fd = fileDataList[fi];
+        var r = await loadFileFromDataUrlFast(fd).catch(function(err) {
+          console.error('Load file error:', fd.name, err);
+          return null;
+        });
+
+        // Replace this placeholder (or the first remaining one from this path)
+        var phIdx = -1;
+        if (fi === 0) {
+          phIdx = S.files.indexOf(ph);
+        }
+        if (phIdx < 0) {
+          // Fallback: find any remaining placeholder from this batch
+          for (var si = 0; si < S.files.length; si++) {
+            if (S.files[si]._loading && placeholders.indexOf(S.files[si]) >= 0) { phIdx = si; break; }
+          }
+        }
+
+        if (phIdx >= 0 && r) {
+          var items = Array.isArray(r) ? r : [r];
+          items.forEach(function(it) { _newFileIds[it.id] = true; });
+          S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+          added += items.length;
+        } else if (phIdx >= 0) {
+          S.files.splice(phIdx, 1);
+        }
+        _dirty = true;
+      }
+    } catch (err) {
+      console.error('Read file error:', path, err);
+      var errIdx = S.files.indexOf(ph);
+      if (errIdx >= 0) S.files.splice(errIdx, 1);
+    }
+
+    completed++;
+
+    // Update progress toast (always, so user sees progress)
+    var ocrRemaining = _ocrQueue.length + _ocrRunning;
+    var isLast = (completed >= total);
+    if (isLast) {
+      if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+        var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+        toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
+      }
+    } else {
+      if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+        var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+        toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+      } else {
+        toastLoading('加载中 ' + completed + '/' + total);
+      }
+    }
+
+    // Batch render: every BATCH_RENDER_INTERVAL files or at the end
+    if (_dirty && (completed % BATCH_RENDER_INTERVAL === 0 || isLast)) {
+      renderFileList(); updatePreview(); updatePrintBtn();
+      _dirty = false;
+      await nextFrame();
+    }
+  }
+
+  // Final render if any remaining dirty
+  if (_dirty) {
+    renderFileList(); updatePreview(); updatePrintBtn();
+  }
+
+  // Loading batch complete
+  _loadingBatchActive = false;
+  document.getElementById('fileList').classList.remove('batch-loading');
+
+  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
+    _ocrToastActive = false;
+    _ocrBatchTotal = 0;
+    _ocrBatchAddedCount = 0;
+    toastDone('已加载 ' + added + ' 张发票');
+  } else {
     _ocrBatchAddedCount = added;
   }
 }
@@ -1658,14 +1792,17 @@ window._tauriFileDrop = function(paths) {
   if (!Array.isArray(paths) || paths.length === 0) return;
   (async function() {
     try {
-      showLoading('读取 ' + paths.length + ' 个文件...');
-      var fileDataList = await invoke('open_invoice_files', { paths: paths });
-      hideLoading();
-      if (fileDataList && fileDataList.length > 0) {
-        await processFileDataList(fileDataList);
+      if (paths.length <= 3) {
+        toastLoading('读取 ' + paths.length + ' 个文件...');
+        var fileDataList = await invoke('open_invoice_files', { paths: paths });
+        if (fileDataList && fileDataList.length > 0) {
+          await processFileDataList(fileDataList);
+        }
+      } else {
+        await processFilesIncremental(paths);
       }
     } catch(err) {
-      hideLoading();
+      hideToast();
       toast('拖放文件读取失败: ' + String(err));
     }
   })();

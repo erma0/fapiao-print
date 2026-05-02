@@ -352,6 +352,23 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Batch loading overlay — blocks interaction while files load */
+#fileList.batch-loading {
+  position: relative;
+}
+#fileList.batch-loading::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.03);
+  z-index: 10;
+  cursor: not-allowed;
+  pointer-events: all;
+}
+html.dark #fileList.batch-loading::after {
+  background: rgba(0,0,0,0.15);
+}
+
 /* Loading skeleton — shimmer on thumbnail while file renders */
 .file-item.loading-item .file-thumb {
   position: relative;
