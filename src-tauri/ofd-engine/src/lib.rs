@@ -804,7 +804,16 @@ fn parse_ofd_custom_data(xml: &str) -> HashMap<String, String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+            Ok(Event::Empty(e)) => {
+                // Self-closing tag: <CustomData Name="xxx"/> — value is empty, do NOT call read_element_text
+                let tag = local_tag_name(&e.name());
+                if tag == "CustomData" {
+                    if let Some(name) = attr_val(&e, "Name") {
+                        map.insert(name, String::new());
+                    }
+                }
+            }
+            Ok(Event::Start(e)) => {
                 let tag = local_tag_name(&e.name());
                 if tag == "CustomData" {
                     if let Some(name) = attr_val(&e, "Name") {
@@ -1660,11 +1669,14 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     // 11. Extract invoice info from structured data
     let mut invoice_info = OfdInvoiceInfo::default();
 
-    // From OFD.xml CustomData
-    invoice_info.invoice_no = custom_data.get("发票号码").cloned();
-    invoice_info.invoice_date = custom_data.get("开票日期").cloned();
-    invoice_info.buyer_tax_id = custom_data.get("购买方纳税人识别号").cloned();
-    invoice_info.seller_tax_id = custom_data.get("销售方纳税人识别号").cloned();
+    // From OFD.xml CustomData — skip empty strings (empty self-closing tags)
+    let get_custom = |key: &str| -> Option<String> {
+        custom_data.get(key).and_then(|s| if s.trim().is_empty() { None } else { Some(s.clone()) })
+    };
+    invoice_info.invoice_no = get_custom("发票号码");
+    invoice_info.invoice_date = get_custom("开票日期");
+    invoice_info.buyer_tax_id = get_custom("购买方纳税人识别号");
+    invoice_info.seller_tax_id = get_custom("销售方纳税人识别号");
     invoice_info.amount_no_tax = custom_data.get("合计金额").and_then(|s| s.parse().ok());
     invoice_info.tax_amount = custom_data.get("合计税额").and_then(|s| s.parse().ok());
 
@@ -1698,6 +1710,12 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     }
     if invoice_info.seller_name.is_none() {
         invoice_info.seller_name = get_tag_text("SellerName");
+    }
+    if invoice_info.buyer_tax_id.is_none() {
+        invoice_info.buyer_tax_id = get_tag_text("BuyerTaxID");
+    }
+    if invoice_info.seller_tax_id.is_none() {
+        invoice_info.seller_tax_id = get_tag_text("SellerTaxID");
     }
 
     // Detect invoice type from template title
