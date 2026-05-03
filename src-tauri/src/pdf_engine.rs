@@ -2430,7 +2430,15 @@ fn parse_box_array(box_obj: &lopdf::Object, source: &lopdf::Document) -> Result<
                     lopdf::Object::Real(r) => *r as f32,
                     _ => return Err("box y2不是数字".to_string()),
                 };
-                Ok(((x1, y1, x2, y2), (x2 - x1, y2 - y1)))
+                // Normalize: some PDFs have inverted CropBox (e.g. y1 > y2)
+                // which would produce negative width/height and flip content.
+                let (nx1, nx2) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
+                let (ny1, ny2) = if y1 <= y2 { (y1, y2) } else { (y2, y1) };
+                if x1 != nx1 || y1 != ny1 {
+                    log::warn!("parse_box_array: inverted box [{:.1} {:.1} {:.1} {:.1}] → normalized [{:.1} {:.1} {:.1} {:.1}]",
+                        x1, y1, x2, y2, nx1, ny1, nx2, ny2);
+                }
+                Ok(((nx1, ny1, nx2, ny2), (nx2 - nx1, ny2 - ny1)))
             } else {
                 Err("box数组长度不足".to_string())
             }
