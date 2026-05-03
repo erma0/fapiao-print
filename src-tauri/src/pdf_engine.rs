@@ -2027,35 +2027,60 @@ fn get_cached_xobj(
             let xobj_id = doc.add_image(&raw_image);
             (iw_mm, ih_mm, xobj_id)
         }
-        ImageSource::JpegPassthrough { raw_bytes, .. } => {
-            // Always decode → rotate (if needed) → FlateDecode (lossless).
-            // JPEG DCTDecode is not used — lossy compression causes text to appear faded/blurry.
+        ImageSource::JpegPassthrough { raw_bytes, width, height, num_components } => {
             let rot = ((rotation % 360) + 360) % 360;
-            let img = match image::load_from_memory(raw_bytes) {
-                Ok(i) => i,
-                Err(e) => {
-                    log::warn!("JPEG decode failed for file {}: {}", file_idx, e);
-                    return None;
-                }
-            };
-            let rotated = match rot {
-                90  => img.rotate90(),
-                180 => img.rotate180(),
-                270 => img.rotate270(),
-                _   => img,
-            };
-            let (iw, ih) = (rotated.width(), rotated.height());
-            let iw_mm = iw as f32 * 25.4 / RENDER_DPI as f32;
-            let ih_mm = ih as f32 * 25.4 / RENDER_DPI as f32;
-            let raw_image = match printpdf::RawImage::from_dynamic_image(rotated) {
-                Ok(ri) => ri,
-                Err(e) => {
-                    log::warn!("RawImage conversion failed for file {} rot {}: {}", file_idx, rotation, e);
-                    return None;
-                }
-            };
-            let xobj_id = doc.add_image(&raw_image);
-            (iw_mm, ih_mm, xobj_id)
+            if rot == 90 || rot == 270 {
+                // Must decode → rotate → re-encode: fallback to standard pipeline
+                let img = match image::load_from_memory(raw_bytes) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        log::warn!("JPEG passthrough fallback decode failed for file {}: {}", file_idx, e);
+                        return None;
+                    }
+                };
+                let rotated = if rot == 90 { img.rotate90() } else { img.rotate270() };
+                let (iw, ih) = (rotated.width(), rotated.height());
+                let iw_mm = iw as f32 * 25.4 / RENDER_DPI as f32;
+                let ih_mm = ih as f32 * 25.4 / RENDER_DPI as f32;
+                let raw_image = match printpdf::RawImage::from_dynamic_image(rotated) {
+                    Ok(ri) => ri,
+                    Err(e) => {
+                        log::warn!("RawImage conversion failed for file {} rot {}: {}", file_idx, rotation, e);
+                        return None;
+                    }
+                };
+                let xobj_id = doc.add_image(&raw_image);
+                (iw_mm, ih_mm, xobj_id)
+            } else {
+                // 0° or 180° rotation: JPEG passthrough via ExternalXObject!
+                let iw_mm = *width as f32 * 25.4 / RENDER_DPI as f32;
+                let ih_mm = *height as f32 * 25.4 / RENDER_DPI as f32;
+                let color_space: &[u8] = match num_components {
+                    1 => b"DeviceGray",
+                    4 => b"DeviceCMYK",
+                    _ => b"DeviceRGB",
+                };
+                let mut dict = std::collections::BTreeMap::new();
+                dict.insert("Type".to_string(), printpdf::xobject::DictItem::Name(b"XObject".to_vec()));
+                dict.insert("Subtype".to_string(), printpdf::xobject::DictItem::Name(b"Image".to_vec()));
+                dict.insert("Width".to_string(), printpdf::xobject::DictItem::Int(*width as i64));
+                dict.insert("Height".to_string(), printpdf::xobject::DictItem::Int(*height as i64));
+                dict.insert("BitsPerComponent".to_string(), printpdf::xobject::DictItem::Int(8));
+                dict.insert("ColorSpace".to_string(), printpdf::xobject::DictItem::Name(color_space.to_vec()));
+                dict.insert("Filter".to_string(), printpdf::xobject::DictItem::Name(b"DCTDecode".to_vec()));
+                let external_xobj = printpdf::xobject::ExternalXObject {
+                    stream: printpdf::xobject::ExternalStream {
+                        dict,
+                        content: raw_bytes.clone(),
+                        compress: false,
+                    },
+                    width: Some(printpdf::units::Px(*width as usize)),
+                    height: Some(printpdf::units::Px(*height as usize)),
+                    dpi: Some(RENDER_DPI as f32),
+                };
+                let xobj_id = doc.add_xobject(&external_xobj);
+                (iw_mm, ih_mm, xobj_id)
+            }
         }
     };
 
@@ -2888,10 +2913,6 @@ fn build_nup_content_stream(
 /// Convert an `ImageSource` to a lopdf Image XObject in the output document.
 /// Returns `(xobj_id, width_pt, height_pt)`.
 ///
-/// All images are embedded as raw pixels + FlateDecode (lossless).
-/// This matches the original printpdf behavior (RawImage → add_image = FlateDecode).
-/// JPEG DCTDecode is not used — lossy compression causes text to appear faded/blurry.
-///
 /// Rotation is ALWAYS baked into pixels here (including 180° for JPEG passthrough).
 /// The caller must set SlotAdjustment rotation=0 for the resulting XObject, because
 /// `build_nup_content_stream` applies rotation via the PDF cm matrix — if we also
@@ -2904,23 +2925,31 @@ fn image_to_lopdf_xobject(
     let rot = ((rotation % 360) + 360) % 360;
 
     match source {
-        ImageSource::JpegPassthrough { raw_bytes, .. } => {
-            // Always decode → rotate (if needed) → raw pixels + FlateDecode
-            let img = image::load_from_memory(raw_bytes)
-                .map_err(|e| format!("JPEG解码失败: {}", e))?;
-            let rotated = match rot {
-                90  => img.rotate90(),
-                180 => img.rotate180(),
-                270 => img.rotate270(),
-                _   => img,
-            };
-            let (w, h) = (rotated.width(), rotated.height());
-            let (raw_pixels, nc) = image_to_raw_rgb(&rotated);
-            log::info!("image_to_lopdf_xobject: JpegPassthrough {}x{} rot={} → raw {}B {}nc", w, h, rot, raw_pixels.len(), nc);
-            let w_pt = w as f32 * 72.0 / RENDER_DPI as f32;
-            let h_pt = h as f32 * 72.0 / RENDER_DPI as f32;
-            let xobj_id = build_lopdf_image_xobject(output_doc, &raw_pixels, w, h, nc);
-            Ok((xobj_id, w_pt, h_pt))
+        ImageSource::JpegPassthrough { raw_bytes, width, height, num_components } => {
+            if rot == 0 {
+                // No rotation: embed raw JPEG bytes directly (zero re-encoding)
+                let nc = *num_components;
+                let w_pt = *width as f32 * 72.0 / RENDER_DPI as f32;
+                let h_pt = *height as f32 * 72.0 / RENDER_DPI as f32;
+                let xobj_id = build_lopdf_jpeg_xobject(output_doc, raw_bytes, *width, *height, nc);
+                Ok((xobj_id, w_pt, h_pt))
+            } else {
+                // Any rotation (90°/180°/270°): decode → rotate → re-encode
+                let img = image::load_from_memory(raw_bytes)
+                    .map_err(|e| format!("JPEG解码失败: {}", e))?;
+                let rotated = match rot {
+                    90  => img.rotate90(),
+                    180 => img.rotate180(),
+                    270 => img.rotate270(),
+                    _   => img,
+                };
+                let (w, h) = (rotated.width(), rotated.height());
+                let jpeg_bytes = encode_image_to_jpeg_bytes(&rotated)?;
+                let w_pt = w as f32 * 72.0 / RENDER_DPI as f32;
+                let h_pt = h as f32 * 72.0 / RENDER_DPI as f32;
+                let xobj_id = build_lopdf_jpeg_xobject(output_doc, &jpeg_bytes, w, h, 3);
+                Ok((xobj_id, w_pt, h_pt))
+            }
         }
         ImageSource::Decoded(img) => {
             let rotated = match rot {
@@ -2930,11 +2959,10 @@ fn image_to_lopdf_xobject(
                 _   => img.clone(),
             };
             let (w, h) = (rotated.width(), rotated.height());
-            let (raw_pixels, nc) = image_to_raw_rgb(&rotated);
-            log::info!("image_to_lopdf_xobject: Decoded {}x{} rot={} → raw {}B {}nc", w, h, rot, raw_pixels.len(), nc);
+            let jpeg_bytes = encode_image_to_jpeg_bytes(&rotated)?;
             let w_pt = w as f32 * 72.0 / RENDER_DPI as f32;
             let h_pt = h as f32 * 72.0 / RENDER_DPI as f32;
-            let xobj_id = build_lopdf_image_xobject(output_doc, &raw_pixels, w, h, nc);
+            let xobj_id = build_lopdf_jpeg_xobject(output_doc, &jpeg_bytes, w, h, 3);
             Ok((xobj_id, w_pt, h_pt))
         }
     }
@@ -3005,6 +3033,7 @@ fn encode_image_to_jpeg_bytes(img: &image::DynamicImage) -> Result<Vec<u8>, Stri
 /// Encode a DynamicImage to raw RGB pixel bytes (for PNG encoding via lopdf FlateDecode).
 /// Strips alpha channel if present (composites onto white background).
 /// Returns (raw_pixels, num_components).
+#[allow(dead_code)]
 fn image_to_raw_rgb(img: &image::DynamicImage) -> (Vec<u8>, u8) {
     match img {
         image::DynamicImage::ImageRgba8(buf) => {
@@ -3042,14 +3071,10 @@ fn image_to_raw_rgb(img: &image::DynamicImage) -> (Vec<u8>, u8) {
     }
 }
 
-/// Build a lopdf Image XObject from raw pixel data.
-/// We call stream.compress() manually (lopdf's save_to does NOT auto-compress).
-/// Do NOT manually set "Filter" in the dict — if Filter already exists, lopdf's
-/// compress() will skip compression, leaving raw uncompressed pixels tagged as
-/// FlateDecode, which causes PDF readers to show garbage (black image).
-fn build_lopdf_image_xobject(
+/// Build a lopdf Image XObject from JPEG bytes using DCTDecode.
+fn build_lopdf_jpeg_xobject(
     output_doc: &mut lopdf::Document,
-    raw_pixel_bytes: &[u8],
+    jpeg_bytes: &[u8],
     width: u32,
     height: u32,
     num_components: u8,
@@ -3060,31 +3085,6 @@ fn build_lopdf_image_xobject(
         _ => b"DeviceRGB",
     };
 
-    let expected_size = (width as usize) * (height as usize) * (num_components as usize);
-    log::info!("build_lopdf_image_xobject: {}x{} {}nc, raw={}B, expected={}B",
-        width, height, num_components, raw_pixel_bytes.len(), expected_size);
-
-    // Manually zlib-compress the raw pixel data.
-    // We do NOT rely on lopdf's Stream::compress() because:
-    // 1. It skips compression if the dict already has Filter set
-    // 2. It skips if savings < 19 bytes (can happen with small images)
-    // 3. with_compression(true) + save_to() does NOT auto-compress
-    // Instead: compress ourselves, set Filter:FlateDecode, use with_compression(false).
-    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-    use std::io::Write;
-    let compressed = match encoder.write_all(raw_pixel_bytes).and_then(|_| encoder.finish()) {
-        Ok(c) => {
-            log::info!("build_lopdf_image_xobject: zlib {}B → {}B ({:.1}%)",
-                raw_pixel_bytes.len(), c.len(),
-                c.len() as f64 / raw_pixel_bytes.len() as f64 * 100.0);
-            c
-        }
-        Err(e) => {
-            log::warn!("build_lopdf_image_xobject: zlib failed: {}, storing uncompressed", e);
-            raw_pixel_bytes.to_vec()
-        }
-    };
-
     let mut dict = lopdf::Dictionary::new();
     dict.set("Type", lopdf::Object::Name(b"XObject".to_vec()));
     dict.set("Subtype", lopdf::Object::Name(b"Image".to_vec()));
@@ -3092,11 +3092,9 @@ fn build_lopdf_image_xobject(
     dict.set("Height", lopdf::Object::Integer(height as i64));
     dict.set("BitsPerComponent", lopdf::Object::Integer(8));
     dict.set("ColorSpace", lopdf::Object::Name(color_space.to_vec()));
-    dict.set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
+    dict.set("Filter", lopdf::Object::Name(b"DCTDecode".to_vec()));
 
-    // with_compression(false) — we already compressed manually.
-    // Prevents lopdf from skipping or double-compressing.
-    let stream = lopdf::Stream::new(dict, compressed).with_compression(false);
+    let stream = lopdf::Stream::new(dict, jpeg_bytes.to_vec()).with_compression(false);
     output_doc.add_object(lopdf::Object::Stream(stream))
 }
 
