@@ -138,7 +138,7 @@ npm run build:ocr    # OCR 版
 npm run build:all    # 一键全量构建（4 产物）
 
 # 版本号
-npm run bump 1.9.0   # 同步 package.json → Cargo.toml → tauri.conf.json
+npm run bump 1.9.2   # 同步 package.json → Cargo.toml → tauri.conf.json
 ```
 
 ## 🗺 路线图

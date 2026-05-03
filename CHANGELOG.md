@@ -1,5 +1,15 @@
 # 📋 更新日志
 
+## v1.9.2 — OFD 发票字段提取修复
+
+### 🐛 修复
+
+- **OFD 自闭合标签字段丢失**：`parse_ofd_custom_data` 中 `Event::Empty`（自闭合标签如 `<CustomData Name="购买方纳税人识别号"/>`）错误调用 `read_element_text()`，该函数会消费后续兄弟节点的 XML 事件，导致购方税号为空时销售方税号也被清空，且后续字段级联错位
+- **CustomData 空白值过滤**：空字符串不再覆盖已有有效值
+- **BuyerTaxID/SellerTaxID 回退**：增加 CustomTag.xml 中 `BuyerTaxID` / `SellerTaxID` 的 ObjectRef 查找回退
+
+---
+
 ## v1.9.1 — PDF解析兼容性修复 + 导入体验优化
 
 ### 🐛 修复
