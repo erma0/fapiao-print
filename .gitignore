@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+src-tauri/target/
+src-tauri/ofd-engine/target/
+src-tauri/ofd-engine/Cargo.lock
+
+# MNN prebuilt SDK (auto-downloaded by ocr-rs build.rs)
+mnn-dev-windows-x86_64.zip
+
+# Tauri generated
+src-tauri/gen/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# WorkBuddy internal
+.workbuddy/
+
+# Temp screenshots
+screenshot_*.png
+
+dist/
+.claude/
+sample.ofd
+sample_ofd_extracted/
