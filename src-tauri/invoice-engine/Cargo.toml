@@ -1,0 +1,14 @@
+[package]
+name = "invoice-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Invoice file parser: OFD (Open Fixed-layout Document) + XML 数电票, with SVG renderer"
+license = "MIT"
+
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.37", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }

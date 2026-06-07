@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>发票酱</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="loading hidden" id="loading"><div class="spinner"></div><div class="loading-body"><span id="loadingText">处理中...</span><div class="loading-progress hidden" id="loadingProgress"><div class="loading-bar" id="loadingBar"></div></div><span class="loading-detail hidden" id="loadingDetail"></span></div></div>
+
+<div class="toast" id="toast"></div>
+
+<!-- File input — browser fallback only -->
+<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.tif,.ofd" multiple style="display:none" onchange="handleFileInput(this.files)">
+
+<div class="main-layout">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" onclick="switchTab('files',this)">📁 发票</button>
+      <button class="sidebar-tab" onclick="switchTab('settings',this)">⚙ 排版</button>
+      <button class="sidebar-tab" onclick="switchTab('print',this)">🖨 打印</button>
+      <button class="sidebar-tab" onclick="switchTab('prefs',this)">🔧 设置</button>
+    </div>
+
+    <div class="sidebar-panel" id="panel-files">
+      <div class="sidebar-panel-scroll">
+        <div class="upload-zone" id="dropZone" onclick="triggerUpload()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
+          <div class="upload-icon">📂</div>
+          <div class="upload-text">拖入发票或点击选择</div>
+          <div class="upload-hint">支持 PDF / 图片 / OFD 格式</div>
+        </div>
+        <div class="file-header">
+          <div class="file-count" id="fileCount">0 张，已选 0</div>
+          <div class="file-actions">
+            <div class="copy-ctrl">
+              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">②</button>
+              <div class="copy-menu hidden" id="copyMenu">
+                <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2 ⭐</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,3)">选中项 ×3</div>
+                <div class="copy-menu-sep"></div>
+                <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
+              </div>
+            </div>
+            <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别">🔍</button>
+            <button class="ib" onclick="selectAll()" title="全选">☑</button>
+            <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
+            <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
+          </div>
+        </div>
+        <div class="print-filter-bar" id="printFilterBar">
+          <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
+          <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
+          <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
+        </div>
+        <div id="fileList"></div>
+      </div>
+      <div class="sidebar-panel-footer">
+        <div class="file-summary" id="amountSummary" style="display:none">
+          <span id="amountSummaryText"></span>
+          <button class="ib" id="summaryBtn" onclick="openSummaryModal()" title="导出汇总表" disabled>📊</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-panel hidden" id="panel-settings">
+      <div class="sidebar-panel-scroll">
+        <div class="sec">
+          <div class="sec-title">📄 纸张设置</div>
+          <div class="row"><label class="lbl">规格</label><div class="ctrl"><select id="paperSize" onchange="onPaperChange()"><option value="A4">A4 (210×297mm)</option><option value="A5">A5 (148×210mm)</option><option value="B5">B5 (176×250mm)</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">自定义</option></select></div></div>
+          <div id="customPaperRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="number" id="customW" value="210" min="50" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="50" style="width:60px" onchange="updatePreview()"></div></div>
+          <div class="row"><label class="lbl">方向</label><div class="ctrl"><select id="orientation" onchange="updatePreview();syncLayoutHighlight()"><option value="portrait">纵向</option><option value="landscape" selected>横向</option></select></div></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🗂 版面布局</div>
+          <div class="grid-sel" id="gridSel" style="grid-template-columns:repeat(3,1fr)">
+            <div class="go active" data-cols="1" data-rows="1" onclick="setLayoutPreset(1,1,null,this)">1×1</div>
+            <div class="go" data-cols="2" data-rows="1" onclick="setLayoutPreset(2,1,null,this)">1×2</div>
+            <div class="go" data-cols="3" data-rows="2" onclick="setLayoutPreset(3,2,null,this)">2×3</div>
+            <div class="go" data-cols="1" data-rows="2" onclick="setLayoutPreset(1,2,null,this)">2×1</div>
+            <div class="go" data-cols="2" data-rows="2" onclick="setLayoutPreset(2,2,null,this)">2×2</div>
+            <div class="go" data-cols="3" data-rows="3" onclick="setLayoutPreset(3,3,null,this)">3×3</div>
+          </div>
+          <div class="row" style="margin-top:4px;margin-bottom:0">
+            <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
+            <div style="display:flex;gap:4px;align-items:center;flex:1">
+              <input type="number" id="customRows" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
+              <span style="color:var(--text-muted);font-size:13px">行 ×</span>
+              <input type="number" id="customCols" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
+              <span style="color:var(--text-muted);font-size:13px">列</span>
+            </div>
+          </div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">📐 边距 (mm)</div>
+          <div class="row"><label class="lbl">上</label><div class="rr ctrl"><input type="range" id="marginTop" min="0" max="30" value="5" oninput="syncSlider(this,'marginTopN');updatePreview()"><input type="number" id="marginTopN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginTop');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">下</label><div class="rr ctrl"><input type="range" id="marginBottom" min="0" max="30" value="5" oninput="syncSlider(this,'marginBottomN');updatePreview()"><input type="number" id="marginBottomN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginBottom');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">左</label><div class="rr ctrl"><input type="range" id="marginLeft" min="0" max="30" value="5" oninput="syncSlider(this,'marginLeftN');updatePreview()"><input type="number" id="marginLeftN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginLeft');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">右</label><div class="rr ctrl"><input type="range" id="marginRight" min="0" max="30" value="5" oninput="syncSlider(this,'marginRightN');updatePreview()"><input type="number" id="marginRightN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginRight');updatePreview()"></div></div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn btn-sm" style="flex:1" onclick="setMP(10,10,10,10)">10mm</button>
+            <button class="btn btn-sm" style="flex:1" onclick="setMP(5,5,5,5)">5mm</button>
+            <button class="btn btn-sm" style="flex:1" onclick="setMP(0,0,0,0)">0</button>
+          </div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">↔ 间距 (mm)</div>
+          <div class="row"><label class="lbl">列间距</label><div class="rr ctrl"><input type="range" id="gapH" min="0" max="20" value="3" oninput="syncSlider(this,'gapHN');updatePreview()"><input type="number" id="gapHN" min="0" max="20" value="3" style="width:64px" onchange="syncRange(this,'gapH');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">行间距</label><div class="rr ctrl"><input type="range" id="gapV" min="0" max="20" value="3" oninput="syncSlider(this,'gapVN');updatePreview()"><input type="number" id="gapVN" min="0" max="20" value="3" style="width:64px" onchange="syncRange(this,'gapV');updatePreview()"></div></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🔍 缩放模式</div>
+          <div class="row"><label class="lbl">模式</label><div class="ctrl"><select id="fitMode" onchange="onFitChange()"><option value="fit">自适应</option><option value="fill">拉伸填充</option><option value="original">原始大小</option><option value="custom">自定义 %</option></select></div></div>
+          <div id="customScaleRow" class="row" style="display:none"><label class="lbl">%</label><div class="rr ctrl"><input type="range" id="customScale" min="20" max="200" value="100" oninput="syncSlider(this,'customScaleN');updatePreview()"><input type="number" id="customScaleN" min="20" max="200" value="100" style="width:48px" onchange="syncRange(this,'customScale');updatePreview()"></div></div>
+          <div id="customScaleHint" class="row hint" style="display:none;font-size:11px;color:#6b7280;padding:2px 0 2px 70px">提示：自定义缩放模式下，可通过右侧「单票调整」面板微调偏移位置</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🖼 旋转</div>
+          <div class="row"><label class="lbl">全局</label><div class="ctrl"><select id="globalRotation" onchange="updatePreview()"><option value="0">不旋转</option><option value="90">顺时针 90°</option><option value="180">180°</option><option value="270">逆时针 90°</option><option value="auto">自动适配</option></select></div></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">✂ 辅助选项</div>
+          <div class="trow"><label class="tlbl">裁切线</label><button class="tgl on" id="toggleCutline" onclick="toggleFeature('cutline',this)"></button></div>
+          <div class="trow"><label class="tlbl">编号</label><button class="tgl" id="toggleNumber" onclick="toggleFeature('number',this)"></button></div>
+          <div class="trow"><label class="tlbl">边框</label><button class="tgl" id="toggleBorder" onclick="toggleFeature('border',this)"></button></div>
+          <div class="trow"><label class="tlbl">裁剪白边</label><button class="tgl" id="toggleTrimWhite" onclick="toggleFeature('trimWhite',this)"></button></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🖊 水印</div>
+          <div class="trow"><label class="tlbl">启用水印</label><button class="tgl" id="toggleWatermark" onclick="toggleFeature('watermark',this)"></button></div>
+          <div id="wmOpts" style="display:none">
+            <div class="row"><label class="lbl">文字</label><div class="ctrl"><input type="text" id="wmText" value="已打印" onchange="updatePreview()"></div></div>
+            <div class="row"><label class="lbl">透明度</label><div class="rr ctrl"><input type="range" id="wmOpacity" min="5" max="80" value="20" oninput="syncSlider(this,'wmOpacityN');updatePreview()"><input type="number" id="wmOpacityN" min="5" max="80" value="20" style="width:64px" onchange="syncRange(this,'wmOpacity');updatePreview()"></div></div>
+            <div class="row"><label class="lbl">颜色</label><div class="ctrl"><input type="color" id="wmColor" value="#ff0000" onchange="updatePreview()" style="width:100%;height:28px;padding:2px;cursor:pointer;border:1px solid var(--border);border-radius:4px"></div></div>
+            <div class="row"><label class="lbl">角度</label><div class="rr ctrl"><input type="range" id="wmAngle" min="-90" max="90" value="-30" oninput="syncSlider(this,'wmAngleN');updatePreview()"><input type="number" id="wmAngleN" min="-90" max="90" value="-30" style="width:64px" onchange="syncRange(this,'wmAngle');updatePreview()"></div></div>
+            <div class="row"><label class="lbl">字号mm</label><div class="rr ctrl"><input type="range" id="wmSize" min="5" max="50" value="15" oninput="syncSlider(this,'wmSizeN');updatePreview()"><input type="number" id="wmSizeN" min="5" max="50" value="15" style="width:64px" onchange="syncRange(this,'wmSize');updatePreview()"></div></div>
+          </div>
+        </div>
+        <div class="sec adj-section">
+          <div class="sec-title">🎯 单票调整</div>
+          <div id="adjPanel">
+            <div class="adj-empty" id="adjEmpty">点击预览中的发票进行选中</div>
+            <div id="adjContent" style="display:none">
+              <span class="adj-file-name" id="adjFileName"></span>
+              <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="300" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="300" value="100" style="width:68px" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
+              <div class="row"><label class="lbl">X偏移</label><div class="rr ctrl"><input type="range" id="adjOffX" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffXN');onAdjOffsetChange()"><input type="number" id="adjOffXN" min="-150" max="150" value="0" step="0.5" style="width:72px" onchange="syncRange(this,'adjOffX');onAdjOffsetChange()"></div></div>
+              <div class="row"><label class="lbl">Y偏移</label><div class="rr ctrl"><input type="range" id="adjOffY" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffYN');onAdjOffsetChange()"><input type="number" id="adjOffYN" min="-150" max="150" value="0" step="0.5" style="width:72px" onchange="syncRange(this,'adjOffY');onAdjOffsetChange()"></div></div>
+              <div style="display:flex;gap:6px;margin-top:6px">
+                <button class="btn btn-sm" style="flex:1" onclick="resetSlotAdj()">重置</button>
+                <button class="btn btn-sm" style="flex:1" onclick="applySlotAdjToAll()">应用到全部</button>
+              </div>
+              <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px">快速对齐</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
+                  <button class="btn btn-sm" onclick="setSlotAlignment('left','top')" title="左上">↖</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('center','top')" title="上对齐">↑</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('right','top')" title="右上">↗</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('left','center')" title="左对齐">←</button>
+                  <button class="btn btn-sm btn-primary" onclick="setSlotAlignment('center','center')" title="居中">⊙ 居中</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('right','center')" title="右对齐">→</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('left','bottom')" title="左下">↙</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('center','bottom')" title="下对齐">↓</button>
+                  <button class="btn btn-sm" onclick="setSlotAlignment('right','bottom')" title="右下">↘</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-panel-footer"></div>
+    </div>
+
+    <div class="sidebar-panel hidden" id="panel-print">
+      <div class="sidebar-panel-scroll">
+        <div class="sec">
+          <div class="sec-title">🖨 打印机</div>
+          <div class="row"><label class="lbl">选择</label><div class="ctrl"><select id="printerSel"><option value="">默认打印机</option></select></div></div>
+          <div style="margin-top: 8px;">
+            <button class="btn btn-sm" style="width:100%" onclick="refreshPrinters()">🔄 刷新打印机列表</button>
+          </div>
+          <div style="margin-top: 12px;"></div>
+          <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="try{localStorage.setItem('ticketchan-print-mode',this.value)}catch(e){}"><option value="confirm">弹窗确认</option><option value="pdfium">静默打印（PDFium）⭐</option><option value="direct">静默打印（SumatraPDF 备用）</option><option value="pdf">PDF阅读器</option></select></div></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">弹窗确认：确认后打印；PDFium：推荐，打印清晰（需下载）；SumatraPDF：备用（需下载）；PDF阅读器：通过默认阅读器打印（不支持选择打印机）。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🔢 打印份数</div>
+          <div class="row"><label class="lbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:52px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
+          <div class="trow"><label class="tlbl">逐份打印</label><button class="tgl on" id="toggleCollate" onclick="toggleFeature('collate',this)"></button></div>
+          <div class="trow"><label class="tlbl">双面打印</label><button class="tgl" id="toggleDuplex" onclick="toggleFeature('duplex',this)"></button></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🎨 颜色模式</div>
+          <div class="row"><label class="lbl">模式</label><div class="ctrl"><select id="colorMode" onchange="updatePreview()"><option value="color">彩色</option><option value="grayscale">灰度</option><option value="bw">黑白</option></select></div></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">📄 页面选项</div>
+          <div class="row"><label class="lbl">顺序</label><div class="ctrl"><select id="pageOrder" onchange="updatePreview()"><option value="normal">正向</option><option value="reverse">反向</option></select></div></div>
+          <div class="trow"><label class="tlbl">打印页码</label><button class="tgl" id="togglePageNum" onclick="toggleFeature('pageNum',this)"></button></div>
+          <div class="trow"><label class="tlbl">打印日期</label><button class="tgl" id="toggleDate" onclick="toggleFeature('printDate',this)"></button></div>
+          <div class="trow"><label class="tlbl">自定义页脚</label><button class="tgl" id="toggleFooter" onclick="toggleFeature('footer',this)"></button></div>
+          <div id="footerOpts" style="display:none;margin-top:6px;padding:6px 8px;background:var(--bg-main);border-radius:6px">
+            <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-input);color:var(--text);box-sizing:border-box">
+          </div>
+          <div id="customFMRow" class="trow" style="display:none"><label class="tlbl">自定义下边距</label><button class="tgl" id="toggleCustomFM" onclick="toggleFeature('customFM',this)"></button></div>
+          <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" style="width:64px" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
+        </div>
+      </div>
+      <div class="sidebar-panel-footer">
+        <div class="sec" style="display:flex;flex-direction:column;gap:8px;border-bottom:0">
+          <button class="btn btn-success" style="width:100%;padding:12px;font-size:15px" onclick="doPrint()">🖨 开始打印</button>
+          <button class="btn btn-warning" style="width:100%;padding:10px" onclick="savePdf()">📥 保存为PDF</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings / Preferences panel -->
+    <div class="sidebar-panel hidden" id="panel-prefs">
+      <div class="sidebar-panel-scroll">
+        <div class="sec" id="ocrSection">
+          <div class="sec-title">🔍 OCR 识别</div>
+          <div class="trow"><label class="tlbl">自动识别</label><button class="tgl" id="toggleOcrEnabled" onclick="togglePref('ocrEnabled',this)"></button></div>
+          <div class="row" style="margin-top:8px"><label class="lbl">识别精度</label><div class="ctrl"><select id="ocrPrecision" onchange="setOcrPrecision(this.value)"><option value="fast">快速（1280px）</option><option value="standard" selected>标准（1920px）</option><option value="precise">精确（2800px）</option></select></div></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后添加发票时自动 OCR 识别金额、销售方等信息；关闭后可手动点击识别按钮触发。快速模式速度最快但小字可能模糊；标准模式兼顾速度与准确度；精确模式最准但速度较慢。</div>
+        </div>
+        <div class="sec" id="pdfTextSection">
+          <div class="sec-title">📝 PDF 文字提取</div>
+          <div class="trow"><label class="tlbl">自动提取</label><button class="tgl on" id="togglePdfText" onclick="togglePref('pdfTextEnabled',this)"></button></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后从 PDF 文字层提取发票字段（销售方、金额等），无需 OCR。对扫描件/图片 PDF 无效。默认关闭以提高加载速度；需要结构化字段时再开启。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">✅ 发票查验</div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(false)">🔍 官方查验平台</button>
+            <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(true)">🔍 备用查验平台</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">主平台为国家税务总局全国增值税发票查验平台，备用平台为仿真平台（官方证书异常时可使用）。🚧 自动查验功能规划中。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">📄 PDF 设置</div>
+          <div class="trow"><label class="tlbl">保存后自动打开</label><button class="tgl on" id="toggleAutoOpenPdf" onclick="togglePref('autoOpenPdf',this)"></button></div>
+          <div class="row" style="margin-top:8px"><label class="lbl">保存目录</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="text" id="saveDir" readonly placeholder="未设置，每次手动选择" style="flex:1;font-size:12px;cursor:default;padding:5px 8px" onclick="pickSaveDir()"><button class="btn btn-sm btn-icon" onclick="pickSaveDir()" title="选择目录">📂</button><button class="btn btn-sm btn-icon" onclick="clearSaveDir()" title="清除目录">✕</button></div></div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">💰 金额统计</div>
+          <div class="row"><label class="lbl">统计模式</label><div class="ctrl"><select id="amtMode" onchange="S.amtMode=this.value;try{localStorage.setItem('ticketchan-amt-mode',this.value)}catch(e){};updateAmountSummary()"><option value="tax">含税总价</option><option value="notax">不含税金额</option><option value="both">同时显示</option></select></div></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">自动识别发票价税合计（含税）和合计金额（不含税），火车票识别票价。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🎯 单票调整</div>
+          <div class="trow"><label class="tlbl">记忆调整配置</label><button class="tgl" id="toggleSlotAdjMemory" onclick="togglePref('slotAdjMemory',this)"></button></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后关闭软件重新打开时，自动恢复每张发票的缩放、偏移和对齐设置（按文件名匹配）。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">📋 发票管理</div>
+          <div class="trow"><label class="tlbl">记忆发票列表</label>
+            <button class="tgl" id="toggleFileListMemory" onclick="toggleFileListMemory(this)"></button>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
+            开启后关闭软件重新打开时自动恢复上次的发票列表和打印状态。关闭则每次打开均为空白。
+          </div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">🎨 外观</div>
+          <div class="row"><label class="lbl">主题</label><div class="ctrl"><select id="themeMode" onchange="applyTheme()"><option value="light">浅色</option><option value="dark">深色</option></select></div></div>
+        </div>
+      </div>
+      <div class="sidebar-panel-footer">
+        <div class="sec" style="border-bottom:0">
+          <button class="btn" style="width:100%" onclick="exportSettings()">💾 导出设置</button>
+          <button class="btn" style="width:100%;margin-top:6px" onclick="resetSettings()">🔄 恢复默认</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main-area">
+    <div class="toolbar">
+      <div class="toolbar-group">
+        <button class="btn btn-sm btn-primary" onclick="triggerUpload()" title="添加发票">➕ 添加</button>
+      </div>
+      <div class="toolbar-sep"></div>
+      <div class="toolbar-group">
+        <button class="btn btn-sm ql-btn active" data-cols="1" data-rows="1" onclick="quickLayout(1,1)" title="1行1列">1×1</button>
+        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="1" onclick="quickLayout(2,1)" title="1行2列">1×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="2" onclick="quickLayout(3,2)" title="2行3列">2×3</button>
+        <button class="btn btn-sm ql-btn" data-cols="1" data-rows="2" onclick="quickLayout(1,2)" title="2行1列">2×1</button>
+        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="2" onclick="quickLayout(2,2)" title="2行2列">2×2</button>
+        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="3" onclick="quickLayout(3,3)" title="3行3列">3×3</button>
+        <button class="btn btn-sm ql-btn ql-custom" onclick="showCustomLayoutModal()" title="自定义布局" style="font-size:12px">⚙</button>
+      </div>
+      <div class="toolbar-sep"></div>
+      <div class="toolbar-group">
+        <button class="btn btn-sm" onclick="prevPage()" id="prevBtn" disabled>◀</button>
+        <span class="page-info" id="pageInfo">— / —</span>
+        <button class="btn btn-sm" onclick="nextPage()" id="nextBtn" disabled>▶</button>
+      </div>
+      <div class="toolbar-sep"></div>
+      <div class="toolbar-group">
+        <button class="btn btn-sm btn-icon" onclick="changeZoom(-5)" title="缩小 (Ctrl+−)" style="font-size:16px;font-weight:700">−</button>
+        <div class="zoom-ctrl" id="zoomCtrl">
+          <span id="zoomLabel" onclick="toggleZoomMenu()">自适应</span>
+          <span class="zoom-arrow" onclick="toggleZoomMenu()">▾</span>
+          <div class="zoom-menu hidden" id="zoomMenu">
+            <div onclick="setZoom(25)">25%</div><div onclick="setZoom(50)">50%</div><div onclick="setZoom(75)">75%</div>
+            <div onclick="setZoom(100)">100%</div><div onclick="setZoom(125)">125%</div><div onclick="setZoom(150)">150%</div>
+            <div onclick="setZoom(200)">200%</div><div onclick="setZoom(300)">300%</div>
+            <div class="zoom-sep"></div><div onclick="setZoom('fit')">自适应</div>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-icon" onclick="changeZoom(5)" title="放大 (Ctrl++)" style="font-size:16px;font-weight:700">+</button>
+      </div>
+      <div style="flex:1"></div>
+      <div class="toolbar-group">
+        <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票">🗑</button>
+        <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置">⚙</button>
+        <button class="btn btn-sm" onclick="savePdf()" title="保存为PDF">📥 PDF</button>
+        <button class="btn btn-sm btn-success" id="printBtn" onclick="doPrint()" disabled title="开始打印">🖨 打印</button>
+      </div>
+    </div>
+
+    <div class="preview-wrap" id="previewWrap">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">📄</div>
+        <div style="font-size:17px;font-weight:700;color:var(--text-secondary)">尚未添加发票</div>
+        <div style="font-size:13px">拖入文件或点击添加<br>Ctrl+O 添加 | Ctrl+P 打印 | ←→ 翻页</div>
+        <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
+      </div>
+      <div id="previewPages" style="display:none"></div>
+    </div>
+
+    <div class="page-nav" id="pageNav" style="display:none">
+      <button class="btn btn-sm btn-icon" onclick="prevPage()">◀</button>
+      <div class="page-dots" id="pageDots"></div>
+      <button class="btn btn-sm btn-icon" onclick="nextPage()">▶</button>
+    </div>
+
+    <div class="statusbar">
+      <div><span class="status-dot"></span> 就绪</div>
+      <div id="stFiles">0 张</div>
+      <div id="stPages">0 页</div>
+      <div id="stLayout">1×1</div>
+      <div id="stPaper">A4</div>
+      <div style="margin-left:auto" id="stVersion"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Invoice options modal -->
+<div class="modal-bg hidden" id="invModal" onclick="closeInvModal()"><div class="modal" onclick="event.stopPropagation()"><div class="modal-title">📝 发票选项</div><div class="modal-body" id="invModalBody"></div><div class="modal-actions"><button class="btn" onclick="closeInvModal()">取消</button><button class="btn btn-primary" onclick="confirmInvModal()">确认</button></div></div></div>
+
+<!-- Print confirm modal -->
+<div class="modal-bg hidden" id="printConfirmModal" onclick="closePrintConfirm()"><div class="modal print-confirm-modal" onclick="event.stopPropagation()"><div class="modal-title">🖨 确认打印</div><div class="modal-body" id="printConfirmBody"></div><div class="modal-actions"><button class="btn" onclick="closePrintConfirm()">取消</button><button class="btn btn-success" id="printConfirmBtn" onclick="confirmPrint()">确认打印</button></div></div></div>
+
+<!-- Summary table modal -->
+<div class="modal-bg hidden" id="summaryModal" onclick="closeSummaryModal()">
+  <div class="modal summary-modal" onclick="event.stopPropagation()">
+    <div class="modal-title">📊 发票汇总表</div>
+    <div class="modal-body">
+      <div class="summary-columns" id="summaryColumns"></div>
+      <div class="summary-table-wrap">
+        <table class="summary-table" id="summaryTable"></table>
+      </div>
+      <div class="summary-total" id="summaryTotal"></div>
+      <div class="summary-rename-panel hidden" id="summaryRenamePanel">
+        <div class="srp-header">🔄 重命名文件</div>
+        <div class="srp-presets">
+          <span class="srp-label">模板：</span>
+          <button class="srp-preset active" onclick="onRenamePresetClick(['amountTax','sellerName','invoiceNo'], this)">金额+销售方+号码</button>
+          <button class="srp-preset" onclick="onRenamePresetClick(['sellerName','invoiceNo'], this)">销售方+号码</button>
+          <button class="srp-preset" onclick="onRenamePresetClick(['amountTax','invoiceDate','invoiceNo'], this)">金额+日期+号码</button>
+          <span class="srp-sep">分隔符<input type="text" class="srp-sep-input" id="srpSep" value="_" size="1" maxlength="4" oninput="updateRenamePreview()"></span>
+        </div>
+        <div class="srp-fields" id="srpFields"></div>
+        <div class="srp-preview-title">预览</div>
+        <div class="srp-preview" id="srpPreview"></div>
+        <div class="srp-error" id="srpError" style="display:none"></div>
+        <div class="srp-actions">
+          <button class="btn btn-primary" id="srpExecBtn" onclick="executeRename()">执行重命名</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeSummaryModal()">取消</button>
+      <button class="btn" id="summaryRenameBtn" onclick="toggleSummaryRename()">🔄 重命名文件</button>
+      <button class="btn btn-primary" onclick="exportSummaryCsv()">📥 导出 CSV</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts — loaded in order: OCR → Layout → Print → App -->
+<script src="api.js"></script>
+<script src="ocr.js"></script>
+<script src="layout.js"></script>
+<script src="print.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
