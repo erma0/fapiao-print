@@ -800,8 +800,13 @@ async fn check_path_exists(
             return Json(ApiResponse::ok(json!({ "exists": false })));
         }
     }
-    let exists = std::path::Path::new(path).exists();
-    Json(ApiResponse::ok(json!({ "exists": exists })))
+    let p = std::path::Path::new(path);
+    Json(ApiResponse::ok(json!({
+        "exists": p.exists(),
+        "isDir": p.is_dir(),
+        "isFile": p.is_file(),
+        "path": path
+    })))
 }
 
 async fn get_config() -> Json<ApiResponse> {
