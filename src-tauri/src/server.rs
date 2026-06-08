@@ -150,7 +150,8 @@ pub fn optimal_ocr_concurrency() -> usize {
 pub fn build_router(state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/health", get(health))
-        .route("/upload", post(upload_files))
+        .route("/upload", post(upload_files)
+            .layer(tower_http::limit::RequestBodyLimitLayer::new(100 * 1024 * 1024))) // 100MB 上传限制
         .route("/render_pdf", post(render_pdf))
         .route("/page_binary", get(page_binary))
         .route("/extract_pdf_text", post(extract_pdf_text))
@@ -193,7 +194,6 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/v1", api_routes)
         .with_state(state.clone())
         .layer(cors)
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(100 * 1024 * 1024)) // 100MB
         .layer(CompressionLayer::new())
         .layer(CatchPanicLayer::new());
 
