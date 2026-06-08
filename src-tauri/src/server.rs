@@ -132,6 +132,19 @@ pub struct AppState {
     pub is_desktop: bool,
 }
 
+/// Compute optimal semaphore permits based on CPU core count.
+/// OCR is more expensive → use half the cores, min 1, max 4.
+/// Rendering is lighter → use core count, min 2, max 8.
+pub fn optimal_render_concurrency() -> usize {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    cpus.clamp(2, 8)
+}
+
+pub fn optimal_ocr_concurrency() -> usize {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    (cpus / 2).clamp(1, 4)
+}
+
 // === Build Router ===
 
 pub fn build_router(state: AppState) -> Router {
@@ -139,6 +152,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/upload", post(upload_files))
         .route("/render_pdf", post(render_pdf))
+        .route("/page_binary", get(page_binary))
         .route("/extract_pdf_text", post(extract_pdf_text))
         .route("/extract_pdf_texts", post(extract_pdf_texts))
         .route("/generate_pdf", post(generate_pdf))
@@ -303,9 +317,12 @@ async fn render_pdf(
 
     let use_jpeg = req.use_jpeg.unwrap_or(true);
     let dpi = req.dpi.unwrap_or(150);
+    let extract_text = req.extract_text;
 
     let _permit = state.render_limit.acquire().await
         .map_err(|e| AppError::Internal(format!("渲染信号量错误: {}", e)))?;
+
+    let pdf_path_for_text = if extract_text { Some(pdf_path.clone()) } else { None };
 
     let result = tokio::task::spawn_blocking(move || {
         crate::pdf_engine::render_pdf_pages_pdfium(
@@ -315,10 +332,74 @@ async fn render_pdf(
         .map_err(|e| AppError::Internal(format!("渲染任务失败: {}", e)))?
         .map_err(|e| AppError::Internal(e))?;
 
-    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
-        log::warn!("序列化渲染结果失败: {}", e);
-        json!({})
-    }))))
+    // Optional: extract text layer in the same call (saves 1 HTTP round-trip)
+    let text_map: Option<std::collections::HashMap<u32, crate::pdf_engine::PdfTextResult>> = if let Some(ref ppt) = pdf_path_for_text {
+        let page_indices: Vec<u32> = result.iter().map(|p| p.index).collect();
+        let ppt2 = ppt.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::pdf_engine::extract_pdf_texts(&ppt2.to_string_lossy(), &page_indices)
+        }).await
+            .map_err(|e| { log::warn!("文字提取任务崩溃: {}", e); })
+            .ok()
+            .and_then(|r| r.ok())
+    } else {
+        None
+    };
+
+    Ok(Json(ApiResponse::ok({
+        let pages_json = serde_json::to_value(&result).unwrap_or_else(|e| {
+            log::warn!("序列化渲染结果失败: {}", e);
+            json!([])
+        });
+        let text_json = text_map.as_ref()
+            .and_then(|tm| serde_json::to_value(tm).ok())
+            .unwrap_or(json!(null));
+        json!({
+            "pages": pages_json,
+            "textMap": text_json,
+        })
+    })))
+}
+
+/// Binary page image endpoint — returns raw JPEG/PNG bytes instead of base64.
+/// Reduces transfer size by ~25% (no base64 overhead). Used by frontend to create Blob URLs.
+async fn page_binary(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    let session_id = params.get("sessionId").cloned().unwrap_or_default();
+    let pdf_path = params.get("pdfPath").cloned().unwrap_or_default();
+    let page: u32 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let dpi: u32 = params.get("dpi").and_then(|v| v.parse().ok()).unwrap_or(150);
+    let use_jpeg = params.get("useJpeg").map_or(true, |v| v != "false");
+
+    let session = get_session(&state, &session_id)?;
+    let resolved = session.resolve_path(&pdf_path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let pdf_bytes = std::fs::read(&resolved)
+            .map_err(|e| format!("读取PDF失败: {}", e))?;
+        let images = crate::pdfium_render::render_pdf_to_images(&pdf_bytes, dpi, use_jpeg)
+            .map_err(|e| format!("渲染失败: {}", e))?;
+        let idx = page as usize;
+        if idx >= images.len() {
+            return Err(format!("页码超出范围: {}/{}", page, images.len()));
+        }
+        // Strip data URL prefix, return raw base64-decoded bytes
+        let data_url = &images[idx].image_data_url;
+        let comma_pos = data_url.find(',').unwrap_or(data_url.len());
+        let b64 = &data_url[comma_pos + 1..];
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            b64,
+        ).map_err(|e| format!("解码失败: {}", e))
+    }).await
+        .map_err(|e| AppError::Internal(format!("渲染崩溃: {}", e)))?
+        .map_err(|e| AppError::Internal(e))?;
+
+    let content_type = if use_jpeg { "image/jpeg" } else { "image/png" };
+    Ok(([(axum::http::header::CONTENT_TYPE, content_type)], result))
 }
 
 async fn extract_pdf_text(
@@ -892,6 +973,11 @@ struct RenderPdfRequest {
     dpi: Option<u32>,
     #[serde(default)]
     use_jpeg: Option<bool>,
+    /// If true, also extract text layer and return it in the response.
+    /// Merges render + text extraction into a single HTTP call (saves 1 round-trip).
+    /// Does NOT affect OCR — OCR is always a separate async step after loading.
+    #[serde(default)]
+    extract_text: bool,
 }
 
 #[derive(Deserialize)]

@@ -1060,17 +1060,7 @@ function applyPdfTextToResults(results, pdfPath) {
     pdfPath: pdfPath,
     pageIndices: pageIndices
   }).then(function(pdfTextMap) {
-    results.forEach(function(r) {
-      var pdfText = pdfTextMap[r._pdfPageIdx];
-      if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
-        applyPdfTextResult(r, pdfText);
-        updateFileItem(r);
-        updateAmountSummary();
-      } else if (hasOcr && S.feat.ocrEnabled) {
-        console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，自动回退OCR');
-        applyOcrAsync(r, r.previewUrl);
-      }
-    });
+    applyCombinedTextResults(results, pdfTextMap);
   }).catch(function(err) {
     console.warn('[PDF文字提取] 批量提取失败，回退单页模式:', err);
     results.forEach(function(r) {
@@ -1082,13 +1072,28 @@ function applyPdfTextToResults(results, pdfPath) {
           applyPdfTextResult(r, pdfText);
           updateFileItem(r);
           updateAmountSummary();
-        } else if (hasOcr && S.feat.ocrEnabled) {
-          applyOcrAsync(r, r.previewUrl);
         }
-      }).catch(function() {
-        if (hasOcr && S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
-      });
+      }).catch(function() {});
     });
+  });
+}
+
+/// Apply pre-extracted textMap to results — used when render+text are combined in one HTTP call
+function applyCombinedTextResults(results, pdfTextMap) {
+  if (!results || results.length === 0) return;
+  if (!pdfTextMap) return;
+  results.forEach(function(r) {
+    var pdfText = pdfTextMap[r._pdfPageIdx];
+    if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
+      applyPdfTextResult(r, pdfText);
+      updateFileItem(r);
+      updateAmountSummary();
+    } else if (hasOcr && S.feat.ocrEnabled) {
+      console.log('[PDF文字提取] 文本层为空，自动回退OCR');
+      applyOcrAsync(r, r.previewUrl);
+    }
+  });
+}
   });
 }
 
@@ -1129,13 +1134,24 @@ function loadFileFromDataUrlFast(fd) {
       if (isTauri && __api && filePath) {
         var renderFn = _winrtPdfAvailable ? 'render_pdf_pages' : 'render_pdf_pages_pdfium';
         var renderLabel = _winrtPdfAvailable ? 'WinRT' : 'PDFium';
-        __api.call(renderFn, { pdfPath: filePath, dpi: PDF_PREVIEW_DPI, useJpeg: true }).then(async function(pages) {
+        // Optimization: ask server to also extract text layer in the same call
+        // Saves 1 HTTP round-trip vs separate extract_pdf_texts call
+        __api.call(renderFn, { pdfPath: filePath, dpi: PDF_PREVIEW_DPI, useJpeg: true, extractText: true }).then(async function(result) {
+          // Server now returns { pages, textMap } when extractText is true
+          // Backward compat: if result is an array, it's the old pages-only format
+          var pages = Array.isArray(result) ? result : (result && result.pages);
+          var textMap = Array.isArray(result) ? null : (result && result.textMap);
           if (pages && pages.length > 0) {
             var results = buildPdfResults(pages, id, name, size, filePath);
             resolve(results.length === 1 ? results[0] : results);
 
             loadPdfImages(results);
-            applyPdfTextToResults(results, filePath);
+            // Use textMap from combined response (skip separate HTTP call)
+            if (textMap) {
+              applyCombinedTextResults(results, textMap);
+            } else {
+              applyPdfTextToResults(results, filePath);
+            }
 
             results.forEach(function(r) {
               if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
@@ -1149,13 +1165,19 @@ function loadFileFromDataUrlFast(fd) {
           if (renderFn === 'render_pdf_pages') {
             _winrtPdfAvailable = false;
             console.warn('[PDF] WinRT failed, trying PDFium fallback...');
-            __api.call('render_pdf_pages_pdfium', { pdfPath: filePath, dpi: PDF_PREVIEW_DPI, useJpeg: true }).then(async function(pages2) {
+            __api.call('render_pdf_pages_pdfium', { pdfPath: filePath, dpi: PDF_PREVIEW_DPI, useJpeg: true, extractText: true }).then(async function(result2) {
+              var pages2 = Array.isArray(result2) ? result2 : (result2 && result2.pages);
+              var textMap2 = Array.isArray(result2) ? null : (result2 && result2.textMap);
               if (pages2 && pages2.length > 0) {
                 var results2 = buildPdfResults(pages2, id, name, size, filePath);
                 resolve(results2.length === 1 ? results2[0] : results2);
 
                 loadPdfImages(results2);
-                applyPdfTextToResults(results2, filePath);
+                if (textMap2) {
+                  applyCombinedTextResults(results2, textMap2);
+                } else {
+                  applyPdfTextToResults(results2, filePath);
+                }
 
                 results2.forEach(function(r) {
                   if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);

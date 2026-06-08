@@ -40,8 +40,8 @@ async fn main() {
     let state = AppState {
         session_dir: session_dir.clone(),
         sessions: Arc::new(dashmap::DashMap::new()),
-        ocr_limit: Arc::new(tokio::sync::Semaphore::new(2)),
-        render_limit: Arc::new(tokio::sync::Semaphore::new(4)),
+        ocr_limit: Arc::new(tokio::sync::Semaphore::new(server::optimal_ocr_concurrency())),
+        render_limit: Arc::new(tokio::sync::Semaphore::new(server::optimal_render_concurrency())),
         auth_token,
         progress: Arc::new(ProgressTracker::new()),
         frontend_dir,
