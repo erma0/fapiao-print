@@ -962,8 +962,7 @@ pub fn run() {
             // Start embedded Axum server
             let server_port = {
                 let session_dir = std::env::temp_dir().join("ticketchan-sessions");
-                let rt = tokio::runtime::Handle::current();
-                let server = rt.block_on(async {
+                let server = tauri::async_runtime::block_on(async {
                     tauri_server::EmbeddedServer::start(session_dir, None).await
                 });
                 match server {

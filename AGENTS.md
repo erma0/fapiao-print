@@ -12,23 +12,73 @@
 
 ## 常用命令
 
-```bash
-npm run dev             # 轻量版桌面开发
-npm run dev:ocr         # OCR 版桌面开发
-npm run build           # 轻量版构建
-npm run build:ocr       # OCR 版构建
-npm run build:all       # 全量构建，产物输出到 dist/
-npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
+### 桌面版
 
-# Web 版
+```bash
+npm run dev             # 轻量版开发（Tauri + 嵌入 Axum server，模式 B）
+npm run dev:ocr         # OCR 版开发
+npm run build           # 轻量版构建（Windows NSIS 安装包）
+npm run build:ocr       # OCR 版构建
+npm run build:all       # 全量构建（轻量版 + OCR 版 + 安装包 + 便携版）
+```
+
+### Web 版
+
+```bash
 cd src-tauri
-cargo run --bin ticketchan-server          # 开发模式
-cargo build --release --bin ticketchan-server  # 生产构建
-docker build -t ticketchan-server .        # Docker 构建
+
+# 开发模式（绑定 127.0.0.1:3000，前端文件从 TICKETCHAN_FRONTEND_DIR 读取）
+cargo run --bin ticketchan-server
+
+# 指定端口
+TICKETCHAN_SERVER_PORT=8080 cargo run --bin ticketchan-server
+
+# 开启 Token 认证
+TICKETCHAN_AUTH_TOKEN=mysecret cargo run --bin ticketchan-server
+
+# 生产构建
+cargo build --release --bin ticketchan-server
+
+# Docker 构建 + 启动
+docker build -t ticketchan-server .
+docker-compose up -d
+```
+
+### 编译检查（不运行，仅验证语法和类型）
+
+```bash
+cd src-tauri
+
+cargo check                        # 检查桌面版（轻量）
+cargo check --features ocr         # 检查 OCR 版
+cargo check --bin ticketchan-server # 检查 Web Server 版
+
+# 一键三检查
+cargo check && cargo check --features ocr && cargo check --bin ticketchan-server
+```
+
+### 版本与发布
+
+```bash
+npm run bump 2.1.0      # 同步 package.json → Cargo.toml → tauri.conf.json
+
+# 标准发布流程（详见 MEMORY.md）
+# 1. npm run bump X.Y.Z
+# 2. git checkout master && git merge dev
+# 3. git tag vX.Y.Z && git push origin master dev --tags
+```
+
+### 仅改前端时快速验证
+
+```bash
+# 只改了 HTML/CSS/JS，不需要重编译 Rust
+# 在已启动的 dev 窗口中直接刷新 WebView 即可（Ctrl+R）
+# 或者重启 npm run dev（Rust 层命中缓存，秒启动）
 ```
 
 - **版本号数据源**: `package.json` 是唯一数据源
-- **编译缓存**: 只改 HTML/JS/CSS 不会触发重编译，需改 Rust 文件才会完整重编译
+- **编译缓存**: 只改 HTML/JS/CSS 不会触发 Rust 重编译
+- **default-run**: `Cargo.toml` 设置 `default-run = "ticketchan"`，`cargo run` 默认启动桌面版
 - **CI/CD**: GitHub Actions，push tag `v*` 触发
 
 ### IPC 异步化 (async + spawn_blocking)

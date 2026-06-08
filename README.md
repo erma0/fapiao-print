@@ -186,28 +186,48 @@ ticketchan/
 
 **环境要求**：Node.js 18+、Rust 1.77+、Windows 10/11 / Linux / macOS
 
+### 桌面版
+
 ```bash
 npm install
 
-# 桌面版开发
-npm run dev          # 轻量版
-npm run dev:ocr      # OCR 版
+npm run dev          # 轻量版开发（Tauri + 嵌入 Axum server）
+npm run dev:ocr      # OCR 版开发
+npm run build        # 轻量版构建
+npm run build:ocr    # OCR 版构建
+npm run build:all    # 一键全量构建（4 产物）
+```
 
-# Web 版开发
+### Web 版
+
+```bash
 cd src-tauri
-cargo run --bin ticketchan-server
-# → http://localhost:3000
+cargo run --bin ticketchan-server              # 开发模式 → http://127.0.0.1:3000
 
-# Docker 构建
+# 可选环境变量
+TICKETCHAN_SERVER_PORT=8080 cargo run --bin ticketchan-server  # 自定义端口
+TICKETCHAN_AUTH_TOKEN=mysecret cargo run --bin ticketchan-server # 开启 Token 认证
+
+# Docker
 docker build -t ticketchan-server .
 docker-compose up -d
+```
 
-# 构建
-npm run build        # 轻量版
-npm run build:ocr    # OCR 版
-npm run build:all    # 一键全量构建
+### 编译检查（仅验证，不运行）
 
-# 版本号
+```bash
+cd src-tauri
+cargo check                        # 桌面版（轻量）
+cargo check --features ocr         # OCR 版
+cargo check --bin ticketchan-server # Web Server 版
+
+# 一次性全检
+cargo check && cargo check --features ocr && cargo check --bin ticketchan-server
+```
+
+### 版本号
+
+```bash
 npm run bump 2.1.0   # 同步 package.json → Cargo.toml → tauri.conf.json
 ```
 
