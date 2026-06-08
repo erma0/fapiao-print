@@ -1094,8 +1094,6 @@ function applyCombinedTextResults(results, pdfTextMap) {
     }
   });
 }
-  });
-}
 
 function buildPdfResults(pages, id, name, size, filePath) {
   var results = [];
