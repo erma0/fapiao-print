@@ -72,23 +72,23 @@ impl Drop for PdfiumState {
     }
 }
 
-static PDFIUM: LazyLock<std::sync::RwLock<Option<PdfiumState>>> =
-    LazyLock::new(|| std::sync::RwLock::new(None));
+static PDFIUM: LazyLock<std::sync::Mutex<Option<PdfiumState>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
 
 pub fn with_pdfium<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&PdfiumFuncs) -> Result<R, String>,
 {
-    // Fast path: read lock for already-initialized state
+    // Fast path: lock and check if already initialized
     {
-        let guard = PDFIUM.read().unwrap();
+        let guard = PDFIUM.lock().unwrap();
         if let Some(ref state) = *guard {
             return f(&state.funcs);
         }
     }
 
-    // Slow path: write lock to initialize
-    let mut guard = PDFIUM.write().unwrap();
+    // Slow path: lock again to initialize
+    let mut guard = PDFIUM.lock().unwrap();
     if guard.is_none() {
         let lib = crate::platform::load_pdfium_lib()?;
         let funcs = get_pdfium_funcs(&lib)?;
