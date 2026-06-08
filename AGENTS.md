@@ -2,22 +2,29 @@
 
 ## 项目概览
 
-- **版本**: v2.0.7
-- **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
-- **前端**: `src/{index.html, styles.css, ocr.js, layout.js, print.js, app.js}`
-- **后端**: `src-tauri/src/{main.rs, lib.rs, pdf_engine.rs, pdfium_print.rs}`
-- **OFD/XML 解析**: `src-tauri/invoice-engine/` — 独立 crate（v2.0.6 从 ofd-engine 更名，v2.0.7 整合 XML 数电票）
-- **双版本**: 轻量版 / OCR版（含 PP-OCRv5）
+- **版本**: v2.1.0
+- **技术栈**: Tauri 2.x (Rust) + Axum HTTP Server + 原生 HTML/CSS/JS（无框架）
+- **前端**: `src/{index.html, styles.css, api.js, ocr.js, layout.js, print.js, app.js}`
+- **后端**: `src-tauri/src/{main.rs, lib.rs, pdf_engine.rs, pdfium_bindings.rs, pdfium_render.rs, pdfium_print.rs, platform.rs, server.rs, session.rs, tauri_server.rs, web_main.rs}`
+- **OFD/XML 解析**: `src-tauri/invoice-engine/` — 独立 crate
+- **版本**: 轻量版 / OCR版 / Web Server 版
+- **跨平台**: Windows / Linux / macOS 桌面 + Docker/裸金属 Web 部署
 
 ## 常用命令
 
 ```bash
-npm run dev             # 轻量版开发
-npm run dev:ocr         # OCR 版开发
+npm run dev             # 轻量版桌面开发
+npm run dev:ocr         # OCR 版桌面开发
 npm run build           # 轻量版构建
 npm run build:ocr       # OCR 版构建
 npm run build:all       # 全量构建，产物输出到 dist/
 npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
+
+# Web 版
+cd src-tauri
+cargo run --bin ticketchan-server          # 开发模式
+cargo build --release --bin ticketchan-server  # 生产构建
+docker build -t ticketchan-server .        # Docker 构建
 ```
 
 - **版本号数据源**: `package.json` 是唯一数据源
@@ -34,6 +41,60 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 
 ---
 
+## 通信架构（v2.1.0 模式 B）
+
+采用 **嵌入 Axum HTTP Server（模式 B）**，Tauri 退化为窗口壳：
+
+- Tauri 启动时 spawn 本地 `Axum` server（`127.0.0.1:3000`），前端统一通过 `fetch()` 调用
+- 桌面版和 Web 版共享同一套 REST API，前端零差异
+- 仅 6 个系统命令保留 Tauri IPC 直连：`show_window` / `plugin:dialog|*` / `plugin:event|*` / `download_pdfium_dll`
+
+### 前端 `api.js` 适配层
+
+`src/api.js`（281 行）— 统一通信适配层：
+
+- `__api.call(cmd, params)` — 运行时检测桌面/Web，自动路由 HTTP/IPC
+- `__api.listen(taskId, cb)` — SSE 进度监听（`EventSource`）
+- `__api.downloadFile(sessionId, filename)` — 桌面 `open_file` / Web `<a download>`
+- `__api.openUrl(url)` — 桌面 `open_url` / Web `window.open()`
+- `__api.init()` — 桌面轮询 `/api/v1/health` 等待 server 就绪
+- `_isDesktop` — `window.__TAURI_INTERNALS__` 检测
+
+### Web Server 层
+
+`server.rs`（942 行）— Axum 路由 + 25 个 handler：
+
+- `AppState` — 共享状态（sessions/Semaphore/progress/auth/is_desktop）
+- `AppError` — 11 种错误码统一 `IntoResponse`
+- `ProgressTracker` — `DashMap<String, broadcast::Sender>` SSE 进度架构
+- 安全：Web 模式路径隔离、100MB 上传限制、可选 Token 认证
+
+### 会话管理
+
+`session.rs`（157 行）— Web 版文件路径管理：
+
+- `resolve_path(is_desktop)` — 桌面版绝对路径直通，Web 版 canonicalize 防路径穿越
+- `register_file()` — DashMap 原子计数，UUID 重命名防冲突
+- 24h TTL，30min 定时清理 + 启动清理
+
+### 平台抽象层
+
+`platform.rs`（371 行）— 所有 `#[cfg(target_os)]` 集中管理：
+
+| 函数 | Windows | Linux/macOS |
+|------|---------|-------------|
+| `load_pdfium_lib()` | `tools/pdfium.dll` | `tools/libpdfium.so` / ldconfig |
+| `list_printers()` | `EnumPrintersW` | `lpstat -v` |
+| `has_winrt_pdf()` | WinRT API | 返回 false |
+
+### Web 部署
+
+- **Docker**: `Dockerfile` — 多阶段构建 + PDFium 下载
+- **裸金属**: `ticketchan-server` + `ticketchan.service`（systemd）
+- **Nginx**: 反向代理 + CORS + gzip + SSE `proxy_buffering off`
+
+---
+
 ## 架构要点
 
 ### PDF 生成双管道
@@ -42,7 +103,7 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 
 - `generate_pdf_from_layout()` 入口
 - lopdf 直通: `can_passthrough_pdf()` 判断 → `extract_page_as_form_xobject()` → JPEG DCTDecode 嵌入
-- 打印四模式: PDF阅读器模式(默认) / 弹窗确认 / 静默打印PDFium(推荐) / 静默打印SumatraPDF
+- 打印三模式: PDF阅读器(默认) / 弹窗确认 / 静默打印PDFium — SumatraPDF 已在 v2.1.0 移除
 - **PDF阅读器模式已知限制**: 通过 `ShellExecuteW` 委托系统默认 PDF 阅读器打印，`printto` 动词能否指定打印机取决于阅读器实现（Edge/Chrome 内置查看器不支持），多数情况下 fallback 到 `print` 动词使用默认打印机，**无法可靠控制打印机选择**
 
 ### PDF 渲染双引擎 (v1.9.10+)
@@ -127,18 +188,21 @@ Rust `extract_pdf_text()` 解析 lopdf content stream，前端 `applyPdfTextResu
 - **页脚边距模型**: footerMargin 是纸张底部额外独立空间，不影响 slot 边距
 - **分割线**: JS 端 top-down 坐标，Rust 端 bottom-up 坐标（PDF 标准），⚠️ 不要做坐标转换
 
-### PDFium 矢量打印 (v1.9.8+)
+### PDFium 模块拆分 (v2.1.0)
 
-`pdfium_print.rs` — Chromium PDFium 引擎直打打印机 DC，无需 EMF 中间层
+- `pdfium_bindings.rs`（149 行）— FFI 绑定，17 个函数指针，`RwLock<Option<PdfiumState>>`（原 Mutex，现允许多线程并发渲染不同文档）
+- `pdfium_render.rs`（182 行）— 跨平台位图渲染，JPEG quality 80% + RGBA→RGB 颜色转换
+- `pdfium_print.rs`（465 行）— `#[cfg(windows)]` 仅 GDI 矢量打印
+- `render_page: Option<FnRenderPage>` — Windows 有、Linux/macOS 无，安全解包
+- `Drop` 实现调用 `FPDF_DestroyLibrary`
 
-- **DLL 生命周期**: `LazyLock<Mutex<Option<PdfiumState>>>` 全局持有，`_lib` 字段防止 DLL 卸载
-- **线程安全**: `with_pdfium()` 闭包模式，所有 PDFium 调用经 Mutex 串行化
-- **渲染流程**: `FPDF_LoadMemDocument` → 逐页 `FPDF_RenderPage(printer_dc)` → 打印机原生 DPI
-- **DEVMODEW**: `build_dev_mode()` + `infer_paper_size()` 标准纸映射，自定义纸用 `DMPAPER_USER`
-- **下载机制**: `AtomicBool DOWNLOAD_CANCELLED` 全局取消标志，`cancel_download` 命令通知 Rust 端
-- **缓存复用**: 智能缓存 `deepEqual` + `canUseCachedPdf` 统一三个打印渠道（PDFium / SumatraPDF / PDF阅读器）
-- **DLL 位置**: `{exe}/tools/pdfium.dll`（与 SumatraPDF.exe 同目录）
-- **下载源**: `bblanchon/pdfium-binaries` via `gh-proxy.com` 加速
+### PDFium 下载统一 (v2.1.0)
+
+`download_pdfium_dll` 单一实现跨三平台：
+
+- 通过 `platform::get_pdfium_lib_name()` 获取 `.dll` / `.so` / `.dylib`
+- 通过 `platform::get_pdfium_download_url()` 获取 GitHub 下载 URL
+- 同一个下载→解压→提取逻辑，消除 ~100 行重复代码
 
 ### PDFium 打印 SEH 保护 (v1.10.3)
 
@@ -291,10 +355,11 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 
 | 文件 | 职责 |
 |------|------|
-| `app.js` | 主入口、状态管理(S)、文件加载（批量IPC+并行渲染）、Tauri IPC、设置持久化、批量文字提取分发、XML数电票加载 |
-| `ocr.js` | 发票字段提取、金额解析、中文大写解析、类型检测、金额校验 |
-| `layout.js` | 布局计算、预览渲染、单票调整拖拽、slot 交互 |
-| `print.js` | 打印/导出、构建 LayoutRenderRequest、智能 PDF 缓存（deepEqual）、四种打印模式分发、PDFium→SumatraPDF 自动降级 |
+| `api.js` | 统一通信适配层（桌面+Web），HTTP/IPC 自动路由，SSE 监听 |
+| `app.js` | 主入口、状态管理(S)、文件加载、Tauri IPC fallback、XML数电票 |
+| `ocr.js` | 发票字段提取、金额解析、中文大写解析、类型检测 |
+| `layout.js` | 布局计算、预览渲染、单票调整拖拽 |
+| `print.js` | 打印/导出、LayoutRenderRequest、智能缓存（deepEqual）、打印模式分发 |
 
 - 全部用 `var` 声明顶层变量（避免与 Tauri 注入脚本冲突）
 - 无模块打包，`index.html` 按顺序 `<script>` 加载

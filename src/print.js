@@ -104,7 +104,7 @@ function buildLayoutRequest(files, settings) {
   }
 
   // 2. Build pages (per-file copies already expanded in getActiveFiles,
-  // global copies handled by SumatraPDF -print-settings Nx, not expanded here)
+  // global copies handled by print command copies parameter, not expanded here)
   var pages = buildPages(files, settings);
   var expanded = pages;
 
@@ -191,11 +191,10 @@ async function listenPdfProgress() {
 }
 
 /**
- * Print invoices — four independent paths:
- * - Confirm mode: custom dialog → PDFium/SumatraPDF silent print
+ * Print invoices — three independent paths:
+ * - Confirm mode: custom dialog → PDFium silent print
  * - PDFium mode: vector print via PDFium engine (recommended)
  * - PDF reader mode: generate PDF → ShellExecute print via default reader
- * - Direct/SumatraPDF mode: SumatraPDF silent print
  */
 async function doPrint() {
   var files = getActiveFiles();
@@ -210,7 +209,7 @@ async function doPrint() {
   } else if (printMode === 'pdf') {
     await doPdfReaderPrint(files, s);
   } else {
-    await doSumatraPrint(files, s);
+    toast('此打印模式已移除');
   }
 }
 
@@ -237,7 +236,6 @@ function showPrintConfirm(files, s) {
 
   var engineSelect = '<select id="confirmPrintEngine" style="padding:1px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:12px">'
     + '<option value="pdfium">PDFium（推荐）</option>'
-    + '<option value="sumatra">SumatraPDF（备用）</option>'
     + '</select>';
 
   var html = row('打印机', escHtml(printerName))
@@ -259,114 +257,7 @@ async function confirmPrint() {
   closePrintConfirm();
   var files = getActiveFiles();
   var s = getSettings();
-  var engineEl = document.getElementById('confirmPrintEngine');
-  var engine = engineEl ? engineEl.value : 'pdfium';
-
-  if (engine === 'pdfium') {
-    await doPdfiumPrint(files, s);
-  } else {
-    await doSumatraPrint(files, s);
-  }
-}
-
-async function doSumatraPrint(files, s) {
-  if (isTauri && __api) {
-    try {
-      var available = await __api.call('check_sumatrapdf_available');
-      if (!available) {
-        showSumatraPdfMissing();
-        return;
-      }
-    } catch(e) {
-      console.warn('check_sumatrapdf_available failed:', e);
-    }
-  }
-
-  var currentRequest = buildLayoutRequest(files, s);
-  if (canUseCachedPdf(currentRequest) && isTauri && __api) {
-    try {
-      showLoading('正在使用缓存PDF打印...');
-      var result = await __api.call('sumatrapdf_print', {
-        pdfPath: _lastPdfPath,
-        printerName: s.printerName || null,
-        copies: s.copies || 1,
-        duplex: s.duplex || false,
-        colorMode: s.colorMode || 'color',
-        fitMode: s.fitMode,
-        paperW: s.paperW || 210,
-        paperH: s.paperH || 297
-      });
-      hideLoading();
-      if (result.success) {
-        toast('\uD83D\uDCA8 ' + result.message);
-        markFilesAsPrinted(files);
-        return;
-      }
-    } catch(e) {
-      hideLoading();
-      console.warn('Cached sumatrapdf print failed:', e);
-    }
-  }
-
-  showLoading('正在准备打印...');
-  var unlisten = await listenPdfProgress();
-  try {
-    if (isTauri && __api) {
-      document.getElementById('loadingText').textContent = '正在生成PDF，请稍候...';
-      var tempDir = await __api.call('get_temp_dir');
-      var outputPath = tempDir + '\\ticketchan_print_output.pdf';
-      var result = await __api.call('generate_pdf_from_layout', {
-        request: currentRequest,
-        outputPath: outputPath,
-        directPrint: false,
-        printerName: null,
-        printAfter: false
-      });
-      if (unlisten) unlisten();
-      if (result.success) {
-        updatePdfCache(currentRequest, result.pdfPath);
-        showLoading('正在通过SumatraPDF打印...');
-        try {
-          var printResult = await __api.call('sumatrapdf_print', {
-            pdfPath: result.pdfPath,
-            printerName: s.printerName || null,
-            copies: s.copies || 1,
-            duplex: s.duplex || false,
-            colorMode: s.colorMode || 'color',
-            fitMode: s.fitMode,
-            paperW: s.paperW || 210,
-            paperH: s.paperH || 297
-          });
-          hideLoading();
-          if (printResult.success) {
-            toast('\uD83D\uDCA8 ' + printResult.message);
-            markFilesAsPrinted(files);
-          } else {
-            toast('打印失败：' + printResult.message);
-          }
-        } catch(e2) {
-          hideLoading();
-          if (String(e2).indexOf('SumatraPDF') >= 0) {
-            showSumatraPdfMissing();
-          } else {
-            toast('打印出错：' + String(e2));
-          }
-        }
-      } else {
-        hideLoading();
-        toast('PDF生成失败：' + result.message);
-      }
-    } else {
-      if (unlisten) unlisten();
-      hideLoading();
-      fallbackPrint(files, s);
-    }
-  } catch (err) {
-    if (unlisten) unlisten();
-    hideLoading();
-    console.error('SumatraPDF print error:', err);
-    toast('打印出错：' + String(err));
-  }
+  await doPdfiumPrint(files, s);
 }
 
 async function doPdfiumPrint(files, s) {
@@ -430,9 +321,8 @@ async function doPdfiumPrint(files, s) {
         toast('\uD83D\uDCA8 ' + result.message);
         markFilesAsPrinted(files);
       } else {
-        console.warn('PDFium print failed, falling back to SumatraPDF:', result.message);
-        toast('PDFium打印失败，尝试使用 SumatraPDF...');
-        await doSumatraPrint(files, s);
+        console.warn('PDFium print failed:', result.message);
+        toast('PDFium打印失败：' + result.message);
       }
     } else {
       if (unlisten) unlisten();
@@ -443,9 +333,7 @@ async function doPdfiumPrint(files, s) {
     if (unlisten) unlisten();
     hideLoading();
     console.error('PDFium vector print error:', err);
-    console.warn('PDFium print failed, falling back to SumatraPDF');
-    toast('PDFium打印失败，尝试使用 SumatraPDF...');
-    await doSumatraPrint(files, s);
+    toast('PDFium打印出错：' + String(err));
   }
 }
 

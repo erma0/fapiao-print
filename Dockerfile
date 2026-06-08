@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y \
 # Install PDFium
 RUN mkdir -p /app/tools && \
     curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F6963/pdfium-linux-x64.tgz" | \
-    tar xz -C /app/tools --strip-components=1 --include="*/lib/libpdfium.so" --include="*/lib/libpdfium.so.1" 2>/dev/null || \
+    tar xz -C /app/tools --strip-components=1 --wildcards '*/lib/libpdfium.so' --wildcards '*/lib/libpdfium.so.1' 2>/dev/null || \
     echo "PDFium download failed - install manually"
 
 WORKDIR /app

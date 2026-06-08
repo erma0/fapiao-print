@@ -174,10 +174,42 @@ pub fn build_router(state: AppState) -> Router {
     let mut app = Router::new()
         .nest("/api/v1", api_routes)
         .with_state(state.clone())
-        .layer(CorsLayer::permissive())
         .layer(cors)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(100 * 1024 * 1024)) // 100MB
         .layer(CompressionLayer::new())
         .layer(CatchPanicLayer::new());
+
+    // Optional auth token protection for Web (non-desktop) deployments.
+    // When TICKETCHAN_AUTH_TOKEN is set, all API requests must include
+    // the Authorization: Bearer <token> header. Health endpoint is exempt.
+    // Desktop mode (is_desktop=true) skips auth entirely.
+    if !state.is_desktop && state.auth_token.is_some() {
+        let expected_token = state.auth_token.clone().unwrap();
+        app = app.layer(axum::middleware::from_fn(move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+            let token = expected_token.clone();
+            async move {
+                if req.uri().path() == "/api/v1/health" {
+                    return next.run(req).await;
+                }
+                let auth_header = req.headers()
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Bearer "));
+                if auth_header != Some(&token) {
+                    return axum::response::Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            serde_json::to_string(&ApiResponse::err(
+                                "未授权访问", "UNAUTHORIZED", false,
+                            )).unwrap_or_default()
+                        ))
+                        .unwrap();
+                }
+                next.run(req).await
+            }
+        }));
+    }
 
     if !state.is_desktop {
         app = app.fallback_service(
@@ -261,7 +293,7 @@ async fn render_pdf(
     Json(req): Json<RenderPdfRequest>,
 ) -> Result<Json<ApiResponse>, AppError> {
     let session = get_session(&state, &req.session_id)?;
-    let pdf_path = session.resolve_path(&req.pdf_path)
+    let pdf_path = session.resolve_path(&req.pdf_path, state.is_desktop)
         .map_err(|e| AppError::BadRequest(e))?;
     session.touch();
 
@@ -279,7 +311,10 @@ async fn render_pdf(
         .map_err(|e| AppError::Internal(format!("渲染任务失败: {}", e)))?
         .map_err(|e| AppError::Internal(e))?;
 
-    Ok(Json(ApiResponse::ok(serde_json::to_value(result).unwrap_or_default())))
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化渲染结果失败: {}", e);
+        json!({})
+    }))))
 }
 
 async fn extract_pdf_text(
@@ -287,7 +322,7 @@ async fn extract_pdf_text(
     Json(req): Json<ExtractPdfTextRequest>,
 ) -> Result<Json<ApiResponse>, AppError> {
     let session = get_session(&state, &req.session_id)?;
-    let pdf_path = session.resolve_path(&req.pdf_path)
+    let pdf_path = session.resolve_path(&req.pdf_path, state.is_desktop)
         .map_err(|e| AppError::BadRequest(e))?;
     session.touch();
 
@@ -297,7 +332,10 @@ async fn extract_pdf_text(
         .map_err(|e| AppError::Internal(format!("提取任务失败: {}", e)))?
         .map_err(|e| AppError::Internal(e))?;
 
-    Ok(Json(ApiResponse::ok(serde_json::to_value(result).unwrap_or_default())))
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化文本提取结果失败: {}", e);
+        json!({})
+    }))))
 }
 
 async fn extract_pdf_texts(
@@ -305,7 +343,7 @@ async fn extract_pdf_texts(
     Json(req): Json<ExtractPdfTextsRequest>,
 ) -> Result<Json<ApiResponse>, AppError> {
     let session = get_session(&state, &req.session_id)?;
-    let pdf_path = session.resolve_path(&req.pdf_path)
+    let pdf_path = session.resolve_path(&req.pdf_path, state.is_desktop)
         .map_err(|e| AppError::BadRequest(e))?;
     session.touch();
 
@@ -316,15 +354,62 @@ async fn extract_pdf_texts(
         .map_err(|e| AppError::Internal(format!("批量提取任务失败: {}", e)))?
         .map_err(|e| AppError::Internal(e))?;
 
-    Ok(Json(ApiResponse::ok(serde_json::to_value(result).unwrap_or_default())))
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化批量提取结果失败: {}", e);
+        json!({})
+    }))))
 }
 
 async fn generate_pdf(
-    State(_state): State<AppState>,
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement generate_pdf handler with SSE progress
-    Err(AppError::Internal("generate_pdf 尚未实现".into()))
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    session.touch();
+
+    let (task_id, tx) = state.progress.create_task();
+    let tid_progress = task_id.clone();
+    let tid_file = task_id.clone();
+    let tx_clone = tx.clone();
+    let progress_cb: crate::pdf_engine::ProgressFn = Box::new(move |phase, current, total| {
+        let _ = tx_clone.send(crate::server::ProgressEvent {
+            task_id: tid_progress.clone(),
+            phase: phase.to_string(),
+            current,
+            total,
+        });
+    });
+
+    let req_value = req.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let output_path = std::env::temp_dir().join(format!("ticketchan-gen-{}.pdf", tid_file));
+        crate::pdf_engine::generate_pdf_from_layout(
+            &serde_json::from_value(req_value).map_err(|e| format!("请求解析失败: {}", e))?,
+            &output_path,
+            Some(progress_cb),
+        )
+    }).await
+        .map_err(|e| AppError::Internal(format!("生成任务崩溃: {}", e)))?
+        .map_err(|e| AppError::Internal(e))?;
+
+    // generate_pdf_from_layout returns Option<String> (None = nothing to generate)
+    let output_file = result.ok_or_else(|| AppError::BadRequest("无有效页面数据，PDF 未生成".into()))?;
+    let output_path = std::path::PathBuf::from(&output_file);
+
+    // Register generated file into session
+    let file_size = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+    let file_name = format!("{}.pdf", task_id);
+    session.register_file(&file_name, output_path.clone(), file_size, "pdf");
+
+    state.progress.remove_task(&task_id);
+
+    Ok(Json(ApiResponse::ok(json!({
+        "taskId": task_id,
+        "path": output_path.to_string_lossy(),
+        "fileName": file_name,
+        "sessionId": session.id,
+    }))))
 }
 
 async fn download_file(
@@ -332,7 +417,7 @@ async fn download_file(
     AxumPath((session_id, filename)): AxumPath<(String, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let session = get_session(&state, &session_id)?;
-    let file_path = session.resolve_path(&filename)
+    let file_path = session.resolve_path(&filename, state.is_desktop)
         .map_err(|e| AppError::BadRequest(e))?;
 
     let data = std::fs::read(&file_path)
@@ -381,6 +466,8 @@ async fn progress_sse(
         }
     };
 
+    // Note: keep_alive is handled at the nginx/reverse-proxy layer (proxy_read_timeout).
+    // Adding keep_alive here changes the Sse type signature and would require boxing.
     Ok(Sse::new(stream))
 }
 
@@ -392,80 +479,243 @@ async fn list_printers(
 }
 
 async fn do_print(
-    State(_state): State<AppState>,
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement print handler
-    Err(AppError::Internal("打印功能尚未实现".into()))
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    session.touch();
+
+    let pdf_path = req.get("pdfPath").and_then(|v| v.as_str())
+        .or_else(|| req.get("path").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let printer_name = req.get("printer").and_then(|v| v.as_str());
+    let resolved = session.resolve_path(pdf_path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+
+    let path_str = resolved.to_string_lossy().to_string();
+    let printer_opt = printer_name.map(|s| s.to_string());
+
+    #[cfg(target_os = "windows")]
+    {
+        let result = tokio::task::spawn_blocking(move || {
+            crate::shell_execute_print(
+                std::path::Path::new(&path_str),
+                printer_opt.as_deref(),
+            )
+        }).await
+            .map_err(|e| AppError::Internal(format!("打印任务崩溃: {}", e)))?
+            .map_err(|e| AppError::Internal(e))?;
+        Ok(Json(ApiResponse::ok(json!({ "success": result }))))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // On non-Windows, open the PDF with the system default viewer
+        let _ = tokio::task::spawn_blocking(move || {
+            open::that(&path_str)
+        }).await;
+        Ok(Json(ApiResponse::ok(json!({ "success": true, "message": "已使用系统默认程序打开 PDF" }))))
+    }
 }
 
 async fn ocr_image(
     State(state): State<AppState>,
-    Json(_req): Json<serde_json::Value>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
+    #[allow(unused_variables)]
+    {
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    session.touch();
+
+    let data_url = req.get("dataUrl").and_then(|v| v.as_str()).unwrap_or("");
+    let file_path = req.get("filePath").and_then(|v| v.as_str());
+    let ocr_precision = req.get("ocrPrecision").and_then(|v| v.as_str());
+
+    if data_url.is_empty() {
+        return Err(AppError::BadRequest("缺少图片数据".into()));
+    }
+
     let _permit = state.ocr_limit.acquire().await
         .map_err(|e| AppError::Internal(format!("OCR 信号量错误: {}", e)))?;
 
     #[cfg(feature = "ocr")]
     {
+        let data = data_url.to_string();
+        let fp = file_path.map(|s| s.to_string());
+        let precision = ocr_precision.map(|s| s.to_string());
         let result = tokio::task::spawn_blocking(move || {
-            // TODO: Call ocr-rs
-            Err::<(), String>("OCR handler not yet implemented".into())
-        }).await;
-        match result {
-            Ok(Ok(_)) => Ok(Json(ApiResponse::ok(json!({})))),
-            Ok(Err(e)) => Err(AppError::Internal(e)),
-            Err(e) => Err(AppError::Internal(format!("OCR 任务失败: {}", e))),
-        }
+            crate::pdf_engine::ocr_image(&data, fp.as_deref(), precision.as_deref())
+                .map_err(|e| format!("OCR 识别失败: {}", e))
+        }).await
+            .map_err(|e| AppError::Internal(format!("OCR 任务崩溃: {}", e)))?
+            .map_err(|e| AppError::Internal(e))?;
+
+        Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+            log::warn!("序列化 OCR 结果失败: {}", e);
+            json!({})
+        }))))
     }
     #[cfg(not(feature = "ocr"))]
     {
         Err(AppError::ServiceUnavailable("OCR 功能未启用".into()))
     }
+    } // end #[allow(unused_variables)]
 }
 
 async fn ocr_pdf_page(
     State(state): State<AppState>,
-    Json(_req): Json<serde_json::Value>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
+    #[allow(unused_variables)]
+    {
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    let pdf_path = req.get("pdfPath").and_then(|v| v.as_str()).unwrap_or("");
+    let page_index = req.get("pageIndex").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let dpi = req.get("dpi").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let ocr_precision = req.get("ocrPrecision").and_then(|v| v.as_str());
+
+    let resolved = session.resolve_path(pdf_path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+    session.touch();
+
     let _permit = state.ocr_limit.acquire().await
         .map_err(|e| AppError::Internal(format!("OCR 信号量错误: {}", e)))?;
 
     #[cfg(feature = "ocr")]
     {
-        Err(AppError::Internal("OCR PDF 页面处理尚未实现".into()))
+        let path = resolved.to_string_lossy().to_string();
+        let precision = ocr_precision.map(|s| s.to_string());
+        let result = tokio::task::spawn_blocking(move || {
+            crate::pdf_engine::ocr_pdf_page(&path, page_index, dpi, precision.as_deref())
+                .map_err(|e| format!("OCR PDF 页面识别失败: {}", e))
+        }).await
+            .map_err(|e| AppError::Internal(format!("OCR 任务崩溃: {}", e)))?
+            .map_err(|e| AppError::Internal(e))?;
+
+        Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+            log::warn!("序列化 OCR PDF 结果失败: {}", e);
+            json!({})
+        }))))
     }
     #[cfg(not(feature = "ocr"))]
     {
         Err(AppError::ServiceUnavailable("OCR 功能未启用".into()))
     }
+    } // end #[allow(unused_variables)]
 }
 
 async fn parse_ofd(
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement OFD parsing
-    Err(AppError::Internal("OFD 解析尚未实现".into()))
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    let path = req.get("path").and_then(|v| v.as_str())
+        .or_else(|| req.get("ofdPath").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let resolved = session.resolve_path(path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+    session.touch();
+
+    let result = tokio::task::spawn_blocking(move || {
+        invoice_engine::parse_ofd_file(&resolved.to_string_lossy())
+            .map_err(|e| format!("OFD 解析失败: {}", e))
+    }).await
+        .map_err(|e| AppError::Internal(format!("OFD 解析任务崩溃: {}", e)))?
+        .map_err(|e| AppError::Internal(e))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化 OFD 结果失败: {}", e);
+        json!({})
+    }))))
 }
 
 async fn parse_xml_invoice(
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement XML invoice parsing
-    Err(AppError::Internal("XML 数电票解析尚未实现".into()))
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    let path = req.get("path").and_then(|v| v.as_str())
+        .or_else(|| req.get("xmlPath").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let resolved = session.resolve_path(path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+    session.touch();
+
+    let result = tokio::task::spawn_blocking(move || {
+        invoice_engine::parse_xml_invoice(&resolved.to_string_lossy())
+            .map_err(|e| format!("XML 解析失败: {}", e))
+    }).await
+        .map_err(|e| AppError::Internal(format!("XML 解析任务崩溃: {}", e)))?
+        .map_err(|e| AppError::Internal(e))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化 XML 结果失败: {}", e);
+        json!({})
+    }))))
 }
 
 async fn open_ofd_images(
-    Json(_req): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement OFD image opening
-    Err(AppError::Internal("OFD 图片打开尚未实现".into()))
+    let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session = get_session(&state, &session_id)?;
+    let path = req.get("path").and_then(|v| v.as_str())
+        .or_else(|| req.get("ofdPath").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let resolved = session.resolve_path(path, state.is_desktop)
+        .map_err(|e| AppError::BadRequest(e))?;
+    session.touch();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let path_str = resolved.to_string_lossy();
+        let name = std::path::Path::new(path_str.as_ref())
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let size = std::path::Path::new(path_str.as_ref())
+            .metadata().ok().map(|m| m.len()).unwrap_or(0);
+        let images = invoice_engine::extract_ofd_images_raw(&path_str)
+            .map_err(|e| format!("OFD 图片提取失败: {}", e))?;
+        let mut results = Vec::new();
+        for (idx, _img) in images.iter().enumerate() {
+            let base_name = if name.len() > 4 { &name[..name.len()-4] } else { &name };
+            results.push(serde_json::json!({
+                "name": if images.len() > 1 {
+                    format!("{}_第{}页.ofd", base_name, idx + 1)
+                } else { name.clone() },
+                "path": resolved.to_string_lossy(),
+                "size": size,
+                "type": "ofd",
+            }));
+        }
+        Ok(results)
+    }).await
+        .map_err(|e| AppError::Internal(format!("OFD 图片任务崩溃: {}", e)))?
+        .map_err(|e: String| AppError::Internal(format!("{}", e)))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::to_value(&result).unwrap_or_else(|e| {
+        log::warn!("序列化 OFD 图片结果失败: {}", e);
+        json!([])
+    }))))
 }
 
 async fn check_path_exists(
+    State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> Json<ApiResponse> {
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    // Web mode: restrict to session directory
+    if !state.is_desktop {
+        let p = std::path::Path::new(path);
+        if !p.is_absolute() || !p.starts_with(&state.session_dir) {
+            return Json(ApiResponse::ok(json!({ "exists": false })));
+        }
+    }
     let exists = std::path::Path::new(path).exists();
     Json(ApiResponse::ok(json!({ "exists": exists })))
 }
@@ -489,27 +739,84 @@ async fn cancel_download() -> Json<ApiResponse> {
 }
 
 async fn trim_image(
-    Json(_req): Json<serde_json::Value>,
+    Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    // TODO: Implement image trimming
-    Err(AppError::Internal("图片裁剪尚未实现".into()))
+    let data_url = req.get("dataUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if data_url.is_empty() {
+        return Err(AppError::BadRequest("缺少图片数据".into()));
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        use base64::Engine;
+        let img = crate::pdf_engine::decode_base64_image(&data_url)
+            .map_err(|e| format!("图片解码失败: {}", e))?;
+        let trimmed = crate::pdf_engine::trim_white_edges(&img, 245);
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        trimmed.write_to(&mut buf, image::ImageFormat::Png)
+            .map_err(|e| format!("图片编码失败: {}", e))?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+        Ok::<String, String>(format!("data:image/png;base64,{}", b64))
+    }).await
+        .map_err(|e| AppError::Internal(format!("裁剪任务崩溃: {}", e)))?
+        .map_err(|e| AppError::Internal(e))?;
+
+    Ok(Json(ApiResponse::ok(json!({ "dataUrl": result }))))
 }
 
 async fn copy_file(
+    State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    let src = req.get("src").and_then(|v| v.as_str()).unwrap_or("");
-    let dest = req.get("dest").and_then(|v| v.as_str()).unwrap_or("");
+    let src = req.get("srcPath").and_then(|v| v.as_str())
+        .or_else(|| req.get("src").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let dest = req.get("destPath").and_then(|v| v.as_str())
+        .or_else(|| req.get("dest").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    if src.is_empty() || dest.is_empty() {
+        return Err(AppError::BadRequest("源路径和目标路径不能为空".into()));
+    }
+    // Web mode: restrict to session directory
+    if !state.is_desktop {
+        let src_path = std::path::Path::new(src);
+        if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
+            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
+        }
+        let dest_path = std::path::Path::new(dest);
+        if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
+            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
+        }
+    }
     std::fs::copy(src, dest)
         .map_err(|e| AppError::Internal(format!("复制文件失败: {}", e)))?;
     Ok(Json(ApiResponse::ok(json!({}))))
 }
 
 async fn rename_file(
+    State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
-    let src = req.get("src").and_then(|v| v.as_str()).unwrap_or("");
-    let dest = req.get("dest").and_then(|v| v.as_str()).unwrap_or("");
+    let src = req.get("srcPath").and_then(|v| v.as_str())
+        .or_else(|| req.get("src").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let dest = req.get("destPath").and_then(|v| v.as_str())
+        .or_else(|| req.get("dest").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    if src.is_empty() || dest.is_empty() {
+        return Err(AppError::BadRequest("源路径和目标路径不能为空".into()));
+    }
+    // Web mode: restrict to session directory
+    if !state.is_desktop {
+        let src_path = std::path::Path::new(src);
+        if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
+            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
+        }
+        let dest_path = std::path::Path::new(dest);
+        if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
+            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
+        }
+    }
 
     let result = if std::path::Path::new(src).parent() == std::path::Path::new(dest).parent() {
         std::fs::rename(src, dest)
@@ -521,10 +828,21 @@ async fn rename_file(
 }
 
 async fn write_text_file(
+    State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse>, AppError> {
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return Err(AppError::BadRequest("文件路径不能为空".into()));
+    }
+    // Web mode: restrict to session directory or temp directory
+    if !state.is_desktop {
+        let p = std::path::Path::new(path);
+        if !p.is_absolute() || !p.starts_with(&state.session_dir) {
+            return Err(AppError::Unauthorized("Web 模式仅允许写入会话目录内文件".into()));
+        }
+    }
     std::fs::write(path, content)
         .map_err(|e| AppError::Internal(format!("写入文件失败: {}", e)))?;
     Ok(Json(ApiResponse::ok(json!({}))))
@@ -611,7 +929,7 @@ pub async fn cleanup_sessions(state: &AppState, ttl_secs: u64) {
     }
 }
 
-pub async fn cleanup_all_sessions(session_dir: &PathBuf) {
+pub fn cleanup_all_sessions(session_dir: &PathBuf) {
     if session_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(session_dir) {
             for entry in entries.flatten() {

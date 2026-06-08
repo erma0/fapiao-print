@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use tauri::{command, Emitter};
+use tauri::{command, Emitter, Manager};
 
 mod pdf_engine;
 pub mod pdfium_bindings;
@@ -12,56 +12,6 @@ pub mod tauri_server;
 mod pdfium_print;
 
 static DOWNLOAD_CANCELLED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(target_os = "windows")]
-fn check_windows_version() -> Result<(), String> {
-    use windows::core::*;
-    use windows::Win32::System::Registry::*;
-    
-    unsafe {
-        let mut hkey = HKEY::default();
-        let result = RegOpenKeyExW(
-            HKEY_LOCAL_MACHINE,
-            w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
-            0,
-            KEY_READ,
-            &mut hkey,
-        );
-        
-        if result.is_ok() {
-            let mut build_number = [0u16; 256];
-            let mut build_number_size = (build_number.len() * 2) as u32;
-            
-            let result = RegQueryValueExW(
-                hkey,
-                w!("CurrentBuildNumber"),
-                None,
-                None,
-                Some(build_number.as_mut_ptr() as *mut u8),
-                Some(&mut build_number_size),
-            );
-            
-            let _ = RegCloseKey(hkey);
-            
-            if result.is_ok() {
-                let build_str = String::from_utf16_lossy(&build_number[..(build_number_size as usize / 2)]);
-                let build_str = build_str.trim_end_matches('\0');
-                
-                if let Ok(build) = build_str.parse::<u32>() {
-                    if build < 17134 {
-                        return Err(format!(
-                            "您的系统版本不支持本应用。\n\n当前系统：Windows (Build {})\n\n需要：Windows 10 1803 (Build 17134) 或 Windows 11",
-                            build
-                        ));
-                    }
-                    return Ok(());
-                }
-            }
-        }
-        
-        Ok(())
-    }
-}
 
 #[cfg(target_os = "windows")]
 fn show_error_dialog(message: &str) {
@@ -198,6 +148,10 @@ fn open_file(path: String) -> Result<(), String> {
     {
         shell_execute("open", &path)?;
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        open::that(&path).map_err(|e| format!("无法打开文件: {}", e))?;
+    }
     Ok(())
 }
 
@@ -313,6 +267,10 @@ fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         shell_execute("open", &url)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        open::that(&url).map_err(|e| format!("无法打开 URL: {}", e))?;
     }
     Ok(())
 }
@@ -725,8 +683,8 @@ async fn pdfium_print_pdf(
     Ok(result)
 }
 
-/// Download pdfium.dll to the app's tools directory for vector printing
-#[cfg(target_os = "windows")]
+/// Download PDFium library (pdfium.dll / libpdfium.so / libpdfium.dylib)
+/// to the app's tools directory for rendering and printing.
 #[command]
 async fn download_pdfium_dll(app: tauri::AppHandle) -> Result<pdf_engine::PdfResult, String> {
     DOWNLOAD_CANCELLED.store(false, AtomicOrdering::SeqCst);
@@ -741,30 +699,30 @@ async fn download_pdfium_dll(app: tauri::AppHandle) -> Result<pdf_engine::PdfRes
     std::fs::create_dir_all(&tools_dir)
         .map_err(|e| format!("创建 tools 目录失败: {}", e))?;
 
-    let dest = tools_dir.join("pdfium.dll");
+    let lib_name = platform::get_pdfium_lib_name();
+    let dest = tools_dir.join(&lib_name);
     if dest.exists() {
         return Ok(pdf_engine::PdfResult {
             success: true,
-            message: "pdfium.dll 已存在".to_string(),
+            message: format!("{} 已存在", lib_name),
             pdf_path: Some(dest.to_string_lossy().to_string()),
             warnings: None,
         });
     }
 
-    let dll_url = "https://gh-proxy.com/https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7834/pdfium-win-x64.tgz";
-    let tgz_path = tools_dir.join("pdfium-win-x64.tgz");
+    let url = platform::get_pdfium_download_url();
+    let tgz_path = tools_dir.join(format!("pdfium-{}.tgz", std::env::consts::OS));
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("创建下载客户端失败: {}", e))?;
 
+    // Download with progress
     {
         let mut file = std::fs::File::create(&tgz_path)
             .map_err(|e| format!("创建临时文件失败: {}", e))?;
-        let mut stream = client.get(dll_url)
-            .send()
-            .await
+        let mut stream = client.get(url).send().await
             .map_err(|e| format!("下载失败: {}", e))?;
 
         if !stream.status().is_success() {
@@ -782,8 +740,7 @@ async fn download_pdfium_dll(app: tauri::AppHandle) -> Result<pdf_engine::PdfRes
                 return Err("下载已取消".to_string());
             }
             use std::io::Write;
-            file.write_all(&chunk)
-                .map_err(|e| format!("写入文件失败: {}", e))?;
+            file.write_all(&chunk).map_err(|e| format!("写入文件失败: {}", e))?;
             downloaded += chunk.len() as u64;
             let _ = app.emit("pdfium-download-progress", serde_json::json!({
                 "current": downloaded,
@@ -793,11 +750,12 @@ async fn download_pdfium_dll(app: tauri::AppHandle) -> Result<pdf_engine::PdfRes
         }
     }
 
+    // Extract library from tgz archive
     let tgz_file = std::fs::File::open(&tgz_path)
         .map_err(|e| format!("打开 tgz 失败: {}", e))?;
     let gz_decoder = flate2::read::GzDecoder::new(tgz_file);
     let mut archive = tar::Archive::new(gz_decoder);
-    let mut found_dll = false;
+    let mut found = false;
 
     for entry_result in archive.entries().map_err(|e| format!("解析 tgz 失败: {}", e))? {
         let mut entry = entry_result.map_err(|e| format!("读取 tgz 条目失败: {}", e))?;
@@ -806,27 +764,31 @@ async fn download_pdfium_dll(app: tauri::AppHandle) -> Result<pdf_engine::PdfRes
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        if file_name.eq_ignore_ascii_case("pdfium.dll") {
+        // Match the library file (pdfium.dll, libpdfium.so, libpdfium.so.1, libpdfium.dylib)
+        if file_name == lib_name || file_name == format!("{}.1", lib_name) {
             let mut out_file = std::fs::File::create(&dest)
-                .map_err(|e| format!("创建 pdfium.dll 失败: {}", e))?;
-            std::io::copy(&mut entry, &mut out_file)
-                .map_err(|e| format!("解压失败: {}", e))?;
-            found_dll = true;
+                .map_err(|e| format!("创建 {} 失败: {}", lib_name, e))?;
+            use std::io::Write;
+            let mut buf = Vec::new();
+            use std::io::Read;
+            entry.read_to_end(&mut buf).map_err(|e| format!("读取条目失败: {}", e))?;
+            out_file.write_all(&buf).map_err(|e| format!("写入 {} 失败: {}", lib_name, e))?;
+            found = true;
             break;
         }
     }
 
     std::fs::remove_file(&tgz_path).ok();
 
-    if !found_dll {
-        return Err("tgz 中未找到 pdfium.dll".to_string());
+    if !found {
+        return Err(format!("在归档中未找到 {}", lib_name));
     }
 
-    log::info!("pdfium.dll downloaded to: {}", dest.display());
+    log::info!("{} downloaded to: {}", lib_name, dest.display());
 
     Ok(pdf_engine::PdfResult {
         success: true,
-        message: format!("pdfium.dll 已下载到: {}", dest.display()),
+        message: format!("{} 已下载到: {}", lib_name, dest.display()),
         pdf_path: Some(dest.to_string_lossy().to_string()),
         warnings: None,
     })
@@ -855,12 +817,6 @@ async fn pdfium_print_pdf(
     _paper_h: f32,
 ) -> Result<pdf_engine::PdfResult, String> {
     Err("PDFium打印仅支持Windows系统".to_string())
-}
-
-#[cfg(not(target_os = "windows"))]
-#[command]
-async fn download_pdfium_dll(_app: tauri::AppHandle) -> Result<pdf_engine::PdfResult, String> {
-    Err("PDFium下载仅支持Windows系统".to_string())
 }
 
 // =====================================================
@@ -978,7 +934,7 @@ fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str>) -
 pub fn run() {
     #[cfg(target_os = "windows")]
     {
-        if let Err(err) = check_windows_version() {
+        if let Err(err) = platform::check_windows_version() {
             show_error_dialog(&err);
             std::process::exit(1);
         }
@@ -1002,10 +958,37 @@ pub fn run() {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
             }
+
+            // Start embedded Axum server
+            let server_port = {
+                let session_dir = std::env::temp_dir().join("ticketchan-sessions");
+                let rt = tokio::runtime::Handle::current();
+                let server = rt.block_on(async {
+                    tauri_server::EmbeddedServer::start(session_dir, None).await
+                });
+                match server {
+                    Ok(s) => {
+                        let port = s.port();
+                        // Store server in app state for graceful shutdown
+                        app.manage(std::sync::Mutex::new(Some(s)));
+                        log::info!("Embedded server started on port {}", port);
+                        port
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start embedded server: {}", e);
+                        3000u16 // fallback
+                    }
+                }
+            };
+
             {
                 use tauri::Manager;
                 let window = app.get_webview_window("main").unwrap();
                 let win = window.clone();
+
+                // Inject server port to frontend
+                let inject_js = format!("window.__serverPort = {};", server_port);
+                let _ = win.eval(&inject_js);
 
                 window.on_window_event(move |event| {
                     match event {

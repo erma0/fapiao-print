@@ -124,18 +124,26 @@ pub fn render_pdf_to_images(
                 let mut cursor = std::io::Cursor::new(&mut encoded_data);
 
                 if use_jpeg {
+                    // JPEG does not support alpha; convert RGBA → RGB before encoding
+                    let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
                     let jpeg_quality: u8 = 80;
                     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                         &mut cursor, jpeg_quality,
                     );
                     encoder.encode(
-                        img.as_raw(), bmp_w as u32, bmp_h as u32,
-                        image::ExtendedColorType::Rgba8,
+                        rgb.as_raw(), bmp_w as u32, bmp_h as u32,
+                        image::ExtendedColorType::Rgb8,
                     ).map_err(|e| format!("JPEG 编码失败 (第 {} 页): {}", page_idx + 1, e))?;
                 } else {
                     img.write_to(&mut cursor, image::ImageFormat::Png)
                         .map_err(|e| format!("PNG 编码失败 (第 {} 页): {}", page_idx + 1, e))?;
                 }
+            }
+
+            if encoded_data.is_empty() {
+                unsafe { (funcs.bitmap_destroy)(bitmap) };
+                unsafe { (funcs.close_page)(page) };
+                return Err(format!("PDF 页面 {} 渲染结果为空", page_idx + 1));
             }
 
             unsafe { (funcs.bitmap_destroy)(bitmap) };

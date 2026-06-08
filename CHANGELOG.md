@@ -1,5 +1,54 @@
 # 📋 更新日志
 
+## v2.1.0 — 跨平台 + Web 部署（feat/web-cross-platform）
+
+### 🌐 Web 部署支持
+
+- **Axum HTTP Server 嵌入**：新增 `server.rs`（942 行），25 个 REST API 端点覆盖全部发票功能
+- **Docker 一键部署**：`Dockerfile` + `docker-compose.yml` + `nginx.conf` + `deploy.sh`
+- **裸金属部署**：`ticketchan-server` 二进制 + `ticketchan.service` systemd 文件
+- **Session 管理**：`session.rs` — 24h TTL、定时清理、路径穿越防护、UUID 文件重命名
+- **SSE 进度推送**：PDF 生成进度通过 `EventSource` 实时推送，替代 Tauri event 系统
+- **100MB 上传限制**：Axum `RequestBodyLimitLayer` + Nginx `client_max_body_size` 双重保护
+- **可选 Token 认证**：`TICKETCHAN_AUTH_TOKEN` 环境变量启用 Bearer token 中间件
+
+### 🖥️ 跨平台桌面支持
+
+- **统一通信层（模式 B）**：Tauri 启动时 spawn 本地 Axum server，前端统一 `fetch()`，桌面版与 Web 版零差异
+- **`platform.rs`**（371 行）：平台抽象层，PDFium 加载/下载/打印机枚举/文件打开三平台实现
+- **Linux 打印机支持**：`list_printers()` + `get_default_printer_name()` 通过 CUPS `lpstat` 实现
+- **macOS 兼容**：PDFium 加载路径、文件打开 (`open` crate)、打印机 CUPS 接口
+- **PDFium 跨平台下载**：`download_pdfium_dll` 命令统一三平台（`.dll` / `.so` / `.dylib`），自动识别系统
+
+### 🏗️ 架构重构
+
+- **通信模式 B**：Tauri 退化为窗口壳，所有业务逻辑走 Axum HTTP localhost
+- **前端 `api.js`**（281 行）：统一适配层，`__api.call()` 运行时检测桌面/Web，自动路由 IPC/HTTP
+- **PDFium 模块拆分**：`pdfium_bindings.rs`（FFI）+ `pdfium_render.rs`（位图渲染）+ `pdfium_print.rs`（Windows GDI 矢量打印）
+- **Mutex → RwLock**：PDFium 全局锁升级，允许多线程并发渲染不同文档（2-4x 提升）
+- **JPEG 预览优化**：RGBA→RGB 颜色空间转换，A4@150dpi 传输体积缩减 6x
+
+### 🗑️ 冗余清理
+
+- **SumatraPDF 完整移除**：`find_sumatrapdf` / `print_with_sumatrapdf` / `SumatraPdfInfo` 全部删除，打印模式从 4 缩减到 3
+- **前端 `invoke()` 全部替换**：61 处 Tauri IPC 调用 → `__api.call()` HTTP（仅 6 个系统命令保留 IPC fallback）
+- **`download_pdfium_dll` 统一**：Windows/Linux/macOS 共享同一下载逻辑，消除重复代码
+
+### 🔒 安全增强
+
+- **Web 版路径穿越防护**：`Session::resolve_path()` — canonicalize + starts_with 校验，Web 模式拒绝绝对路径
+- **文件操作隔离**：`check_path_exists` / `copy_file` / `rename_file` / `write_text_file` — Web 模式限制在 session 目录
+- **优雅关机**：SIGTERM/SIGINT 信号处理 + CancellationToken 清理任务协同
+
+### 🐛 修复
+
+- JPEG 编码 RGBA→RGB 颜色空间转换（修复 PDFium 渲染图片颜色偏移）
+- 空 PDF 页面渲染返回错误而非空 data URL
+- `cancel_download` Web 版返回成功（Docker 内 PDFium 已内置）
+- 下载进度 UI 在 Web 版条件隐藏
+
+---
+
 ## v2.0.7 — XML 数电票 + 文件列表记忆 + 打印状态
 
 ### 📄 XML 数电票支持

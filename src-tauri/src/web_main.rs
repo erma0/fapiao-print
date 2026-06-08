@@ -6,12 +6,13 @@ use app_lib::server::{self, AppState, ProgressTracker};
 
 #[tokio::main]
 async fn main() {
-    // Simple logger init without env_logger dependency
     env_logger::init();
 
     let session_dir = PathBuf::from(
         std::env::var("TICKETCHAN_SESSION_DIR")
-            .unwrap_or_else(|_| "/tmp/ticketchan".to_string())
+            .unwrap_or_else(|_| {
+                std::env::temp_dir().join("ticketchan").to_string_lossy().to_string()
+            })
     );
     let frontend_dir = PathBuf::from(
         std::env::var("TICKETCHAN_FRONTEND_DIR")
@@ -22,9 +23,15 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
+    // Default: bind loopback only. Set TICKETCHAN_BIND_ADDR=0.0.0.0 for public access
+    // (only if auth_token is also configured or an external reverse proxy is used).
+    let bind_ip: std::net::IpAddr = std::env::var("TICKETCHAN_BIND_ADDR")
+        .ok()
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
 
     // Clean up stale sessions from previous runs
-    server::cleanup_all_sessions(&session_dir).await;
+    server::cleanup_all_sessions(&session_dir);
 
     // Create session directory
     std::fs::create_dir_all(&session_dir)
@@ -41,22 +48,39 @@ async fn main() {
         is_desktop: false,
     };
 
-    // Periodic session cleanup (every 30 minutes)
+    // Periodic session cleanup (every 30 minutes), cancellable via CancellationToken
+    let cleanup_token = tokio_util::sync::CancellationToken::new();
     let cleanup_state = state.clone();
+    let ct = cleanup_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1800));
         loop {
-            interval.tick().await;
-            server::cleanup_sessions(&cleanup_state, 86400).await; // 24h TTL
+            tokio::select! {
+                _ = ct.cancelled() => break,
+                _ = interval.tick() => {
+                    server::cleanup_sessions(&cleanup_state, 86400).await; // 24h TTL
+                }
+            }
         }
     });
 
     let app = server::build_router(state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from((bind_ip, port));
 
-    log::info!("发票酱 Web 服务启动于 http://{}", addr);
+    log::info!("发票酱 Web 服务启动于 http://{} (bind: {})", addr, bind_ip);
     let listener = tokio::net::TcpListener::bind(addr).await
         .expect("Failed to bind server port");
-    axum::serve(listener, app).await
+
+    // Graceful shutdown on SIGTERM / SIGINT (Ctrl+C)
+    let shutdown_signal = async move {
+        tokio::signal::ctrl_c().await
+            .expect("Failed to install Ctrl+C handler");
+        log::info!("收到关闭信号，正在优雅退出...");
+        cleanup_token.cancel();
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
         .expect("Server error");
 }

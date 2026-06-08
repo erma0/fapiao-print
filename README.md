@@ -3,13 +3,13 @@
 # 📄 发票酱
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
+[![Platform: Cross-platform](https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20macOS%20%7C%20Web-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.0.7-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.1.0-blue.svg)]()
 
 轻量桌面应用，专为批量打印电子发票设计。支持 PDF、OFD、图片等多格式导入，智能排版，一键打印或导出。
 
-提供 **轻量版** 和 **OCR 版**（含 PP-OCRv5 智能识别），单文件 exe 即开即用。
+提供 **轻量版** 和 **OCR 版**（含 PP-OCRv5 智能识别），支持 **Windows / Linux / macOS 桌面** 及 **Docker / 裸金属 Web 部署**。
 
 ## ✨ 功能特性
 
@@ -90,18 +90,35 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 
 从 [Releases](../../releases) 下载最新版本：
 
-| 文件 | 说明 |
-|------|------|
-| `发票酱_x64-setup.exe` | 轻量版安装包 |
-| `发票酱_x64_绿色版.exe` | 轻量版便携（单文件 exe，无需安装） |
-| `发票酱_x64_OCR版-setup.exe` | OCR 版安装包（含 PP-OCRv5） |
-| `发票酱_x64_OCR绿色版.zip` | OCR 版便携（exe + models/） |
+### 桌面版
+
+| 文件 | 平台 | 说明 |
+|------|------|------|
+| `发票酱_x64-setup.exe` | Windows | 轻量版安装包 |
+| `发票酱_x64_绿色版.exe` | Windows | 轻量版便携（单文件 exe） |
+| `发票酱_x64_OCR版-setup.exe` | Windows | OCR 版安装包（含 PP-OCRv5） |
+| `发票酱_x64_OCR绿色版.zip` | Windows | OCR 版便携（exe + models/） |
+| `ticketchan_x64.deb` | Linux | Debian/Ubuntu 安装包 |
+| `ticketchan_x86_64.AppImage` | Linux | 通用 Linux 便携版 |
+| `ticketchan_x64.dmg` | macOS | macOS 安装镜像 |
+
+### Web 版
+
+```bash
+# Docker
+docker run -d -p 3000:3000 -v ticketchan-sessions:/tmp/ticketchan ghcr.io/erma0/ticketchan-server
+
+# 裸金属（Linux）
+sudo apt install libpdfium-dev
+cargo install ticketchan-server
+TICKETCHAN_FRONTEND_DIR=/opt/ticketchan/frontend ticketchan-server
+```
 
 > 💡 文字型 PDF / OFD 发票选轻量版即可自动提取金额和销售方信息；图片型 PDF 和图片需 OCR 版。
 
-**系统要求**：仅支持 **Windows 10 1803 及以上版本** 或 **Windows 11**。
+**桌面系统要求**：Windows 10 1803+ / Windows 11 / Linux (glibc 2.28+) / macOS 12+。
 
-**⚠️ 不支持 Windows 7/8**：依赖的 WebView2 和系统 PDF 组件已停止支持，无法正常运行。
+**⚠️ 不支持 Windows 7/8**：依赖的 WebView2 和系统 PDF 组件已停止支持。
 
 ## 📋 使用说明
 
@@ -115,14 +132,15 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| 前端 | 原生 HTML/CSS/JS | 模块化（app / ocr / layout / print），零依赖框架 |
-| 后端 | Tauri 2.x (Rust) | 轻量桌面框架，Rust 条件编译管理功能开关 |
+| 前端 | 原生 HTML/CSS/JS | 模块化（app / ocr / layout / print / api），零依赖框架 |
+| 通信 | Axum HTTP Server（模式 B） | Tauri 启动时 spawn 本地 server，桌面+Web 统一 fetch() |
+| 桌面框架 | Tauri 2.x (Rust) | 跨平台窗口壳，Rust 条件编译管理功能开关 |
 | PDF 渲染 | WinRT + PDFium 双引擎 | WinRT 原生渲染优先，自动 fallback PDFium（Chromium 内核） |
 | PDF 生成 | printpdf 0.9 + lopdf 0.39 | JPEG 直通零质量损失、PDF 页面 Form XObject 全布局直通 |
-| OFD/XML 解析 | Rust 独立 crate (`invoice-engine/`) | 矢量 SVG 渲染 + 发票 XML/数电票字段直提 + 红章 Appearance 偏移叠加 + DrawParam 继承链 + ImageMask 遮罩合成 |
-| OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先 + 坐标回退，对比度增强，Lanczos3 锐化（OCR 版可选） |
-| 图像处理 | image 0.25 (Rust) | 原生 WebP/TIFF 支持，kamadak-exif 方向自动修正 |
-| 打印 | Print Spooler API + PDFium + SumatraPDF + ShellExecuteW (Win32) | 静默打印（PDFium 直打 DC / SumatraPDF CLI）/ 弹窗确认 / PDF 阅读器 |
+| OFD/XML 解析 | Rust 独立 crate (`invoice-engine/`) | 矢量 SVG 渲染 + 发票 XML/数电票字段直提 |
+| OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先 + 坐标回退，对比度增强（OCR 版可选） |
+| 打印 | Print Spooler API + PDFium + open crate | 静默打印 / 弹窗确认 / PDF 阅读器（Windows）/ 系统打开（Linux/macOS） |
+| Web 部署 | Axum 0.8 + Tokio + Nginx + Docker | REST API + SSE 进度 + Session 管理 + Token 认证 |
 
 ## 📁 项目结构
 
@@ -130,79 +148,92 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 ticketchan/
 ├── src/                            # 前端
 │   ├── index.html / styles.css
+│   ├── api.js                      # 统一通信适配层（桌面+Web）
 │   ├── app.js                      # 主入口、状态、文件加载
 │   ├── ocr.js                      # OCR 提取（文本优先 + 坐标回退）
 │   ├── layout.js                   # calculateLayout() + 预览渲染
 │   └── print.js                    # 打印 / 导出 PDF
 ├── src-tauri/                      # Tauri / Rust 后端
 │   ├── src/
-│   │   ├── main.rs                 # 入口
-│   │   ├── lib.rs                  # 命令、拖放、进程管理、OFD 解析
-│   │   ├── pdf_engine.rs           # PDF 生成（JPEG 直通 / 全布局直通）、WinRT 渲染、OCR
-│   │   └── pdfium_print.rs         # PDFium 矢量打印（直打打印机 DC）
-│   ├── invoice-engine/              # 发票引擎独立 crate（OFD SVG 渲染 + XML 数电票解析）
-│   │   ├── Cargo.toml              # 通过 path 依赖引入主项目
-│   │   └── src/lib.rs              # parse_ofd → OfdResult { svg, invoice_info } / parse_xml_invoice
-│   ├── models/                     # PP-OCRv5 MNN 模型（OCR 版打包用）
-│   ├── Cargo.toml                  # ocr feature flag + lopdf 0.39
+│   │   ├── main.rs                 # 桌面入口
+│   │   ├── lib.rs                  # Tauri 命令、拖放、进程管理
+│   │   ├── pdf_engine.rs           # PDF 生成/渲染/文字提取/OCR
+│   │   ├── pdfium_bindings.rs      # PDFium FFI 绑定（跨平台）
+│   │   ├── pdfium_render.rs        # PDFium 位图渲染（跨平台）
+│   │   ├── pdfium_print.rs         # PDFium GDI 矢量打印（Windows）
+│   │   ├── platform.rs             # 平台抽象层（Win/Linux/macOS）
+│   │   ├── server.rs               # Axum HTTP Server（REST API + SSE）
+│   │   ├── session.rs              # Web Session 管理
+│   │   ├── tauri_server.rs         # Tauri 嵌入 server 启动
+│   │   └── web_main.rs             # Web 版入口
+│   ├── invoice-engine/              # 发票引擎（OFD SVG + XML 解析）
+│   ├── models/                     # PP-OCRv5 MNN 模型
+│   ├── Cargo.toml                  # ocr feature flag
 │   ├── tauri.conf.json             # 轻量版配置
-│   └── tauri.ocr.conf.json         # OCR 版配置（含 models）
+│   └── tauri.ocr.conf.json         # OCR 版配置
+├── Dockerfile                      # Docker 镜像构建
+├── docker-compose.yml              # Docker 编排
+├── nginx.conf                      # 反向代理配置
+├── ticketchan.service              # systemd 服务文件
+├── deploy.sh                       # 一键部署脚本
 ├── scripts/
-│   ├── build-all.js                # 一键全量构建（4 产物）
+│   ├── build-all.js                # 一键全量构建
 │   └── bump-version.js             # 版本号同步
 └── package.json
 ```
 
 ## 🚀 开发
 
-**环境要求**：Node.js 18+、Rust 1.77+、Windows 10/11
+**环境要求**：Node.js 18+、Rust 1.77+、Windows 10/11 / Linux / macOS
 
 ```bash
 npm install
 
-# 开发
+# 桌面版开发
 npm run dev          # 轻量版
 npm run dev:ocr      # OCR 版
+
+# Web 版开发
+cd src-tauri
+cargo run --bin ticketchan-server
+# → http://localhost:3000
+
+# Docker 构建
+docker build -t ticketchan-server .
+docker-compose up -d
 
 # 构建
 npm run build        # 轻量版
 npm run build:ocr    # OCR 版
-npm run build:all    # 一键全量构建（4 产物）
+npm run build:all    # 一键全量构建
 
 # 版本号
-npm run bump 1.9.8   # 同步 package.json → Cargo.toml → tauri.conf.json
+npm run bump 2.1.0   # 同步 package.json → Cargo.toml → tauri.conf.json
 ```
 
 ## 🗺 路线图
 
-- [x] OFD 完整支持（矢量渲染 + 信息直提 + 印章 + 字体保真）
-- [x] PDF 全布局直通（JPEG 零损失 + lopdf Form XObject）
-- [x] 单票独立调整（预览拖拽/缩放 + PDF 按参数裁剪）
+- [x] OFD 完整支持
+- [x] PDF 全布局直通
+- [x] 单票独立调整
 - [x] Print Spooler API 静默打印
-- [x] PDFium 矢量静默打印（Chromium PDFium 直打打印机 DC）
+- [x] PDFium 矢量静默打印
 - [x] OCR Feature Flag 双版本构建
-- [x] PDF 文字层提取（轻量版无需 OCR 也能识别发票信息）
-- [x] EXIF 方向 / PDF Rotate / CropBox 归一化自动修正
-- [x] OFD 自闭合标签解析修复 + 字段级联保护
-- [x] OFD ImageMask 遮罩兼容（iloveofd 等二次转换 OFD 红章黑色背景修复）
-- [x] 设置持久化 — 关闭后自动记忆所有设置
-- [x] 金额校验可视化 — ⚠ 警告标识 + hover 验证详情
-- [x] 预览加载 2-3x 加速 — JPEG 预览 + DPI 150
-- [x] PDF 文字提取批量并行 — rayon 加速 + 按文件分组
-- [x] 单票调整九宫格快速对齐 + 滚轮微调 + 调整记忆（v2.0.1）
-- [x] 单票调整滚轮缩放 + 拖拽约束动态化 + 放大上限 3x + 编辑态溢出预览（v2.0.2）
-- [x] 发票汇总表导出 — 可编辑预览 + CSV + 持久化记忆（v2.0.3）
-- [x] PDF 印章烘焙 — 标注直通输出（v2.0.4）
-- [x] 批量重命名发票文件 — 预设模板 + 自定义字段（v2.0.5）
-- [x] 备注作为命名字段 + 汇总表行内编辑（v2.0.6）
-- [x] 品牌升级 — 正式更名「发票酱 (TicketChan)」（v2.0.6）
-- [x] XML 数电票支持 — `<EInvoice>` 格式解析（v2.0.7）
-- [x] 文件列表记忆 — 启动时自动恢复上次打开的发票（v2.0.7）
-- [x] 打印状态追踪 — 已打印/未打印过滤 + 自动标记（v2.0.7）
+- [x] PDF 文字层提取
+- [x] 设置持久化 / 金额校验可视化
+- [x] 发票汇总表导出
+- [x] 批量重命名发票文件
+- [x] XML 数电票支持
+- [x] 文件列表记忆 / 打印状态追踪（v2.0.7）
+- [x] **跨平台桌面 + Web 部署**（v2.1.0）
+- [ ] Docker OCR 版（MNN 模型）
+- [ ] LDAP/OIDC 用户认证
+- [ ] PWA 离线支持
+- [ ] 水平扩展（对象存储 + Redis Session）
 
 ## 🤖 关于此项目
 
-本项目由 AI 辅助生成，历经 170+ 轮迭代。主要攻克：Tauri 2.x 对话框死锁、WebView2 拖放失效、WinRT COM 接口适配、ocr-rs 条件编译集成、OFD 矢量渲染（DrawParam 继承链 / 文字排版 / 印章偏移 / 自闭合标签陷阱 / ImageMask 遮罩合成）、PDF 引擎 JPEG 直通与 lopdf Form XObject 全布局直通、PDFium 矢量打印（DLL 生命周期管理 / 直打打印机 DC / SEH 原生崩溃保护 / DEVMODE 完整缓冲区）、PDF 文字层坐标提取（批量 rayon 并行 / 按文件分组回退）、预览 DPI/JPEG 加速、设置持久化、打印流程解耦、金额校验可视化、排版份数批量设置、单票独立调整增强（九宫格快速对齐 / 滚轮缩放 / 拖拽约束动态化 / 调整记忆持久化）、PDF 印章烘焙、发票汇总表导出、批量文件重命名、XML 数电票解析、文件列表记忆、打印状态追踪等。
+本项目由 AI 辅助生成，历经 180+ 轮迭代。主要攻克：Tauri 2.x 对话框死锁、WebView2 拖放失效、WinRT COM 接口适配、ocr-rs 条件编译集成、OFD 矢量渲染（DrawParam 继承链 / 印章偏移 / ImageMask 遮罩合成）、PDF 引擎 JPEG 直通与 lopdf Form XObject 全布局直通、PDFium 矢量打印（DLL 生命周期管理 / SEH 原生崩溃保护）、PDF 文字层坐标提取（rayon 并行）、跨平台改造（Axum HTTP Server 嵌入 / 平台抽象层 / Docker Web 部署 / SSE 进度推送）。
 
 ## 📄 许可证
 

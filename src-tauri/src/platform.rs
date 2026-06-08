@@ -318,12 +318,54 @@ pub fn get_default_printer_name() -> Option<String> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn list_printers() -> Vec<PrinterInfo> {
-    // TODO: Implement with lpstat for Linux/CUPS
-    Vec::new()
+    // Use CUPS lpstat to enumerate printers on Linux/macOS
+    let output = std::process::Command::new("lpstat")
+        .arg("-v")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.lines()
+                .filter_map(|line| {
+                    // Format: "device for PRINTER_NAME: uri"
+                    let prefix = "device for ";
+                    if let Some(pos) = line.find(prefix) {
+                        let rest = &line[pos + prefix.len()..];
+                        if let Some(colon) = rest.find(':') {
+                            let name = rest[..colon].trim().to_string();
+                            return Some(PrinterInfo {
+                                name,
+                                is_default: false,
+                            });
+                        }
+                    }
+                    None
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn get_default_printer_name() -> Option<String> {
-    // TODO: Implement with lpstat for Linux/CUPS
-    None
+    // Use lpstat -d to get the default printer on Linux/macOS
+    let output = std::process::Command::new("lpstat")
+        .arg("-d")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            // Format: "system default destination: PRINTER_NAME"
+            let prefix = "system default destination: ";
+            if let Some(pos) = text.find(prefix) {
+                let name = text[pos + prefix.len()..].trim().to_string();
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }

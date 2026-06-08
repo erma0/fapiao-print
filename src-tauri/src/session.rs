@@ -59,21 +59,34 @@ impl Session {
     }
 
     /// Resolve a virtual path to an actual disk path.
-    /// Desktop mode: absolute paths pass through directly.
-    /// Web mode: virtual filenames are resolved via the files map or session directory.
-    pub fn resolve_path(&self, virtual_path: &str) -> Result<PathBuf, String> {
-        // 1. If it's an absolute path that exists on disk, return it directly (desktop mode)
+    /// - Desktop mode (is_desktop=true): absolute paths pass through directly.
+    /// - Web mode (is_desktop=false): only session-relative paths are allowed,
+    ///   absolute paths are rejected to prevent path traversal attacks.
+    pub fn resolve_path(&self, virtual_path: &str, is_desktop: bool) -> Result<PathBuf, String> {
         let path = Path::new(virtual_path);
-        if path.is_absolute() && path.exists() {
-            return Ok(path.to_path_buf());
+
+        if is_desktop {
+            // Desktop mode: absolute paths pass through (Tauri file dialog provides real paths)
+            if path.is_absolute() {
+                if path.exists() {
+                    return Ok(path.to_path_buf());
+                }
+                return Err(format!("文件不存在: {}", virtual_path));
+            }
+            // Desktop with relative path: join with session dir (unusual but handle gracefully)
+        } else {
+            // Web mode: reject absolute paths to prevent path traversal
+            if path.is_absolute() {
+                return Err("Web 模式不允许使用绝对路径".to_string());
+            }
         }
 
-        // 2. Look up in the files map
+        // 1. Look up in the files map (takes priority over directory scan)
         if let Some(f) = self.files.get(virtual_path) {
             return Ok(f.disk_path.clone());
         }
 
-        // 3. Try joining with session directory + canonicalize check
+        // 2. Join with session directory + canonicalize check (path traversal protection)
         let real = self.dir.join(virtual_path);
         if !real.exists() {
             return Err(format!("文件不存在: {}", virtual_path));

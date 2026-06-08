@@ -6,7 +6,7 @@
  */
 var __api = (function () {
     var _serverPort = window.__serverPort || 3000;
-    var _baseUrl = 'http://127.0.0.1:' + _serverPort;
+    var _baseUrl = window.__apiBaseUrl || ('http://127.0.0.1:' + _serverPort);
     var _sessionId = '';
     var _isDesktop = !!window.__TAURI_INTERNALS__;
 
@@ -17,6 +17,8 @@ var __api = (function () {
         'plugin:dialog|save',
         'plugin:event|listen',
         'plugin:event|unlisten',
+        'download_pdfium_dll',
+        'open_invoice_files',  // Desktop: file dialog → direct IPC (no multipart HTTP)
     ];
 
     function _isIpcCommand(cmd) {
@@ -31,17 +33,23 @@ var __api = (function () {
             'extract_pdf_text': '/api/v1/extract_pdf_text',
             'extract_pdf_texts': '/api/v1/extract_pdf_texts',
             'generate_pdf_from_layout': '/api/v1/generate_pdf',
+            'get_printers': '/api/v1/printers',
             'list_printers': '/api/v1/printers',
             'pdfium_print': '/api/v1/print',
-            'sumatra_print': '/api/v1/print',
+            'pdfium_print_pdf': '/api/v1/print',
+            'pdfium_vector_print': '/api/v1/print',
+            'print_pdf_file': '/api/v1/print',
             'shell_execute_print': '/api/v1/print',
             'ocr_image': '/api/v1/ocr_image',
             'ocr_pdf_page': '/api/v1/ocr_pdf_page',
             'parse_ofd': '/api/v1/parse_ofd',
             'parse_xml_invoice': '/api/v1/parse_xml_invoice',
             'open_ofd_images': '/api/v1/open_ofd_images',
-            'open_invoice_files': '/api/v1/upload',
+            'open_invoice_files': null,  // Desktop-only: file dialog → IPC invoke
             'check_path_exists': '/api/v1/check_path_exists',
+            'check_ocr_available': null,  // Desktop-only: OCR availability check
+            'check_winrt_pdf': null,  // Desktop-only: WinRT PDF check
+            'check_pdfium_available': '/api/v1/health',
             'get_config': '/api/v1/get_config',
             'get_app_version': '/api/v1/get_app_version',
             'cancel_download': '/api/v1/cancel_download',
@@ -51,8 +59,9 @@ var __api = (function () {
             'write_text_file': '/api/v1/write_text_file',
             'get_temp_dir': '/api/v1/get_temp_dir',
             'get_downloads_dir': '/api/v1/get_downloads_dir',
-            'check_pdfium_available': '/api/v1/health',
-            'download_pdfium_dll': '/api/v1/cancel_download', // Web: no download needed
+            'download_pdfium_dll': '/api/v1/health', // Web: no download needed, health check confirms availability
+            'open_file': null,   // Desktop-only: open file with system app
+            'open_url': null,    // Desktop-only: open URL in browser
         };
         return map[cmd] || null;
     }
@@ -70,24 +79,31 @@ var __api = (function () {
             return _invokeTauri(cmd, params);
         }
 
+        // Special handling: check_ocr_available in Web mode returns false (no OCR in web build)
+        if (cmd === 'check_ocr_available') {
+            if (_isDesktop) return _invokeTauri(cmd, params);
+            return false;
+        }
+
         var endpoint = _mapCommandToEndpoint(cmd);
-        if (!endpoint) {
-            // Fallback to Tauri IPC for unmapped commands on desktop
+
+        // Desktop-only commands (mapped to null): fallback to Tauri IPC on desktop, error on web
+        if (endpoint === null) {
             if (_isDesktop) {
                 return _invokeTauri(cmd, params);
             }
             throw new Error('Command not available in Web mode: ' + cmd);
         }
 
-        // Special handling for file upload
-        if (cmd === 'open_invoice_files') {
-            return _uploadFiles(params);
-        }
-
         // Special handling for health check (returns different format)
         if (cmd === 'check_pdfium_available') {
             var resp = await _fetch(endpoint, {});
             return resp.data && resp.data.pdfium === true;
+        }
+
+        // Special handling: download_pdfium_dll in Web mode is a no-op
+        if (cmd === 'download_pdfium_dll' && !_isDesktop) {
+            return { success: true, message: 'Web 版本无需下载 PDFium' };
         }
 
         // Standard POST request
@@ -139,19 +155,8 @@ var __api = (function () {
     }
 
     async function _uploadFiles(params) {
-        // Desktop: use Tauri file dialog + server open_invoice_files
-        if (_isDesktop && params && params.paths) {
-            var body = _addSessionId({ paths: params.paths });
-            var result = await _fetch('/api/v1/upload', body);
-            if (result.ok && result.data) {
-                _sessionId = result.data.sessionId || _sessionId;
-                return result.data.files || result.data;
-            }
-            return result.data;
-        }
-
-        // Web: use multipart upload
-        // This is handled by the drag/drop or file input handler
+        // Desktop: open_invoice_files is handled by IPC (see _ipcOnly);
+        // this function is only called for Web multipart uploads.
         throw new Error('Use uploadFilesFromInput() for Web mode');
     }
 
@@ -211,9 +216,62 @@ var __api = (function () {
         return _baseUrl;
     }
 
+    // Wait for embedded server to be ready (desktop mode: poll /api/v1/health up to 5s)
+    var _serverReady = false;
+    async function init() {
+        if (!_isDesktop) { _serverReady = true; return true; }
+        for (var i = 0; i < 50; i++) {
+            try {
+                var resp = await fetch('http://127.0.0.1:' + _serverPort + '/api/v1/health');
+                if (resp.ok) { _serverReady = true; return true; }
+            } catch(e) {}
+            await new Promise(function(r) { setTimeout(r, 100); });
+        }
+        console.warn('Embedded server not ready after 5s');
+        return false;
+    }
+
+    // SSE progress listener for long-running tasks (e.g., PDF generation)
+    function listen(taskId, callback) {
+        var url = (_isDesktop ? 'http://127.0.0.1:' + _serverPort : '') + '/api/v1/progress/' + taskId;
+        var source = new EventSource(url);
+        source.onmessage = function(e) {
+            try { callback(JSON.parse(e.data)); } catch(ex) { callback(e.data); }
+        };
+        source.onerror = function() { source.close(); };
+        return { close: function() { source.close(); } };
+    }
+
+    // Download file: desktop opens with system app, web triggers browser download
+    function downloadFile(sessionId, filename) {
+        if (_isDesktop) {
+            call('open_file', { path: filename });
+        } else {
+            var a = document.createElement('a');
+            a.href = _baseUrl + '/api/v1/download/' + sessionId + '/' + encodeURIComponent(filename);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    }
+
+    // Open URL: desktop uses system browser, web uses window.open
+    function openUrl(url) {
+        if (_isDesktop) {
+            call('open_url', { url: url });
+        } else {
+            window.open(url, '_blank');
+        }
+    }
+
     return {
+        init: init,
         call: call,
+        listen: listen,
         uploadFilesFromInput: uploadFilesFromInput,
+        downloadFile: downloadFile,
+        openUrl: openUrl,
         setServerPort: setServerPort,
         setSessionId: setSessionId,
         getSessionId: getSessionId,

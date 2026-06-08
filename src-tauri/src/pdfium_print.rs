@@ -167,26 +167,29 @@ pub fn pdfium_vector_print(
 
             let render_flags = FPDF_ANNOT | FPDF_PRINTING;
 
-            let seh_result = unsafe {
-                SafeCallRenderPage(
-                    funcs.render_page,
-                    print_dc.0 as *mut c_void,
-                    page,
-                    0, 0, printer_w, printer_h,
-                    0,
-                    render_flags,
-                )
-            };
+            // Try vector rendering via FPDF_RenderPage (Windows-only)
+            if let Some(render_page_fn) = funcs.render_page {
+                let seh_result = unsafe {
+                    SafeCallRenderPage(
+                        render_page_fn,
+                        print_dc.0 as *mut c_void,
+                        page,
+                        0, 0, printer_w, printer_h,
+                        0,
+                        render_flags,
+                    )
+                };
 
-            if seh_result == 0 {
-                unsafe { (funcs.close_page)(page); }
-                return Ok(true);
+                if seh_result == 0 {
+                    unsafe { (funcs.close_page)(page); }
+                    return Ok(true);
+                }
+
+                log::warn!(
+                    "FPDF_RenderPage crashed (SEH code: {}), falling back to bitmap for page {}",
+                    seh_result, page_idx + 1
+                );
             }
-
-            log::warn!(
-                "FPDF_RenderPage crashed (SEH code: {}), falling back to bitmap for page {}",
-                seh_result, page_idx + 1
-            );
 
             let page_w = unsafe { (funcs.get_page_width_f)(page) };
             let page_h = unsafe { (funcs.get_page_height_f)(page) };

@@ -6,13 +6,14 @@ use crate::server::{self, AppState, ProgressTracker};
 
 pub struct EmbeddedServer {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    cleanup_token: tokio_util::sync::CancellationToken,
     port: u16,
 }
 
 impl EmbeddedServer {
     pub async fn start(session_dir: PathBuf, auth_token: Option<String>) -> Result<Self, String> {
         // Clean up stale sessions
-        server::cleanup_all_sessions(&session_dir).await;
+        server::cleanup_all_sessions(&session_dir);
         std::fs::create_dir_all(&session_dir)
             .map_err(|e| format!("创建 session 目录失败: {}", e))?;
 
@@ -29,13 +30,19 @@ impl EmbeddedServer {
             is_desktop: true,
         };
 
-        // Periodic session cleanup
+        // Periodic session cleanup (cancellable via CancellationToken)
+        let cleanup_token = tokio_util::sync::CancellationToken::new();
         let cleanup_state = state.clone();
+        let ct = cleanup_token.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(1800));
             loop {
-                interval.tick().await;
-                server::cleanup_sessions(&cleanup_state, 86400).await;
+                tokio::select! {
+                    _ = ct.cancelled() => break,
+                    _ = interval.tick() => {
+                        server::cleanup_sessions(&cleanup_state, 86400).await;
+                    }
+                }
             }
         });
 
@@ -72,7 +79,7 @@ impl EmbeddedServer {
 
         log::info!("Embedded server started on 127.0.0.1:{}", port);
 
-        Ok(Self { shutdown_tx, port })
+        Ok(Self { shutdown_tx, cleanup_token, port })
     }
 
     pub fn port(&self) -> u16 {
@@ -80,6 +87,7 @@ impl EmbeddedServer {
     }
 
     pub async fn shutdown(self) {
+        self.cleanup_token.cancel();
         let _ = self.shutdown_tx.send(());
         log::info!("Embedded server shut down");
     }

@@ -44,7 +44,9 @@ pub struct PdfiumFuncs {
     pub get_page_width_f: FnGetPageWidthF,
     pub get_page_height_f: FnGetPageHeightF,
     pub load_page: FnLoadPage,
-    pub render_page: FnRenderPage,
+    /// FPDF_RenderPage — Windows-only GDI vector printing function.
+    /// Not available in Linux/macOS PDFium builds; None on those platforms.
+    pub render_page: Option<FnRenderPage>,
     pub close_page: FnClosePage,
     pub close_document: FnCloseDocument,
     pub get_last_error: FnGetLastError,
@@ -59,6 +61,15 @@ pub struct PdfiumFuncs {
 pub struct PdfiumState {
     pub _lib: libloading::Library,
     pub funcs: PdfiumFuncs,
+}
+
+impl Drop for PdfiumState {
+    fn drop(&mut self) {
+        // Best-effort: call FPDF_DestroyLibrary to free PDFium internal resources.
+        // On Windows desktop this is rarely reached (TerminateProcess kills the
+        // process first), but for the long-running web server it's beneficial.
+        unsafe { (self.funcs._destroy_library)(); }
+    }
 }
 
 static PDFIUM: LazyLock<std::sync::RwLock<Option<PdfiumState>>> =
@@ -107,8 +118,7 @@ fn get_pdfium_funcs(lib: &libloading::Library) -> Result<PdfiumFuncs, String> {
         get_page_width_f: get_fn!(b"FPDF_GetPageWidthF\0", FnGetPageWidthF)?,
         get_page_height_f: get_fn!(b"FPDF_GetPageHeightF\0", FnGetPageHeightF)?,
         load_page: get_fn!(b"FPDF_LoadPage\0", FnLoadPage)?,
-        render_page: get_fn!(b"FPDF_RenderPage\0", FnRenderPage)
-            .map_err(|e| format!("FPDF_RenderPage 不可用 (需要 Windows 版 PDFium): {}", e))?,
+        render_page: get_fn!(b"FPDF_RenderPage\0", FnRenderPage).ok(),
         close_page: get_fn!(b"FPDF_ClosePage\0", FnClosePage)?,
         close_document: get_fn!(b"FPDF_CloseDocument\0", FnCloseDocument)?,
         get_last_error: get_fn!(b"FPDF_GetLastError\0", FnGetLastError)?,
