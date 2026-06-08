@@ -732,9 +732,7 @@ async fn get_config() -> Json<ApiResponse> {
 }
 
 async fn get_app_version() -> Json<ApiResponse> {
-    Json(ApiResponse::ok(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-    })))
+    Json(ApiResponse::ok(json!(env!("CARGO_PKG_VERSION"))))
 }
 
 async fn cancel_download() -> Json<ApiResponse> {
