@@ -67,9 +67,9 @@ var __api = (function () {
     }
 
     function _addSessionId(params) {
-        if (_sessionId) {
-            params.sessionId = _sessionId;
-        }
+        // Always include sessionId field to satisfy server-side struct deserialization.
+        // Desktop mode uses empty string (default "_desktop" session), Web mode uses real session id.
+        params.sessionId = _sessionId || '';
         return params;
     }
 

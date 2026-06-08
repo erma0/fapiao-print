@@ -885,25 +885,32 @@ fn get_session(state: &AppState, session_id: &str) -> Result<Session, AppError> 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RenderPdfRequest {
+    #[serde(default)]
     session_id: String,
     pdf_path: String,
+    #[serde(default)]
     dpi: Option<u32>,
+    #[serde(default)]
     use_jpeg: Option<bool>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtractPdfTextRequest {
+    #[serde(default)]
     session_id: String,
     pdf_path: String,
+    #[serde(default)]
     page_index: u32,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtractPdfTextsRequest {
+    #[serde(default)]
     session_id: String,
     pdf_path: String,
+    #[serde(default)]
     page_indices: Vec<u32>,
 }
 

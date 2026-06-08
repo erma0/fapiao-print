@@ -235,8 +235,6 @@ pub struct FileData {
 /// Rendered PDF page image
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RenderedPage {
     pub index: u32,
     /// Base64-encoded image data URL (PNG or JPEG)
