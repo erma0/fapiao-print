@@ -164,9 +164,13 @@ pub fn build_router(state: AppState) -> Router {
         ;
 
     let cors = if state.is_desktop {
+        // Desktop: Tauri WebView origin is http://127.0.0.1:{port} (different from server port),
+        // and POST with Content-Type triggers CORS preflight. Allow origins + headers freely
+        // since the server only listens on 127.0.0.1 (not accessible from network).
         CorsLayer::new()
             .allow_origin(Any)
-            .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+            .allow_methods(Any)
+            .allow_headers(Any)
     } else {
         CorsLayer::permissive()
     };
