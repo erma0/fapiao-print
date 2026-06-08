@@ -940,7 +940,7 @@ async fn get_downloads_dir() -> Json<ApiResponse> {
     let downloads = dirs::download_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "/tmp".to_string());
-    Json(ApiResponse::ok(json!({ "path": downloads })))
+    Json(ApiResponse::ok(json!(downloads)))
 }
 
 // === Helper ===
