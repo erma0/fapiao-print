@@ -17,7 +17,6 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::compression::CompressionLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::session::{Session, FileInfo, detect_file_type, is_allowed_extension};
@@ -193,7 +192,9 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/v1", api_routes)
         .with_state(state.clone())
         .layer(cors)
-        .layer(CompressionLayer::new())
+        // Note: CompressionLayer removed — it caused 413 on large generate_pdf payloads
+        // in some tower-http 0.6 / hyper 1.x combinations. Desktop is localhost,
+        // gzip offers no benefit. Web mode relies on nginx for compression.
         .layer(CatchPanicLayer::new());
 
     // Optional auth token protection for Web (non-desktop) deployments.
