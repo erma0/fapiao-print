@@ -285,6 +285,13 @@ async function processFileList(fileList) {
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   toastLoading('加载中 0/' + total);
 
+  var loadPromises = fileList.map(function(file) {
+    return loadFileFromFile(file).catch(function(err) {
+      console.error('Load file error:', file.name, err);
+      return null;
+    });
+  });
+
   var startTime = Date.now();
   var updateIntervalMs = Math.max(50, Math.min(150, Math.floor(500 / total)));
   var hasNewResults = false;
@@ -298,14 +305,10 @@ async function processFileList(fileList) {
 
   var lastToastUpdate = 0;
   for (var fdIdx = 0; fdIdx < fileList.length; fdIdx++) {
-    var file = fileList[fdIdx];
-    var r = null;
-    try {
-      r = await loadFileFromFile(file);
-    } catch(err) {
-      console.error('Load file error:', file.name, err);
-    }
+    var r = await loadPromises[fdIdx];
     completed++;
+
+    var file = fileList[fdIdx];
 
     var phIdx = -1;
     for (var i = 0; i < S.files.length; i++) {
