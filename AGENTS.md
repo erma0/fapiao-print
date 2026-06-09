@@ -153,7 +153,6 @@ rm -f target/release/{fapiao-print.exe,ticketchan.exe,发票打印工具*.exe}
 | `list_printers()` | `EnumPrintersW` | `lpstat -v` (CUPS) |
 | `get_default_printer_name()` | Win32 默认打印机 | CUPS 默认 |
 | `open_file()` | `ShellExecuteW` | `xdg-open` / `open` crate |
-| `has_winrt_pdf()` | WinRT API 可用 | 返回 false |
 
 ### Web 部署
 
@@ -180,15 +179,13 @@ rm -f target/release/{fapiao-print.exe,ticketchan.exe,发票打印工具*.exe}
 - 打印三模式: PDF阅读器(默认) / 弹窗确认 / 静默打印PDFium — **SumatraPDF 已在 v2.1.0 完全移除**
 - **PDF阅读器模式已知限制**: 通过 `ShellExecuteW` 委托系统默认 PDF 阅读器打印,`printto` 动词能否指定打印机取决于阅读器实现 (Edge/Chrome 内置查看器不支持),多数情况下 fallback 到 `print` 动词使用默认打印机,**无法可靠控制打印机选择**
 
-### PDF 渲染双引擎 (v1.9.10+)
+### PDF 渲染 (PDFium 唯一)
 
-首选 **WinRT PDF** (Windows 系统组件) → 失败时自动回退 **PDFium 渲染**
+v2.1.0 移除 WinRT 纯渲染路径(死代码),`render_pdf_pages_pdfium()` 是唯一渲染入口:
 
-- 启动检测: `check_winrt_pdf_available()` 创建临时 PDF 测试 WinRT `PdfDocument` API
-- WinRT 渲染: `render_pdf_pages()` — `windows::Data::Pdf::PdfDocument` + `StorageFile`
-- PDFium 渲染: `render_pdf_pages_pdfium()` — `FPDF_LoadMemDocument` + `FPDF_RenderPageBitmap` → PNG
-- 前端 fallback 链: `_winrtPdfAvailable` 标志 → WinRT 失败自动切换 PDFium
-- PDFium 位图渲染: `pdfium_render::render_pdf_to_images()` — BGRA→RGBA 转换 + PNG 编码
+- `FPDF_LoadMemDocument` + `FPDF_RenderPageBitmap` → PNG/JPEG
+- `pdfium_render::render_pdf_to_images()` — BGRA→RGBA 转换 + 编码
+- 预览 JPEG 80% / 150 DPI,打印 300 DPI 矢量走 `generate_pdf_from_layout` 直通管道
 
 ### 预览与打印 DPI 分离 (v1.10.5)
 

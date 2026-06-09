@@ -27,7 +27,7 @@ OFD（开放版式文档）是国家标准电子发票格式,本工具提供原�
 - **XML 数电票**（v2.0.7）: 解析 `<EInvoice>` 格式,提取发票号码/日期/金额/买卖方信息,汇总表、CSV 导出、批量重命名全兼容;纯数据格式不参与排版打印
 - **文件列表记忆**（v2.0.7）: 可选开关,启动时自动恢复上次打开的文件列表,仅记忆文件路径
 - **打印状态追踪**（v2.0.7）: 三种过滤（全部/未打印/已打印）,打印后自动标记绿色 ✓,状态持久化
-- **PDF 渲染双引擎**（v1.10.0+）: 首选 WinRT 原生渲染（`Windows.Data.Pdf`）,自动 fallback PDFium（Chromium 内核）,兼容企业精简版/LTSC 系统
+- **PDF 渲染**: PDFium 位图渲染(`FPDF_LoadMemDocument` + `FPDF_RenderPageBitmap`),跨平台统一
 - **PDF 文字层提取**（轻量版也可用）: 解析 PDF 内容流 Tm+Tj/TJ 指令直接提取文字坐标,~5ms/页,无需 OCR 即可识别发票信息
 - **PP-OCRv5 智能识别**（OCR 版,适用于图片型 PDF 和图片）: 文本优先 + 坐标回退双重架构,含税价 / 不含税价 / 税额数学验证配对,发票号码 / 日期 / 买卖方信息自动提取
 - **金额校验可视化**: OCR / PDF 提取金额求和校验失败时,发票卡片金额徽章 ⚠ 警告标识,hover 可查看含税/不含税/税额验证详情
@@ -177,7 +177,7 @@ $env:TICKETCHAN_AUTH_TOKEN = "dev-token"
 | 前端 | 原生 HTML/CSS/JS | 模块化（app / ocr / layout / print / api）,零依赖框架,浏览器直接加载 |
 | 通信 | Axum 0.8 + Tokio | REST API + SSE 进度推送,`fetch()` 统一调用 |
 | 后端 | Rust 1.77+ | 单二进制 `ticketchan-server`,异步 + spawn_blocking 处理 CPU 密集任务 |
-| PDF 渲染 | WinRT + PDFium 双引擎 | WinRT 原生渲染优先,自动 fallback PDFium（Chromium 内核） |
+| PDF 渲染 | PDFium 位图渲染 | 跨平台统一,通过 `render_pdf_pages_pdfium` 调用 |
 | PDF 生成 | printpdf 0.9 + lopdf 0.39 | JPEG 直通零质量损失、PDF 页面 Form XObject 全布局直通 |
 | OFD/XML 解析 | Rust 独立 crate (`invoice-engine/`) | 矢量 SVG 渲染 + 发票 XML/数电票字段直提 |
 | OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先 + 坐标回退,对比度增强（OCR 版 `--features ocr` 可选） |

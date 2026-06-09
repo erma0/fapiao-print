@@ -217,7 +217,7 @@ pub struct FileData {
     /// For OFD files: the extracted page image (no thumbnail — already small).
     pub data_url: String,
     /// Original file path on disk.
-    /// Used for: WinRT PDF rendering, OCR via file_path, PDF generation via file_path.
+    /// Used for: PDF rendering, OCR via file_path, PDF generation via file_path.
     /// Frontend should store this as fileObj._filePath and pass it to Rust commands
     /// instead of sending the full base64 dataUrl back.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -265,142 +265,6 @@ pub struct RenderedOcrPage {
     pub ocr_result: Option<OcrResult>,
 }
 
-// =====================================================
-// Windows PDF Rendering (WinRT)
-// =====================================================
-
-// Note: previously used IBufferByteAccess COM interface, but buffer.cast::<IBufferByteAccess>()
-// fails with E_NOINTERFACE (0x80004002). Switched to DataReader which works reliably.
-
-/// Render PDF pages to images using Windows.Data.Pdf API
-/// This handles PDFs with system font references that PDF.js cannot render
-/// - `use_jpeg`: if true, encode as JPEG for smaller size and faster transfer
-#[cfg(target_os = "windows")]
-pub(crate) fn render_pdf_pages(pdf_path: &str, dpi: u32, use_jpeg: bool) -> Result<Vec<RenderedPage>, String> {
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭".to_string());
-    }
-    use windows::core::HSTRING;
-    use windows::Data::Pdf::{PdfDocument, PdfPageRenderOptions};
-    use windows::Storage::StorageFile;
-    use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
-    use base64::Engine;
-
-    let _com = ComGuard::init();
-
-    let path_h = HSTRING::from(pdf_path);
-
-    // Load file and document
-    let file = StorageFile::GetFileFromPathAsync(&path_h)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载文件失败: {}", e))?;
-
-    let doc = PdfDocument::LoadFromFileAsync(&file)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载PDF失败: {}（文件可能受密码保护）", e))?;
-
-    let page_count = doc.PageCount().map_err(|e| format!("获取页数失败: {}", e))?;
-    log::info!("WinRT PDF rendering: {} pages, dpi={}, jpeg={}", page_count, dpi, use_jpeg);
-
-    let mut results = Vec::new();
-
-    for i in 0..page_count {
-        // Check shutdown flag frequently so we can abort early
-        if SHUTTING_DOWN.load(Ordering::SeqCst) {
-            return Err("应用正在关闭，渲染已中止".to_string());
-        }
-        let page = doc.GetPage(i).map_err(|e| format!("获取第{}页失败: {}", i + 1, e))?;
-
-        // Get page size via Size() which returns Foundation::Size { Width, Height }
-        // Size is in device-independent pixels (96 DPI base)
-        let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", i + 1, e))?;
-        
-        // For preview, use requested DPI directly without adaptive scaling
-        // Adaptive scaling is only needed for print quality output
-        let effective_dpi = dpi;
-        
-        let scale = effective_dpi as f32 / 96.0;
-        let dest_w = (size.Width * scale) as u32;
-        let dest_h = (size.Height * scale) as u32;
-
-        // Set up render options
-        let options = PdfPageRenderOptions::new().map_err(|e| format!("创建渲染选项失败: {}", e))?;
-        options.SetDestinationWidth(dest_w).map_err(|e| format!("设置宽度失败: {}", e))?;
-        options.SetDestinationHeight(dest_h).map_err(|e| format!("设置高度失败: {}", e))?;
-
-        // Render to stream
-        let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败: {}", e))?;
-
-        // Check shutdown before starting render
-        if SHUTTING_DOWN.load(Ordering::SeqCst) {
-            return Err("应用正在关闭，渲染已中止".to_string());
-        }
-
-        page.RenderWithOptionsToStreamAsync(&stream, &options)
-            .map_err(|e| format!("创建渲染操作失败: {}", e))?
-            .get()
-            .map_err(|e| format!("渲染第{}页失败: {}", i + 1, e))?;
-
-        // Read stream data using DataReader (IBufferByteAccess cast fails with E_NOINTERFACE)
-        let stream_size = stream.Size().map_err(|e| format!("获取流大小失败: {}", e))? as u32;
-        stream.Seek(0).map_err(|e| format!("Seek失败: {}", e))?;
-
-        let reader = DataReader::CreateDataReader(&stream)
-            .map_err(|e| format!("创建DataReader失败: {}", e))?;
-
-        reader.LoadAsync(stream_size)
-            .map_err(|e| format!("创建LoadAsync操作失败: {}", e))?
-            .get()
-            .map_err(|e| format!("加载第{}页数据失败: {}", i + 1, e))?;
-
-        let mut png_data = vec![0u8; stream_size as usize];
-        reader.ReadBytes(&mut png_data)
-            .map_err(|e| format!("读取第{}页字节失败: {}", i + 1, e))?;
-
-        // Explicitly release per-page COM objects
-        drop(reader);
-        stream.Close().ok();
-        drop(stream);
-        drop(page);
-
-        // Encode to JPEG if requested
-        let (data_url, format) = if use_jpeg {
-            let img = image::load_from_memory(&png_data)
-                .map_err(|e| format!("解码PNG失败: {}", e))?;
-            let mut jpeg_buf = std::io::Cursor::new(Vec::new());
-            img.write_to(&mut jpeg_buf, image::ImageFormat::Jpeg)
-                .map_err(|e| format!("JPEG编码失败: {}", e))?;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_buf.into_inner());
-            (format!("data:image/jpeg;base64,{}", b64), "jpeg".to_string())
-        } else {
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
-            (format!("data:image/png;base64,{}", b64), "png".to_string())
-        };
-
-        log::info!("Rendered page {} ({}x{}) @ {}dpi, format={}", i + 1, dest_w, dest_h, effective_dpi, format);
-        
-        results.push(RenderedPage {
-            index: i,
-            image_data_url: data_url,
-            width: dest_w,
-            height: dest_h,
-            render_dpi: effective_dpi,
-            format,
-        });
-    }
-
-    // Explicitly release document-level COM objects before ComGuard drops.
-    // PdfDocument doesn't implement IClosable, but PdfPage does (already closed in loop).
-    // StorageFile doesn't implement IClosable either.
-    drop(doc);
-    drop(file);
-    // ComGuard (_com) drops here last, calling CoUninitialize()
-
-    Ok(results)
-}
-
 pub(crate) fn render_pdf_pages_pdfium(pdf_path: &str, dpi: u32, use_jpeg: bool) -> Result<Vec<RenderedPage>, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
@@ -430,7 +294,7 @@ pub(crate) fn render_pdf_pages_pdfium(pdf_path: &str, dpi: u32, use_jpeg: bool) 
 }
 
 /// Render a single PDF page and run OCR on it — zero IPC round-trip for OCR.
-/// The frontend calls this instead of `render_pdf_pages` + `ocr_image` to avoid:
+/// The frontend calls this instead of `render_pdf_pages_pdfium` + `ocr_image` to avoid:
 ///   Rust render → base64 → IPC → frontend → downsample → base64 → IPC → Rust decode → OCR
 /// Instead: Rust render → decode in memory → OCR → return result directly.
 /// Returns OcrResult with coordinates in the original (full-DPI) pixel space.
