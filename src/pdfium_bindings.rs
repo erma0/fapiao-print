@@ -66,8 +66,8 @@ pub struct PdfiumState {
 impl Drop for PdfiumState {
     fn drop(&mut self) {
         // Best-effort: call FPDF_DestroyLibrary to free PDFium internal resources.
-        // On Windows desktop this is rarely reached (TerminateProcess kills the
-        // process first), but for the long-running web server it's beneficial.
+        // Rarely reached (process exit skips destructors), but for the long-running
+        // web server it's beneficial.
         unsafe { (self.funcs._destroy_library)(); }
     }
 }

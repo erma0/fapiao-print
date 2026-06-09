@@ -1,7 +1,6 @@
 // =====================================================
 // 发票酱 — Web 入口
 // =====================================================
-var hasOcr  = false;
 var APP_VERSION = '';
 
 // =====================================================
@@ -439,8 +438,6 @@ function updateOcrAllBtn() {
 }
 
 function applyOcrAsync(fileObj, dataUrl) {
-  if (!hasOcr) return;
-  if (_isRestoringFiles) return; // Skip OCR during file list restoration
   // Skip OCR if PDF text extraction already covered all key fields
   if (fileObj._pdfTextExtracted && fileObj.sellerName && fileObj.amountTax > 0) {
     console.log('[OCR] PDF文字提取已覆盖关键字段，跳过OCR');
@@ -642,7 +639,7 @@ function applyCombinedTextResults(results, pdfTextMap) {
       applyPdfTextResult(r, pdfText);
       updateFileItem(r);
       updateAmountSummary();
-    } else if (hasOcr && S.feat.ocrEnabled) {
+    } else if (S.feat.ocrEnabled) {
       console.log('[PDF文字提取] 文本层为空，自动回退OCR');
       applyOcrAsync(r, r.previewUrl);
     }
@@ -811,11 +808,9 @@ function renderFileList() {
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     var typeBadgeText = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : safeType;
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
-    var ocrBtnHtml = hasOcr
-      ? (f._ocrPending
-        ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
-        : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>')
-      : '';
+    var ocrBtnHtml = (f._ocrPending
+      ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
+      : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>');
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
@@ -863,14 +858,12 @@ function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; re
 function ocrFile(i) {
   var f = S.files[i];
   if (f._loading || f._ocrPending) return;
-  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   _ocrBatchTotal = 1;
   _ocrFromButton = true;
   _ocrToastActive = true;
   applyOcrAsync(f, f.previewUrl);
 }
 function ocrAll() {
-  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   var running = _ocrQueue.length + _ocrRunning;
   if (running > 0) { toast('正在识别中，请稍候'); return; }
   var targets = S.files.filter(function(f) {
@@ -2093,9 +2086,6 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    // OCR is not available in web mode (requires native OCR library)
-    hasOcr = false;
-    // Get app version from server
     __api.call('get_app_version').then(function(v) {
       APP_VERSION = v;
       var el = document.getElementById('stVersion');

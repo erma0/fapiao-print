@@ -45,7 +45,6 @@ async fn main() {
         auth_token,
         progress: Arc::new(ProgressTracker::new()),
         frontend_dir,
-        is_desktop: false,
     };
 
     // Periodic session cleanup (every 30 minutes), cancellable via CancellationToken

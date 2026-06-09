@@ -128,7 +128,6 @@ pub struct AppState {
     pub auth_token: Option<String>,
     pub progress: Arc<ProgressTracker>,
     pub frontend_dir: PathBuf,
-    pub is_desktop: bool,
 }
 
 /// Compute optimal semaphore permits based on CPU core count.
@@ -182,11 +181,10 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state.clone())
         .layer(cors)
         // Note: CompressionLayer removed — it caused 413 on large generate_pdf payloads
-        // in some tower-http 0.6 / hyper 1.x combinations.
-        // Web mode relies on nginx for compression.
+        // in some tower-http 0.6 / hyper 1.x combinations. Relies on nginx for compression.
         .layer(CatchPanicLayer::new());
 
-    // Optional auth token protection for Web deployments.
+    // Optional auth token protection.
     // When TICKETCHAN_AUTH_TOKEN is set, all API requests must include
     // the Authorization: Bearer <token> header. Health endpoint is exempt.
     if state.auth_token.is_some() {
@@ -780,14 +778,10 @@ async fn check_path_exists(
     Json(req): Json<serde_json::Value>,
 ) -> Json<ApiResponse> {
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    // Web mode: restrict to session directory
-    if !state.is_desktop {
-        let p = std::path::Path::new(path);
-        if !p.is_absolute() || !p.starts_with(&state.session_dir) {
-            return Json(ApiResponse::ok(json!({ "exists": false })));
-        }
-    }
     let p = std::path::Path::new(path);
+    if !p.is_absolute() || !p.starts_with(&state.session_dir) {
+        return Json(ApiResponse::ok(json!({ "exists": false })));
+    }
     Json(ApiResponse::ok(json!({
         "exists": p.exists(),
         "isDir": p.is_dir(),
@@ -846,16 +840,13 @@ async fn copy_file(
     if src.is_empty() || dest.is_empty() {
         return Err(AppError::BadRequest("源路径和目标路径不能为空".into()));
     }
-    // Web mode: restrict to session directory
-    if !state.is_desktop {
-        let src_path = std::path::Path::new(src);
-        if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
-            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
-        }
-        let dest_path = std::path::Path::new(dest);
-        if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
-            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
-        }
+    let src_path = std::path::Path::new(src);
+    if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
+        return Err(AppError::Unauthorized("仅允许操作会话目录内文件".into()));
+    }
+    let dest_path = std::path::Path::new(dest);
+    if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
+        return Err(AppError::Unauthorized("仅允许操作会话目录内文件".into()));
     }
     std::fs::copy(src, dest)
         .map_err(|e| AppError::Internal(format!("复制文件失败: {}", e)))?;
@@ -875,16 +866,13 @@ async fn rename_file(
     if src.is_empty() || dest.is_empty() {
         return Err(AppError::BadRequest("源路径和目标路径不能为空".into()));
     }
-    // Web mode: restrict to session directory
-    if !state.is_desktop {
-        let src_path = std::path::Path::new(src);
-        if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
-            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
-        }
-        let dest_path = std::path::Path::new(dest);
-        if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
-            return Err(AppError::Unauthorized("Web 模式仅允许操作会话目录内文件".into()));
-        }
+    let src_path = std::path::Path::new(src);
+    if !src_path.is_absolute() || !src_path.starts_with(&state.session_dir) {
+        return Err(AppError::Unauthorized("仅允许操作会话目录内文件".into()));
+    }
+    let dest_path = std::path::Path::new(dest);
+    if !dest_path.is_absolute() || !dest_path.starts_with(&state.session_dir) {
+        return Err(AppError::Unauthorized("仅允许操作会话目录内文件".into()));
     }
 
     let result = if std::path::Path::new(src).parent() == std::path::Path::new(dest).parent() {
@@ -905,12 +893,9 @@ async fn write_text_file(
     if path.is_empty() {
         return Err(AppError::BadRequest("文件路径不能为空".into()));
     }
-    // Web mode: restrict to session directory or temp directory
-    if !state.is_desktop {
-        let p = std::path::Path::new(path);
-        if !p.is_absolute() || !p.starts_with(&state.session_dir) {
-            return Err(AppError::Unauthorized("Web 模式仅允许写入会话目录内文件".into()));
-        }
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() || !p.starts_with(&state.session_dir) {
+        return Err(AppError::Unauthorized("仅允许写入会话目录内文件".into()));
     }
     std::fs::write(path, content)
         .map_err(|e| AppError::Internal(format!("写入文件失败: {}", e)))?;
