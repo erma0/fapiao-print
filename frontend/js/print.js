@@ -3,9 +3,16 @@
 // =====================================================
 // No backend. All PDF generation runs in the browser via pdf-lib.
 // Print uses an embedded <iframe> to invoke the browser's native PDF print.
+//
+// PDF sources use vector embedding (embedPage) to preserve text/line quality.
+// Image sources (JPG/PNG/OFD) fall back to raster embedding.
 
 var _printCacheKey = null;
 var _printCacheBlob = null;
+
+// Source PDF document cache: avoids re-loading the same ArrayBuffer for
+// multi-page PDFs. Cleared after each compose call.
+var _srcPdfDocs = {};
 
 // pdf-lib UMD exports as `PDFLib` (uppercase). Use a window alias so all
 // internal `pdfLib.X` references resolve consistently.
@@ -38,14 +45,50 @@ function _jpegBlobFromDataUrl(dataUrl) {
   return _pngBlobFromDataUrl(dataUrl);
 }
 
+// Load a source PDF with pdf-lib (cached per file ID prefix)
+async function _getOrLoadSrcPdf(fileObj) {
+  var key = fileObj.id.replace(/_p\d+$/, '');
+  if (_srcPdfDocs[key]) return _srcPdfDocs[key];
+  var bytes = fileObj.srcPdfBytes instanceof Uint8Array
+    ? fileObj.srcPdfBytes
+    : new Uint8Array(fileObj.srcPdfBytes);
+  var doc = await pdfLib.PDFDocument.load(bytes, { ignoreEncryption: true });
+  _srcPdfDocs[key] = doc;
+  return doc;
+}
+
+// Embed a file into the output PDF.
+// For PDF sources: returns { type:'pdfPage', embedded, width(pt), height(pt) }
+// For image sources: returns { type:'image', embedded, width(px), height(px) }
+// On failure or unsupported type: returns null.
 async function _embedForFile(pdfDoc, fileObj) {
   if (!fileObj) return null;
   if (fileObj._xmlInvoice) return null;
+
+  // Vector path: embed original PDF page
+  if (fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
+    try {
+      var srcDoc = await _getOrLoadSrcPdf(fileObj);
+      var srcPage = srcDoc.getPage(fileObj.srcPageIndex);
+      var embedded = await pdfDoc.embedPage(srcPage);
+      return {
+        type: 'pdfPage',
+        embedded: embedded,
+        width: srcPage.getWidth(),
+        height: srcPage.getHeight()
+      };
+    } catch (e) {
+      console.warn('embedPage failed, falling back to raster:', e);
+    }
+  }
+
+  // Raster path: embed as image
   if (fileObj.previewUrl) {
     var isJpeg = fileObj.previewUrl.indexOf('data:image/jpeg') === 0
       || fileObj.previewUrl.indexOf('data:image/jpg') === 0;
     var bytes = isJpeg ? _jpegBlobFromDataUrl(fileObj.previewUrl) : _pngBlobFromDataUrl(fileObj.previewUrl);
-    return isJpeg ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+    var img = isJpeg ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+    return { type: 'image', embedded: img, width: img.width, height: img.height };
   }
   return null;
 }
@@ -62,35 +105,50 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     var slot = layout.slots[i];
     var f = pageFiles ? pageFiles[i] : null;
     if (!f) continue;
-    var img = await _embedForFile(pdfDoc, f);
-    if (!img) continue;
+    var embedResult = await _embedForFile(pdfDoc, f);
+    if (!embedResult) continue;
 
     var rot = getRotation(f, slot, settings);
     var perScale = f.slotScale || 1;
     var perOffX = f.slotOffsetX || 0;
     var perOffY = f.slotOffsetY || 0;
 
-    var imgObjW = f.ow || img.width;
-    var imgObjH = f.oh || img.height;
-    var fitScale = Math.min(slot.w / imgObjW, slot.h / imgObjH);
-    if (settings.fitMode === 'fill') fitScale = Math.max(slot.w / imgObjW, slot.h / imgObjH);
+    // Use pt dimensions for PDF pages, pixel dimensions for images.
+    // Both give correct aspect ratio for fit calculation.
+    var objW, objH;
+    if (embedResult.type === 'pdfPage') {
+      objW = f.srcPageWidthPt || embedResult.width;
+      objH = f.srcPageHeightPt || embedResult.height;
+    } else {
+      objW = f.ow || embedResult.width;
+      objH = f.oh || embedResult.height;
+    }
+
+    var fitScale = Math.min(slot.w / objW, slot.h / objH);
+    if (settings.fitMode === 'fill') fitScale = Math.max(slot.w / objW, slot.h / objH);
     else if (settings.fitMode === 'original') fitScale = 1;
     if (settings.fitMode === 'custom' && settings.customScale) fitScale *= settings.customScale;
     fitScale *= perScale;
 
-    var drawW = imgObjW * fitScale;
-    var drawH = imgObjH * fitScale;
+    var drawW = objW * fitScale;
+    var drawH = objH * fitScale;
     var cx = slot.x + slot.w / 2 + perOffX;
     var cy = ph - (slot.y + slot.h / 2 + perOffY);
 
-    page.drawImage(img, {
+    var drawOpts = {
       x: cx - drawW / 2,
       y: cy - drawH / 2,
       width: drawW,
       height: drawH,
       rotate: pdfLib.degrees(rot),
       opacity: settings.colorMode === 'bw' ? 1 : 1
-    });
+    };
+
+    if (embedResult.type === 'pdfPage') {
+      page.drawPage(embedResult.embedded, drawOpts);
+    } else {
+      page.drawImage(embedResult.embedded, drawOpts);
+    }
 
     if (settings.border) {
       page.drawRectangle({
@@ -169,6 +227,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 }
 
 async function _composePdfBlob(files, settings, onProgress) {
+  _srcPdfDocs = {};
   var key = _settingsKey(settings) + '|' + files.map(function(f) { return f.id + ':' + f.copies + ':' + f.rotation; }).join(',');
   if (_printCacheKey === key && _printCacheBlob) {
     return _printCacheBlob;
@@ -192,6 +251,7 @@ async function _composePdfBlob(files, settings, onProgress) {
     _printCacheBlob = blob;
     return blob;
   } finally {
+    _srcPdfDocs = {};
     hideLoading();
   }
 }

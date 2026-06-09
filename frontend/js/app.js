@@ -93,7 +93,12 @@ function createFileObj(opts) {
     slotScale: opts.slotScale || 1,        // 1.0 = default (contain-fit size)
     slotOffsetX: opts.slotOffsetX || 0,    // X offset in mm (0 = centered)
     slotOffsetY: opts.slotOffsetY || 0,    // Y offset in mm (0 = centered)
-    _printed: false                        // True after successful print
+    _printed: false,                       // True after successful print
+    // Vector print: embed original PDF page via pdf-lib embedPage
+    srcPdfBytes: opts.srcPdfBytes || null,
+    srcPageIndex: opts.srcPageIndex != null ? opts.srcPageIndex : -1,
+    srcPageWidthPt: opts.srcPageWidthPt || 0,
+    srcPageHeightPt: opts.srcPageHeightPt || 0
   };
 
   // Apply saved per-file adjustments if memory is enabled
@@ -585,7 +590,11 @@ async function loadPdfFromFile(file, id, name, size) {
       img: null,
       ow: pg.width || 0,
       oh: pg.height || 0,
-      renderDpi: pg.renderDpi || PDF_RENDER_DPI
+      renderDpi: pg.renderDpi || PDF_RENDER_DPI,
+      srcPdfBytes: buffer,
+      srcPageIndex: p,
+      srcPageWidthPt: pg.pdfWidthPt || 0,
+      srcPageHeightPt: pg.pdfHeightPt || 0
     });
     if (pg.pdfTextResult && pg.pdfTextResult.hasTextLayer && pg.pdfTextResult.lines.length > 0) {
       if (typeof applyPdfTextResult === 'function') {
