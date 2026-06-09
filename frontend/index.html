@@ -343,10 +343,12 @@
   </div>
 </div>
 
-<!-- Scripts — loaded in order: PDF-lib (UMD global) → IDB → PDF.js (module) → Layout → Print → App -->
+<!-- Scripts — loaded in order: PDF-lib (UMD global) → JSZip → IDB → PDF.js (module) → OFD → Layout → Print → App -->
 <script src="js/vendor/pdf-lib.min.js"></script>
+<script src="js/vendor/jszip.min.js"></script>
 <script type="module" src="js/idb-store.js?v=3"></script>
 <script type="module" src="js/pdf-client.js?v=3"></script>
+<script src="js/ofd-client.js?v=3"></script>
 <script src="js/layout.js?v=3"></script>
 <script src="js/ocr.js?v=3"></script>
 <script src="js/print.js?v=3"></script>

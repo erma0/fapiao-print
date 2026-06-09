@@ -574,6 +574,46 @@ function readFileAsArrayBuffer(file) {
   });
 }
 
+async function loadOfdFromFile(file, id, name, size) {
+  var buffer = await readFileAsArrayBuffer(file);
+  if (!window.__ofdClient) {
+    toast('OFD 解析器未加载');
+    return null;
+  }
+  var result = await window.__ofdClient.parseOfdFromArrayBuffer(buffer);
+  var previewUrl = await svgToPngDataUrl(result.svg, result.pageWidth, result.pageHeight);
+  var pxW = Math.round(result.pageWidth * PDF_RENDER_DPI / 25.4);
+  var pxH = Math.round(result.pageHeight * PDF_RENDER_DPI / 25.4);
+  var fileObj = createFileObj({
+    id: id,
+    name: name,
+    size: size,
+    type: 'ofd',
+    previewUrl: previewUrl,
+    img: null,
+    ow: pxW,
+    oh: pxH,
+    renderDpi: PDF_RENDER_DPI
+  });
+  var info = result.invoiceInfo || {};
+  if (info.invoiceNo) fileObj.invoiceNo = info.invoiceNo;
+  if (info.invoiceDate) fileObj.invoiceDate = info.invoiceDate;
+  if (info.sellerName) fileObj.sellerName = info.sellerName;
+  if (info.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
+  if (info.sellerTaxId) fileObj.sellerCreditCode = info.sellerTaxId;
+  if (info.buyerName) fileObj.buyerName = info.buyerName;
+  if (info.buyerTaxId) fileObj.buyerCreditCode = info.buyerTaxId;
+  if (info.amountTax != null) fileObj.amountTax = info.amountTax;
+  if (info.amountNoTax != null) fileObj.amountNoTax = info.amountNoTax;
+  if (info.taxAmount != null) fileObj.taxAmount = info.taxAmount;
+  if (info.invoiceType) fileObj.invoiceType = info.invoiceType;
+  fileObj._ofdSvg = result.svg;
+  fileObj._ofdPageWidth = result.pageWidth;
+  fileObj._ofdPageHeight = result.pageHeight;
+  fileObj._pdfTextExtracted = true;
+  return fileObj;
+}
+
 async function loadPdfFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
   await window.__idb.putFile(id, name, file.type || 'application/pdf', buffer);
@@ -640,8 +680,7 @@ async function loadFileFromFile(file) {
       return await loadImageFromFile(file, id, name, size, ext);
     }
     if (ext === 'ofd' || ext === 'ofx') {
-      toast('OFD 格式暂不支持: ' + name);
-      return null;
+      return await loadOfdFromFile(file, id, name, size);
     }
     if (ext === 'xml') {
       toast('XML 数电票暂不支持: ' + name);
