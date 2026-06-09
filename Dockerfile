@@ -4,18 +4,20 @@ FROM rust:1.82-bookworm AS builder
 WORKDIR /app
 
 # Copy manifests first for dependency caching
-COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
-COPY src-tauri/invoice-engine ./invoice-engine/
+COPY Cargo.toml Cargo.lock ./
+COPY invoice-engine ./invoice-engine/
 
 # Create dummy source files to cache dependencies
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && echo '' > src/lib.rs
+RUN mkdir -p src && \
+    echo 'fn main() {}' > src/main.rs && \
+    echo 'pub mod pdf_engine; pub mod pdfium_bindings; pub mod pdfium_render; pub mod pdfium_print; pub mod platform; pub mod session; pub mod server; pub use std::sync::atomic::AtomicBool; pub static DOWNLOAD_CANCELLED: AtomicBool = AtomicBool::new(false); #[cfg(not(target_os = "windows"))] pub fn shell_execute_print(_p: &std::path::Path, _n: Option<&str>) -> Result<bool, String> { Ok(true) }' > src/lib.rs
 
 # Build dependencies only (cached layer)
 RUN cargo build --release --bin ticketchan-server 2>/dev/null || true
 
 # Copy actual source code
-COPY src-tauri/src ./src
-COPY src-tauri/build.rs ./build.rs
+COPY src ./src
+COPY build.rs .
 
 # Touch source files to force rebuild
 RUN find src -name "*.rs" -exec touch {} +
@@ -47,7 +49,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/ticketchan-server /app/ticketchan-server
 
 # Copy frontend
-COPY src/ /app/frontend/
+COPY frontend/ /app/frontend/
 
 # Environment
 ENV TICKETCHAN_SESSION_DIR=/tmp/ticketchan

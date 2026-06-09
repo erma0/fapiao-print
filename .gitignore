@@ -1,16 +1,7 @@
-# Dependencies
-node_modules/
-
 # Build output
-src-tauri/target/
-src-tauri/invoice-engine/target/
-src-tauri/invoice-engine/Cargo.lock
-
-# MNN prebuilt SDK (auto-downloaded by ocr-rs build.rs)
-mnn-dev-windows-x86_64.zip
-
-# Tauri generated
-src-tauri/gen/
+target/
+invoice-engine/target/
+invoice-engine/Cargo.lock
 
 # OS files
 .DS_Store
@@ -30,17 +21,15 @@ desktop.ini
 .env
 .env.local
 
-# WorkBuddy internal
+# Internal
 .workbuddy/
-
-# Temp screenshots
-screenshot_*.png
-
-dist/
-.claude/
 .trae/
+.claude/
 portable-git.7z.exe
-sample/
+
+# Temp
+screenshot_*.png
+dist/
 sample.ofd
 sample_ofd_extracted/
 test-emf-vector/
