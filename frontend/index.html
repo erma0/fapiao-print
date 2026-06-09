@@ -365,27 +365,9 @@
         <table class="summary-table" id="summaryTable"></table>
       </div>
       <div class="summary-total" id="summaryTotal"></div>
-      <div class="summary-rename-panel hidden" id="summaryRenamePanel">
-        <div class="srp-header">🔄 重命名文件</div>
-        <div class="srp-presets">
-          <span class="srp-label">模板：</span>
-          <button class="srp-preset active" onclick="onRenamePresetClick(['amountTax','sellerName','invoiceNo'], this)">金额+销售方+号码</button>
-          <button class="srp-preset" onclick="onRenamePresetClick(['sellerName','invoiceNo'], this)">销售方+号码</button>
-          <button class="srp-preset" onclick="onRenamePresetClick(['amountTax','invoiceDate','invoiceNo'], this)">金额+日期+号码</button>
-          <span class="srp-sep">分隔符<input type="text" class="srp-sep-input" id="srpSep" value="_" size="1" maxlength="4" oninput="updateRenamePreview()"></span>
-        </div>
-        <div class="srp-fields" id="srpFields"></div>
-        <div class="srp-preview-title">预览</div>
-        <div class="srp-preview" id="srpPreview"></div>
-        <div class="srp-error" id="srpError" style="display:none"></div>
-        <div class="srp-actions">
-          <button class="btn btn-primary" id="srpExecBtn" onclick="executeRename()">执行重命名</button>
-        </div>
-      </div>
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeSummaryModal()">取消</button>
-      <button class="btn" id="summaryRenameBtn" onclick="toggleSummaryRename()">🔄 重命名文件</button>
       <button class="btn btn-primary" onclick="exportSummaryCsv()">📥 导出 CSV</button>
     </div>
   </div>
