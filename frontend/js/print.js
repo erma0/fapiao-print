@@ -135,7 +135,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
       x: pw / 2 - settings.wmText.length * wmSize * 0.15,
       y: ph / 2,
       size: wmSize,
-      font: pdfLib.StandardFonts.HelveticaBold,
+      font: settings._fontBold,
       color: pdfLib.rgb(0.6, 0.6, 0.6),
       opacity: wmOpacity,
       rotate: pdfLib.degrees(30)
@@ -152,7 +152,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         x: pw / 2 - line1.length * 1.5,
         y: 8,
         size: 8,
-        font: pdfLib.StandardFonts.Helvetica,
+        font: settings._font,
         color: pdfLib.rgb(0.5, 0.5, 0.5)
       });
     }
@@ -161,7 +161,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         x: pw / 2 - settings.footerText.length * 1.5,
         y: 2,
         size: 8,
-        font: pdfLib.StandardFonts.Helvetica,
+        font: settings._font,
         color: pdfLib.rgb(0.5, 0.5, 0.5)
       });
     }
@@ -179,6 +179,8 @@ async function _composePdfBlob(files, settings, onProgress) {
   showLoading('正在生成 PDF...');
   try {
     var pdfDoc = await pdfLib.PDFDocument.create();
+    settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
+    settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
     var pages = buildPages(files, settings);
     for (var i = 0; i < pages.length; i++) {
       if (onProgress) onProgress(i + 1, pages.length);
