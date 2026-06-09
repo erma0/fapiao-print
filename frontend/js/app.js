@@ -2,7 +2,7 @@
 // 发票酱 — Web 入口
 // =====================================================
 var APP_VERSION = '';
-var hasOcr = false;
+var hasOcr = false;  // Pure-frontend: OCR removed, always false
 
 // =====================================================
 // Constants
@@ -13,6 +13,8 @@ var PDF_RENDER_DPI = 300;  // Print/save DPI — Must match Rust RENDER_DPI
 var PDF_PREVIEW_DPI = 150;  // Preview DPI — faster loading, lower resolution
 var MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
 var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
+
+function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
 
 // =====================================================
 // State
@@ -42,6 +44,8 @@ var S = {
 
 // Track newly added file IDs for entrance animation
 var _newFileIds = {};
+
+var _activeFileIdx = -1;
 
 // =====================================================
 // File Object Factory — unified creation with defaults
@@ -251,59 +255,35 @@ async function triggerUpload() {
 async function handleFileInput(fl) {
   if (!fl || !fl.length) return;
   try {
-    toastLoading('上传 ' + fl.length + ' 个文件...');
-    var fileDataList = await __api.uploadFilesFromInput(fl);
-    if (fileDataList && fileDataList.length > 0) {
-      await processFileDataList(fileDataList);
-    } else {
-      toast('上传失败');
-    }
+    await processFileList(Array.from(fl));
   } catch(e) {
-    toast('上传失败: ' + String(e));
+    toast('加载失败: ' + String(e));
   }
   document.getElementById('fileInput').value = '';
 }
 
-// Process FileData array from Rust backend — instant placeholders, then load in parallel + render sequentially
-async function processFileDataList(fileDataList) {
-  var total = fileDataList.length;
+// Process File objects purely in the browser — IndexedDB for persistence
+async function processFileList(fileList) {
+  var total = fileList.length;
   var completed = 0;
   var added = 0;
   _loadingBatchActive = true;
 
-  // 1. Create placeholder entries immediately for instant visual feedback
-  fileDataList.forEach(function(fd) {
+  fileList.forEach(function(file) {
     var ph = createFileObj({
-      name: fd.name,
-      size: fd.size,
-      type: fd.ext,
+      name: file.name,
+      size: file.size,
+      type: (file.name.split('.').pop() || '').toLowerCase(),
       _loading: true
     });
     ph._placeholderKey = ph.id;
-    fd._phKey = ph._placeholderKey;
+    file._phKey = ph._placeholderKey;
     S.files.push(ph);
     _newFileIds[ph.id] = true;
   });
 
-  // Render placeholders immediately — user sees skeleton items right away
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
-
-  // Show "加载中" toast immediately with spinner
   toastLoading('加载中 0/' + total);
-
-  // Count how many files will need OCR (for batch tracking)
-  var ocrEligibleCount = S.feat.ocrEnabled ? fileDataList.length : 0;
-  if (ocrEligibleCount >= 1) {
-    _ocrBatchTotal = ocrEligibleCount;
-  }
-
-  // 2. Start all loads in parallel (efficient for PDF IPC), then process results sequentially for incremental rendering
-  var loadPromises = fileDataList.map(function(fd) {
-    return loadFileFromDataUrlFast(fd).catch(function(err) {
-      console.error('Load file error:', fd.name, err);
-      return null;
-    });
-  });
 
   var startTime = Date.now();
   var updateIntervalMs = Math.max(50, Math.min(150, Math.floor(500 / total)));
@@ -317,14 +297,19 @@ async function processFileDataList(fileDataList) {
   }, updateIntervalMs);
 
   var lastToastUpdate = 0;
-  for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
-    var r = await loadPromises[fdIdx];
+  for (var fdIdx = 0; fdIdx < fileList.length; fdIdx++) {
+    var file = fileList[fdIdx];
+    var r = null;
+    try {
+      r = await loadFileFromFile(file);
+    } catch(err) {
+      console.error('Load file error:', file.name, err);
+    }
     completed++;
 
-    var fd = fileDataList[fdIdx];
     var phIdx = -1;
     for (var i = 0; i < S.files.length; i++) {
-      if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
+      if (S.files[i]._placeholderKey === file._phKey) { phIdx = i; break; }
     }
 
     if (phIdx >= 0 && r) {
@@ -339,21 +324,8 @@ async function processFileDataList(fileDataList) {
     var now = Date.now();
     if (now - lastToastUpdate > 100 || completed >= total) {
       lastToastUpdate = now;
-      var ocrRemaining = _ocrQueue.length + _ocrRunning;
       var isLast = (completed >= total);
-      if (isLast) {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
-        }
-      } else {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
-        } else {
-          toastLoading('加载中 ' + completed + '/' + total);
-        }
-      }
+      toastLoading(isLast ? '加载完成' : ('加载中 ' + completed + '/' + total));
     }
 
     hasNewResults = true;
@@ -362,34 +334,19 @@ async function processFileDataList(fileDataList) {
 
   clearInterval(updateInterval);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
-
   _loadingBatchActive = false;
 
-  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
-    _ocrToastActive = false;
-    _ocrBatchTotal = 0;
-    _ocrBatchAddedCount = 0;
-    var elapsed = Date.now() - startTime;
-    var minToastDelay = Math.max(300, 800 - elapsed);
-    if (added > 0) {
-      var doneMsg = '已加载 ' + added + ' 张发票';
-      setTimeout(function() { toast(doneMsg, 2500); }, minToastDelay);
-    } else {
-      toast('文件加载失败');
-    }
+  var elapsed = Date.now() - startTime;
+  var minToastDelay = Math.max(300, 800 - elapsed);
+  if (added > 0) {
+    setTimeout(function() { toast('已加载 ' + added + ' 张发票', 2500); }, minToastDelay);
   } else {
-    _ocrBatchAddedCount = added;
+    toast('文件加载失败');
   }
 }
-
 // =====================================================
 // Fast loading functions — show preview first, OCR in background
 // =====================================================
-
-/**
- * Cleanup function called by Rust before closing the window.
- * Clears OCR queues and sets closing flag to prevent new work.
- */
 
 function _drainOcrQueue() {
   // OCR queue cleanup skipped in web mode
@@ -601,146 +558,94 @@ function svgToPngDataUrl(svgString, pageWidthMm, pageHeightMm) {
   });
 }
 
-/**
- * Fast load from FileData — show preview immediately, OCR in background.
- * @param {Object} fd - FileData from Rust: { name, dataUrl, size, ext, path, origW, origH }
- */
-function applyPdfTextToResults(results, pdfPath) {
-  if (!results || results.length === 0) return;
-  if (!S.feat.pdfTextEnabled) return;
-  var pageIndices = results.map(function(r) { return r._pdfPageIdx; });
-  __api.call('extract_pdf_texts', {
-    pdfPath: pdfPath,
-    pageIndices: pageIndices
-  }).then(function(pdfTextMap) {
-    applyCombinedTextResults(results, pdfTextMap);
-  }).catch(function(err) {
-    console.warn('[PDF文字提取] 批量提取失败，回退单页模式:', err);
-    results.forEach(function(r) {
-      __api.call('extract_pdf_text', {
-        pdfPath: r._pdfPath,
-        pageIdx: r._pdfPageIdx
-      }).then(function(pdfText) {
-        if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
-          applyPdfTextResult(r, pdfText);
-          updateFileItem(r);
-          updateAmountSummary();
-        }
-      }).catch(function() {});
-    });
+function readFileAsArrayBuffer(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() { resolve(reader.result); };
+    reader.onerror = function() { reject(reader.error); };
+    reader.readAsArrayBuffer(file);
   });
 }
 
-/// Apply pre-extracted textMap to results — used when render+text are combined in one HTTP call
-function applyCombinedTextResults(results, pdfTextMap) {
-  if (!results || results.length === 0) return;
-  if (!pdfTextMap) return;
-  results.forEach(function(r) {
-    var pdfText = pdfTextMap[r._pdfPageIdx];
-    if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
-      applyPdfTextResult(r, pdfText);
-      updateFileItem(r);
-      updateAmountSummary();
-    } else if (hasOcr && S.feat.ocrEnabled) {
-      console.log('[PDF文字提取] 文本层为空，自动回退OCR');
-      applyOcrAsync(r, r.previewUrl);
-    }
-  });
-}
-
-function buildPdfResults(pages, id, name, size, filePath) {
+async function loadPdfFromFile(file, id, name, size) {
+  var buffer = await readFileAsArrayBuffer(file);
+  await window.__idb.putFile(id, name, file.type || 'application/pdf', buffer);
+  var loaded = await window.__pdfClient.loadPdfFromArrayBuffer(buffer);
   var results = [];
-  for (var p = 0; p < pages.length; p++) {
-    var pg = pages[p];
+  for (var p = 0; p < loaded.pages.length; p++) {
+    var pg = loaded.pages[p];
     var fileObj = createFileObj({
       id: id + '_p' + (p + 1),
-      name: pages.length > 1 ? name.replace(/\.pdf$/i, '') + '_第' + (p + 1) + '页.pdf' : name,
-      size: size, type: 'pdf', previewUrl: pg.imageDataUrl,
-      ow: pg.width || 0, oh: pg.height || 0,
-      renderDpi: pg.renderDpi || PDF_RENDER_DPI,
-      pdfPath: filePath, pdfPageIdx: p
+      name: loaded.pages.length > 1 ? name.replace(/\.pdf$/i, '') + '_第' + (p + 1) + '页.pdf' : name,
+      size: size,
+      type: 'pdf',
+      previewUrl: pg.previewUrl,
+      img: null,
+      ow: pg.width || 0,
+      oh: pg.height || 0,
+      renderDpi: pg.renderDpi || PDF_RENDER_DPI
     });
+    if (pg.pdfTextResult && pg.pdfTextResult.hasTextLayer && pg.pdfTextResult.lines.length > 0) {
+      if (typeof applyPdfTextResult === 'function') {
+        applyPdfTextResult(fileObj, pg.pdfTextResult);
+      }
+    }
     results.push(fileObj);
   }
   return results;
 }
 
-function loadPdfImages(results) {
-  return Promise.all(results.map(function(r) {
-    return new Promise(function(resolve) {
-      var img = new Image();
-      img.src = r.previewUrl;
-      img.onload = function() { r.img = img; resolve(r); };
-      img.onerror = function() { resolve(r); };
-    });
-  }));
-}
-
-function loadFileFromDataUrlFast(fd) {
-  var name = fd.name, dataUrl = fd.dataUrl, size = fd.size, ext = fd.ext;
-  return new Promise(function(resolve) {
-    var id = "f" + Date.now() + Math.random().toString(36).slice(2);
-
-    if (ext === "pdf") {
-      if (fd.pages && fd.pages.length > 0) {
-        var pages = fd.pages;
-        var textMap = fd.textMap || null;
-        var results = buildPdfResults(pages, id, name, size, null);
-        resolve(results.length === 1 ? results[0] : results);
-        loadPdfImages(results);
-        if (textMap) applyCombinedTextResults(results, textMap);
-        results.forEach(function(r) { if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl); });
-        return;
-      }
-      toast("PDF failed"); resolve(null);
-    }
-    else if (ext === "ofd" && fd.svg) {
-      svgToPngDataUrl(fd.svg, fd.pageWidth, fd.pageHeight).then(function(pngUrl) {
-        var img = new Image(); img.src = pngUrl;
-        return new Promise(function(r) { img.onload = function() { r({img: img, pngUrl: pngUrl}); }; });
-      }).then(function(payload) {
-        var info = fd.invoiceInfo || {};
-        var fileObj = createFileObj({ id: id, name: name, size: size, type: "ofd", previewUrl: payload.pngUrl, img: payload.img,
-          amountTax: info.amountTax || 0, amountNoTax: info.amountNoTax || 0, taxAmount: info.taxAmount || 0,
-          sellerName: info.sellerName || "", sellerCreditCode: info.sellerTaxId || "", invoiceNo: info.invoiceNo || "",
-          invoiceDate: info.invoiceDate || "", buyerName: info.buyerName || "", buyerCreditCode: info.buyerTaxId || "",
-          invoiceType: info.invoiceType || "", ow: payload.img.naturalWidth, oh: payload.img.naturalHeight, _ofdPage: true });
-        resolve(fileObj);
-        if (S.feat.ocrEnabled && !info.amountTax && !info.amountNoTax && !info.sellerName) applyOcrAsync(fileObj, payload.pngUrl);
-      }).catch(function() { resolve(null); });
-      return;
-    }
-    else if (ext === "ofd") { toast("OFD failed"); resolve(null); }
-    else if (ext === "xml" && fd.invoiceInfo) {
-      var info = fd.invoiceInfo;
-      var fileObj = createFileObj({ id: id, name: name, size: size, type: "xml", _xmlInvoice: true,
-        amountTax: info.amountTax || 0, amountNoTax: info.amountNoTax || 0, taxAmount: info.taxAmount || 0,
-        sellerName: info.sellerName || "", sellerCreditCode: info.sellerTaxId || "", invoiceNo: info.invoiceNo || "",
-        invoiceDate: info.invoiceDate || "", buyerName: info.buyerName || "", buyerCreditCode: info.buyerTaxId || "",
-        invoiceType: info.invoiceType || "" });
-      resolve(fileObj);
-      return;
-    }
-    else if (ext === "xml") { toast("XML failed"); resolve(null); }
-    else if (dataUrl) {
-      var img = new Image(); img.src = dataUrl;
-      img.onload = function() {
-        var result = createFileObj({ id: id, name: name, size: size, type: ext, previewUrl: dataUrl, img: img,
-          ow: fd.origW || 0, oh: fd.origH || 0 });
-        resolve(result);
-        if (S.feat.ocrEnabled) applyOcrAsync(result, dataUrl);
-      };
-      img.onerror = function() { toast("image failed: " + name); resolve(null); };
-    }
-    else { toast("unsupported: " + ext); resolve(null); }
+async function loadImageFromFile(file, id, name, size, ext) {
+  var dataUrl = await new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() { resolve(reader.result); };
+    reader.onerror = function() { reject(reader.error); };
+    reader.readAsDataURL(file);
+  });
+  var img = await new Promise(function(resolve, reject) {
+    var i = new Image();
+    i.onload = function() { resolve(i); };
+    i.onerror = reject;
+    i.src = dataUrl;
+  });
+  return createFileObj({
+    id: id, name: name, size: size, type: ext,
+    previewUrl: dataUrl, img: img,
+    ow: img.naturalWidth, oh: img.naturalHeight
   });
 }
 
-/**
- * Fast load File object (browser mode) — show preview first, OCR in background
- */
+async function loadFileFromFile(file) {
+  var name = file.name;
+  var size = file.size;
+  var ext = (name.split('.').pop() || '').toLowerCase();
+  var id = 'f' + Date.now() + Math.random().toString(36).slice(2);
 
-// Drag & Drop (browser fallback)
+  try {
+    if (ext === 'pdf') {
+      return await loadPdfFromFile(file, id, name, size);
+    }
+    if (['jpg','jpeg','png','bmp','webp','gif'].indexOf(ext) >= 0) {
+      return await loadImageFromFile(file, id, name, size, ext);
+    }
+    if (ext === 'ofd' || ext === 'ofx') {
+      toast('OFD 格式暂不支持: ' + name);
+      return null;
+    }
+    if (ext === 'xml') {
+      toast('XML 数电票暂不支持: ' + name);
+      return null;
+    }
+    toast('不支持的格式: ' + ext);
+    return null;
+  } catch (e) {
+    console.error('loadFileFromFile error:', name, e);
+    toast('加载失败: ' + name);
+    return null;
+  }
+}
+
+// Drag & Drop (browser native)
 function handleDragOver(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.add('drag-over'); }
 function handleDragLeave(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.remove('drag-over'); }
 async function handleDrop(e) {
@@ -748,13 +653,9 @@ async function handleDrop(e) {
   document.getElementById('dropZone').classList.remove('drag-over');
   if (e.dataTransfer.files && e.dataTransfer.files.length) {
     try {
-      toastLoading('上传 ' + e.dataTransfer.files.length + ' 个文件...');
-      var fileDataList = await __api.uploadFilesFromInput(e.dataTransfer.files);
-      if (fileDataList && fileDataList.length > 0) {
-        await processFileDataList(fileDataList);
-      }
+      await processFileList(Array.from(e.dataTransfer.files));
     } catch(err) {
-      toast('上传失败: ' + String(err));
+      toast('加载失败: ' + String(err));
     }
   }
 }
@@ -1401,14 +1302,64 @@ function setMP(t, b, l, r) {
 }
 function changeCopies(d) { var e = document.getElementById('copies'); e.value = Math.max(1, Math.min(99, parseInt(e.value) + d)); updatePreview(); }
 
-// Trim whitespace — now delegates to Rust backend (10-50x faster)
+// Trim whitespace — client-side canvas implementation
+async function trimOneImage(dataUrl) {
+  return new Promise(function(resolve) {
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      try {
+        var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        var top = 0, bottom = canvas.height - 1, left = 0, right = canvas.width - 1;
+        var threshold = 245;
+        function rowBlank(y) {
+          for (var x = 0; x < canvas.width; x++) {
+            var i = (y * canvas.width + x) * 4;
+            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) return false;
+          }
+          return true;
+        }
+        function colBlank(x) {
+          for (var y = 0; y < canvas.height; y++) {
+            var i = (y * canvas.width + x) * 4;
+            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) return false;
+          }
+          return true;
+        }
+        while (top < canvas.height && rowBlank(top)) top++;
+        while (bottom > top && rowBlank(bottom)) bottom--;
+        while (left < canvas.width && colBlank(left)) left++;
+        while (right > left && colBlank(right)) right--;
+        if (top >= bottom || left >= right) { resolve(dataUrl); return; }
+        var pad = 4;
+        top = Math.max(0, top - pad); bottom = Math.min(canvas.height - 1, bottom + pad);
+        left = Math.max(0, left - pad); right = Math.min(canvas.width - 1, right + pad);
+        var w = right - left + 1, h = bottom - top + 1;
+        var out = document.createElement('canvas');
+        out.width = w; out.height = h;
+        var octx = out.getContext('2d');
+        octx.drawImage(canvas, left, top, w, h, 0, 0, w, h);
+        resolve(out.toDataURL('image/jpeg', 0.9));
+      } catch (e) {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = function() { resolve(dataUrl); };
+    img.src = dataUrl;
+  });
+}
+
 async function processTrim() {
   showLoading('裁剪白边...');
   try {
     for (var i = 0; i < S.files.length; i++) {
       var f = S.files[i];
       if (f.previewUrl && !f.trimmedUrl) {
-        f.trimmedUrl = await __api.call('trim_image', { dataUrl: f.previewUrl });
+        f.trimmedUrl = await trimOneImage(f.previewUrl);
       }
     }
     hideLoading();
@@ -2004,8 +1955,7 @@ window.addEventListener('resize', function() { if (S.files.length) updatePreview
 
 // beforeunload safety net — stop all work if the window is being destroyed
 window.addEventListener('beforeunload', function() {
-  false = true;
-  _ocrQueue = [];
+  _ocrQueue.length = 0;
   _ocrRunning = 0;
   _loadingBatchActive = false;
 });
@@ -2092,23 +2042,16 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    // OCR availability depends on whether server was built with `ocr` feature
-    __api.call('check_ocr_available').then(function(ok) {
-      hasOcr = !!ok;
-    }).catch(function() { hasOcr = false; });
-    __api.call('get_app_version').then(function(v) {
-      APP_VERSION = v;
-      var el = document.getElementById('stVersion');
-      if (el) el.textContent = 'v' + v;
-      console.log('发票酱 v' + v + ' (web)');
-    }).catch(function() {});
+    APP_VERSION = '2.2.0-pure-frontend';
+    var el = document.getElementById('stVersion');
+    if (el) el.textContent = 'v' + APP_VERSION;
+    console.log('发票酱 ' + APP_VERSION);
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() { showApp(); bindFooterTextEvent(); setupInputWheelSupport(); });
   } else {
     showApp(); bindFooterTextEvent(); setupInputWheelSupport();
   }
-  setTimeout(showApp, 2000);
 })();
 
 // =====================================================
