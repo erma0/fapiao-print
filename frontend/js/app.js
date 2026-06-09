@@ -32,7 +32,7 @@ var S = {
   ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
-    watermark: false, collate: true, duplex: false, pageNum: false,
+    watermark: false, pageNum: false,
     printDate: false, footer: false,
     autoOpenPdf: true,
     ocrEnabled: false,
@@ -1397,7 +1397,7 @@ function getSettings() {
     gapV: parseFloat(document.getElementById('gapV').value),
     fitMode: document.getElementById('fitMode').value,
     customScale: parseFloat(document.getElementById('customScale').value) / 100,
-    colorMode: document.getElementById('colorMode').value,
+    colorMode: 'color',
     globalRotation: document.getElementById('globalRotation').value,
     cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
     borderWidth: 1, borderColor: '#000000', trimWhite: S.feat.trimWhite,
@@ -1411,8 +1411,7 @@ function getSettings() {
     footerText: S.feat.footer ? document.getElementById('footerText').value : '',
     footerMargin: (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
     customFm: S.feat.customFM,
-    copies: parseInt(document.getElementById('copies').value) || 1,
-    collate: S.feat.collate, duplex: S.feat.duplex
+    copies: parseInt(document.getElementById('copies').value) || 1
   };
 }
 
@@ -1573,10 +1572,9 @@ function saveSettings() {
     customScale: document.getElementById('customScale').value,
     globalRotation: document.getElementById('globalRotation').value,
     copies: document.getElementById('copies').value,
-    colorMode: document.getElementById('colorMode').value,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
@@ -1667,12 +1665,11 @@ function loadSettings() {
   if (o.fitMode) { document.getElementById('fitMode').value = o.fitMode; onFitChange(); }
   if (o.globalRotation) document.getElementById('globalRotation').value = o.globalRotation;
   if (o.copies) document.getElementById('copies').value = o.copies;
-  if (o.colorMode) document.getElementById('colorMode').value = o.colorMode;
   if (o.feat) {
     var featMap = {
       cutline: 'toggleCutline', number: 'toggleNumber', border: 'toggleBorder',
-      trimWhite: 'toggleTrimWhite', watermark: 'toggleWatermark', collate: 'toggleCollate',
-      duplex: 'toggleDuplex', pageNum: 'togglePageNum', printDate: 'toggleDate',
+      trimWhite: 'toggleTrimWhite', watermark: 'toggleWatermark',
+      pageNum: 'togglePageNum', printDate: 'toggleDate',
       footer: 'toggleFooter', autoOpenPdf: 'toggleAutoOpenPdf', customFM: 'toggleCustomFM',
       slotAdjMemory: 'toggleSlotAdjMemory',
       fileListMemory: 'toggleFileListMemory'
@@ -1773,7 +1770,7 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, colorMode: document.getElementById('colorMode').value };
+  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -1783,7 +1780,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
   document.getElementById('paperSize').value = 'A4';
@@ -1799,7 +1796,6 @@ function resetSettings() {
   document.getElementById('fitMode').value = 'fit';
   document.getElementById('globalRotation').value = '0';
   document.getElementById('copies').value = 1;
-  document.getElementById('colorMode').value = 'color';
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
