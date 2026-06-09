@@ -13,7 +13,9 @@ import * as pdfjsLib from './vendor/pdf.min.mjs';
 
 const CMAP_URL = new URL('./vendor/cmaps/', import.meta.url).toString();
 const PDF_RENDER_DPI = 300;
-const PDF_PREVIEW_DPI = 150;
+const PDF_PREVIEW_DPI = 300;
+const MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
+const MAX_RENDER_DPI = 600;
 const JPEG_QUALITY = 0.82;
 
 // Auto-detect concurrency: half the logical cores, min 1, max 4
@@ -39,8 +41,9 @@ async function loadDocument(arrayBuffer, workerIdx) {
 async function renderPageToCanvas(pdfPage, dpi) {
   var vp1 = pdfPage.getViewport({ scale: 1.0 });
   var longestSide = Math.max(vp1.width, vp1.height);
-  var targetDpi = Math.max(dpi, Math.ceil((dpi * 0.5) / longestSide * 72));
-  targetDpi = Math.min(targetDpi, 600);
+  var minDpiFromPx = Math.ceil(MIN_RENDER_PX / (longestSide / 72));
+  var targetDpi = Math.max(dpi, minDpiFromPx);
+  targetDpi = Math.min(targetDpi, MAX_RENDER_DPI);
   var scale = targetDpi / 72;
   var viewport = pdfPage.getViewport({ scale: scale });
   var canvas = document.createElement('canvas');

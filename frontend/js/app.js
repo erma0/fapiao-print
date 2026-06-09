@@ -9,9 +9,8 @@ var hasOcr = false;  // Pure-frontend: OCR removed, always false
 // =====================================================
 var PAPER = { A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356} };
 var MM2PX = 96 / 25.4;
-var PDF_RENDER_DPI = 300;  // Print/save DPI — Must match Rust RENDER_DPI
-var PDF_PREVIEW_DPI = 150;  // Preview DPI — faster loading, lower resolution
-var MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
+var PDF_RENDER_DPI = 300;  // Render/print DPI
+var PDF_PREVIEW_DPI = 300;  // Preview DPI
 var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
@@ -1118,8 +1117,8 @@ function setSlotAlignment(alignH, alignV) {
   if (settings.fitMode === 'original') {
     // original mode: image displays at native resolution; for alignment
     // we convert native px→mm using the render DPI the image was produced at.
-    // If renderDpi is not set, fall back to PDF_PREVIEW_DPI (150).
-    var rDpi = f.renderDpi || 150;
+    // If renderDpi is not set, fall back to PDF_RENDER_DPI (300).
+    var rDpi = f.renderDpi || 300;
     var oPxPerMm = rDpi / 25.4;
     containedW_mm = imgObjW / oPxPerMm;
     containedH_mm = imgObjH / oPxPerMm;
