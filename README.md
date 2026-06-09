@@ -116,7 +116,11 @@ docker compose up -d
 **裸金属（Linux 服务器）**:
 
 ```bash
-# 安装依赖（Debian/Ubuntu）
+# 选项 1: 启动时自动下载 PDFium（推荐, 无需手动安装）
+cargo build --release --bin ticketchan-server
+./target/release/ticketchan-server  # 首次启动自动下载 pdfium
+
+# 选项 2: 通过系统包安装（Debian/Ubuntu）
 sudo apt install libpdfium-dev
 
 # 编译
@@ -199,11 +203,12 @@ fapiao/
 ├── src/                          # Rust 后端 (8250 行)
 │   ├── main.rs                   # 入口,加载环境变量 + AppState
 │   ├── lib.rs                    # app_lib,导出模块 + 共享工具
-│   ├── server.rs                 # Axum 路由 + 25 个 REST handler
+│   ├── server.rs                 # Axum 路由 + 27 个 REST handler
 │   ├── session.rs                # Web session 管理 (24h TTL)
-│   ├── pdf_engine.rs             # 5819 行,核心 PDF 排版/生成/打印
+│   ├── pdf_engine.rs             # 5650 行,核心 PDF 排版/生成/打印
 │   ├── pdfium_bindings.rs        # FFI 绑定
-│   ├── pdfium_render.rs          # 跨平台位图渲染
+│   ├── pdfium_installer.rs       # PDFium 启动自动下载
+│   ├── pdfium_render.rs          # 跨平台位图渲染 + 单页 DynamicImage
 │   ├── pdfium_print.rs           # Windows GDI 矢量打印
 │   ├── platform.rs               # 平台抽象层
 │   └── seh_wrapper.c             # Windows SEH 保护

@@ -164,7 +164,7 @@ rm -f target/release/{fapiao-print.exe,ticketchan.exe,发票打印工具*.exe}
 
 所有 CPU 密集型后端 handler 必须用 `async fn` + `tokio::task::spawn_blocking` 包装,防止 tokio runtime 线程饥饿。
 
-- `render_pdf_pages` / `render_pdf_pages_pdfium` / `extract_pdf_text` / `extract_pdf_texts` 均已异步化
+- `render_pdf_pages_pdfium` / `extract_pdf_text` / `extract_pdf_texts` 均已异步化
 - `spawn_blocking` 将计算移到 blocking thread pool,主 reactor 线程可继续处理请求
 - 同步 handler 在大量并发时会导致 60s 无响应
 
@@ -181,11 +181,24 @@ rm -f target/release/{fapiao-print.exe,ticketchan.exe,发票打印工具*.exe}
 
 ### PDF 渲染 (PDFium 唯一)
 
-v2.1.0 移除 WinRT 纯渲染路径(死代码),`render_pdf_pages_pdfium()` 是唯一渲染入口:
+v2.1.0 彻底移除 WinRT 渲染路径,`render_pdf_pages_pdfium()` 是唯一渲染入口:
 
 - `FPDF_LoadMemDocument` + `FPDF_RenderPageBitmap` → PNG/JPEG
-- `pdfium_render::render_pdf_to_images()` — BGRA→RGBA 转换 + 编码
-- 预览 JPEG 80% / 150 DPI,打印 300 DPI 矢量走 `generate_pdf_from_layout` 直通管道
+- `pdfium_render::render_pdf_to_images()` — 多页批量渲染, BGRA→RGBA 转换 + 编码
+- `pdfium_render::render_pdf_page_to_image()` — 单页直接返回 `image::DynamicImage`,**无 base64 编码**,供 OCR 一体化路径使用
+- 预览 JPEG 80% / 150 DPI, 打印 300 DPI 矢量走 `generate_pdf_from_layout` 直通管道
+- 单页 OCR 路径 `ocr_pdf_page`: PDFium 渲染 → `DynamicImage` → `run_ocr_on_image`,**全 Rust 内部零 base64 往返**
+
+### PDFium 自动安装 (v2.1.0)
+
+启动时检测 `<exe-dir>/tools/pdfium.{dll|so|dylib}` 是否存在,缺失则后台自动从 [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) GitHub releases 下载并解压:
+
+- 启动检测: `main.rs` 启动时检查 `tools/` 目录,缺失时 `pdfium_installer::ensure_pdfium_background()` 异步下载
+- API 端点:
+  - `GET /api/v1/pdfium_status` — 返回 `{ installed, progress, downloadUrl }`
+  - `POST /api/v1/install_pdfium` — 同步触发下载 + 解压
+- 平台 URL 映射在 `platform::get_pdfium_download_url()` 中按 `#[cfg(target_os)]` 分发
+- 离线场景安全: 启动不阻塞, 后续 PDF 渲染会返回明确错误
 
 ### 预览与打印 DPI 分离 (v1.10.5)
 

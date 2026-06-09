@@ -9,42 +9,9 @@ pub const RENDER_DPI: u32 = 300;
 /// Conversion factor: 1 mm = 2.834646 pt (72 pt per inch / 25.4 mm per inch)
 const MM_TO_PT: f32 = 72.0 / 25.4;
 
-/// Global shutdown flag — checked by long-running COM operations to abort early.
-/// Set to true when the user clicks the close button, before graceful window close.
+/// Global shutdown flag — checked by long-running operations to abort early.
+/// Set to true when the user clicks the close button, before graceful shutdown.
 pub static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
-
-// =====================================================
-// COM RAII Guard — ensures CoUninitialize is called on drop
-// =====================================================
-
-pub(crate) struct ComGuard;
-
-#[cfg(target_os = "windows")]
-impl ComGuard {
-    pub(crate) fn init() -> Self {
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-            );
-        }
-        ComGuard
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-impl ComGuard {
-    pub(crate) fn init() -> Self {
-        ComGuard
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for ComGuard {
-    fn drop(&mut self) {
-        unsafe { windows::Win32::System::Com::CoUninitialize(); }
-    }
-}
 
 // =====================================================
 // JPEG Passthrough Utilities
@@ -213,7 +180,7 @@ pub struct FileData {
     pub size: u64,
     /// Base64-encoded preview image (data URL format).
     /// For image files: a JPEG thumbnail (max 600px longest side) for fast IPC.
-    /// For PDF files: empty (rendered via render_and_ocr_pdf command).
+    /// For PDF files: empty (rendered via ocr_pdf_page command).
     /// For OFD files: the extracted page image (no thumbnail — already small).
     pub data_url: String,
     /// Original file path on disk.
@@ -296,353 +263,33 @@ pub(crate) fn render_pdf_pages_pdfium(pdf_path: &str, dpi: u32, use_jpeg: bool) 
 /// Render a single PDF page and run OCR on it — zero IPC round-trip for OCR.
 /// The frontend calls this instead of `render_pdf_pages_pdfium` + `ocr_image` to avoid:
 ///   Rust render → base64 → IPC → frontend → downsample → base64 → IPC → Rust decode → OCR
-/// Instead: Rust render → decode in memory → OCR → return result directly.
+/// Instead: PDFium render → `DynamicImage` in memory → OCR → return result directly.
 /// Returns OcrResult with coordinates in the original (full-DPI) pixel space.
-#[cfg(all(target_os = "windows", feature = "ocr"))]
+#[cfg(feature = "ocr")]
 pub(crate) fn ocr_pdf_page(pdf_path: &str, page_index: u32, dpi: Option<u32>, ocr_precision: Option<&str>) -> Result<OcrResult, String> {
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
     }
-    use windows::core::HSTRING;
-    use windows::Data::Pdf::{PdfDocument, PdfPageRenderOptions};
-    use windows::Storage::StorageFile;
-    use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
 
-    let _com = ComGuard::init();
     let dpi = dpi.unwrap_or(RENDER_DPI);
-    let path_h = HSTRING::from(pdf_path);
-
-    let file = StorageFile::GetFileFromPathAsync(&path_h)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载文件失败: {}", e))?;
-
-    let doc = PdfDocument::LoadFromFileAsync(&file)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载PDF失败: {}（文件可能受密码保护）", e))?;
-
-    let page_count = doc.PageCount().map_err(|e| format!("获取页数失败: {}", e))?;
-    if page_index >= page_count {
-        return Err(format!("页码超出范围: 请求第{}页，共{}页", page_index + 1, page_count));
-    }
+    let pdf_bytes = std::fs::read(pdf_path)
+        .map_err(|e| format!("读取 PDF 失败: {}", e))?;
 
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
     }
 
-    let page = doc.GetPage(page_index).map_err(|e| format!("获取第{}页失败: {}", page_index + 1, e))?;
-
-    let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", page_index + 1, e))?;
-
-    // Adaptive DPI (same logic as render_pdf_pages)
-    let min_render_px: u32 = 3508;
-    let longest_side = size.Width.max(size.Height) as u32;
-    let base_pixels = longest_side * dpi / 96;
-    let effective_dpi = if base_pixels >= min_render_px {
-        dpi
-    } else {
-        let needed = (min_render_px as f32 * 96.0 / longest_side as f32).ceil() as u32;
-        dpi.max(needed).min(1200)
-    };
-
-    let scale = effective_dpi as f32 / 96.0;
-    let dest_w = (size.Width * scale) as u32;
-    let dest_h = (size.Height * scale) as u32;
-
-    let options = PdfPageRenderOptions::new().map_err(|e| format!("创建渲染选项失败: {}", e))?;
-    options.SetDestinationWidth(dest_w).map_err(|e| format!("设置宽度失败: {}", e))?;
-    options.SetDestinationHeight(dest_h).map_err(|e| format!("设置高度失败: {}", e))?;
-
-    let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败: {}", e))?;
+    let img = crate::pdfium_render::render_pdf_page_to_image(&pdf_bytes, page_index, dpi)?;
 
     if SHUTTING_DOWN.load(Ordering::SeqCst) {
         return Err("应用正在关闭".to_string());
     }
 
-    page.RenderWithOptionsToStreamAsync(&stream, &options)
-        .map_err(|e| format!("创建渲染操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("渲染第{}页失败: {}", page_index + 1, e))?;
-
-    let stream_size = stream.Size().map_err(|e| format!("获取流大小失败: {}", e))? as u32;
-    stream.Seek(0).map_err(|e| format!("Seek失败: {}", e))?;
-
-    let reader = DataReader::CreateDataReader(&stream)
-        .map_err(|e| format!("创建DataReader失败: {}", e))?;
-
-    reader.LoadAsync(stream_size)
-        .map_err(|e| format!("创建LoadAsync操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载第{}页数据失败: {}", page_index + 1, e))?;
-
-    let mut data = vec![0u8; stream_size as usize];
-    reader.ReadBytes(&mut data)
-        .map_err(|e| format!("读取第{}页字节失败: {}", page_index + 1, e))?;
-
-    // Release per-page COM objects
-    drop(reader);
-    stream.Close().ok();
-    drop(stream);
-    drop(page);
-    drop(doc);
-    drop(file);
-    // ComGuard (_com) drops at end of scope
-
-    // Decode PNG bytes in memory — no base64 round-trip!
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭".to_string());
-    }
-    let img = image::load_from_memory(&data)
-        .map_err(|e| format!("图片解码失败: {}", e))?;
-
-    log::info!("ocr_pdf_page: page {} ({}x{}) decoded, running OCR", page_index + 1, img.width(), img.height());
+    log::info!("ocr_pdf_page: page {} ({}x{}) rendered, running OCR", page_index + 1, img.width(), img.height());
 
     let max_dim = ocr_max_dim_for_precision(ocr_precision.unwrap_or("standard"));
     run_ocr_on_image(img, max_dim)
 }
-
-/// Render PDF pages and run OCR in one pass — avoids the IPC round-trip
-/// where the frontend sends the rendered dataUrl back to Rust for OCR.
-/// The image is decoded from PNG bytes ONCE, OCR'd, then base64-encoded for preview.
-#[cfg(all(target_os = "windows", feature = "ocr"))]
-pub(crate) fn render_and_ocr_pdf(pdf_path: &str, dpi: u32, ocr_precision: Option<&str>) -> Result<Vec<RenderedOcrPage>, String> {
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭".to_string());
-    }
-    use windows::core::HSTRING;
-    use windows::Data::Pdf::{PdfDocument, PdfPageRenderOptions};
-    use windows::Storage::StorageFile;
-    use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
-    use base64::Engine;
-    use std::time::Instant;
-
-    let _com = ComGuard::init();
-
-    let max_dim = ocr_max_dim_for_precision(ocr_precision.unwrap_or("standard"));
-
-    let path_h = HSTRING::from(pdf_path);
-
-    let file = StorageFile::GetFileFromPathAsync(&path_h)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载文件失败: {}", e))?;
-
-    let doc = PdfDocument::LoadFromFileAsync(&file)
-        .map_err(|e| format!("创建异步操作失败: {}", e))?
-        .get()
-        .map_err(|e| format!("加载PDF失败: {}（文件可能受密码保护）", e))?;
-
-    let page_count = doc.PageCount().map_err(|e| format!("获取页数失败: {}", e))?;
-    log::info!("WinRT PDF render+OCR: {} pages, dpi={}", page_count, dpi);
-
-    let mut results = Vec::new();
-
-    for i in 0..page_count {
-        if SHUTTING_DOWN.load(Ordering::SeqCst) {
-            return Err("应用正在关闭，渲染已中止".to_string());
-        }
-        let page = doc.GetPage(i).map_err(|e| format!("获取第{}页失败: {}", i + 1, e))?;
-
-        let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", i + 1, e))?;
-
-        // Adaptive DPI (same logic as render_pdf_pages)
-        let min_render_px: u32 = 3508;
-        let longest_side = size.Width.max(size.Height) as u32;
-        let base_pixels = longest_side * dpi / 96;
-        let effective_dpi = if base_pixels >= min_render_px {
-            dpi
-        } else {
-            let needed = (min_render_px as f32 * 96.0 / longest_side as f32).ceil() as u32;
-            dpi.max(needed).min(1200)
-        };
-
-        let scale = effective_dpi as f32 / 96.0;
-        let dest_w = (size.Width * scale) as u32;
-        let dest_h = (size.Height * scale) as u32;
-
-        let options = PdfPageRenderOptions::new().map_err(|e| format!("创建渲染选项失败: {}", e))?;
-        options.SetDestinationWidth(dest_w).map_err(|e| format!("设置宽度失败: {}", e))?;
-        options.SetDestinationHeight(dest_h).map_err(|e| format!("设置高度失败: {}", e))?;
-
-        let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败: {}", e))?;
-
-        if SHUTTING_DOWN.load(Ordering::SeqCst) {
-            return Err("应用正在关闭，渲染已中止".to_string());
-        }
-
-        page.RenderWithOptionsToStreamAsync(&stream, &options)
-            .map_err(|e| format!("创建渲染操作失败: {}", e))?
-            .get()
-            .map_err(|e| format!("渲染第{}页失败: {}", i + 1, e))?;
-
-        let stream_size = stream.Size().map_err(|e| format!("获取流大小失败: {}", e))? as u32;
-        stream.Seek(0).map_err(|e| format!("Seek失败: {}", e))?;
-
-        let reader = DataReader::CreateDataReader(&stream)
-            .map_err(|e| format!("创建DataReader失败: {}", e))?;
-
-        reader.LoadAsync(stream_size)
-            .map_err(|e| format!("创建LoadAsync操作失败: {}", e))?
-            .get()
-            .map_err(|e| format!("加载第{}页数据失败: {}", i + 1, e))?;
-
-        let mut data = vec![0u8; stream_size as usize];
-        reader.ReadBytes(&mut data)
-            .map_err(|e| format!("读取第{}页字节失败: {}", i + 1, e))?;
-
-        // Release per-page COM objects
-        drop(reader);
-        stream.Close().ok();
-        drop(stream);
-        drop(page);
-
-        // === OCR on raw PNG bytes (no base64 round-trip!) ===
-        let t_ocr_start = Instant::now();
-        let ocr_result = if !SHUTTING_DOWN.load(Ordering::SeqCst) {
-            // Decode image once for OCR
-            match image::load_from_memory(&data) {
-                Ok(img) => {
-                    let orig_w = img.width();
-                    let orig_h = img.height();
-                    let longest = orig_w.max(orig_h);
-
-                    let ocr_img = if longest > max_dim {
-                        let rscale = max_dim as f32 / longest as f32;
-                        let nw = (orig_w as f32 * rscale).round() as u32;
-                        let nh = (orig_h as f32 * rscale).round() as u32;
-                        img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3)
-                    } else {
-                        img
-                    };
-
-                    // Enhance contrast for better OCR accuracy
-                    let ocr_img = enhance_contrast_ocr(ocr_img);
-
-                    let resized_w = ocr_img.width();
-                    let resized_h = ocr_img.height();
-
-                    // Run OCR
-                    match get_ocr_engine() {
-                        Ok(lock) => {
-                            let engine = lock.as_ref();
-                            match engine {
-                                Some(eng) => {
-                                    match eng.recognize(&ocr_img) {
-                                        Ok(rec_results) => {
-                                            let coord_scale_x = if resized_w > 0 { orig_w as f64 / resized_w as f64 } else { 1.0 };
-                                            let coord_scale_y = if resized_h > 0 { orig_h as f64 / resized_h as f64 } else { 1.0 };
-
-                                            let mut ocr_lines: Vec<OcrLine> = Vec::new();
-                                            let mut flat_text_parts: Vec<String> = Vec::new();
-
-                                            for result in &rec_results {
-                                                let line_text = result.text.trim().to_string();
-                                                if line_text.is_empty() { continue; }
-                                                flat_text_parts.push(line_text.clone());
-
-                                                let bbox = &result.bbox;
-                                                let rect = bbox.rect;
-                                                let bx = rect.left() as f64 * coord_scale_x;
-                                                let by = rect.top() as f64 * coord_scale_y;
-                                                let bw = (rect.right() - rect.left()) as f64 * coord_scale_x;
-                                                let bh = (rect.bottom() - rect.top()) as f64 * coord_scale_y;
-
-                                                let line_points = bbox.points.as_ref().map(|pts| {
-                                                    pts.iter().map(|p| OcrPoint {
-                                                        x: p.x as f64 * coord_scale_x,
-                                                        y: p.y as f64 * coord_scale_y,
-                                                    }).collect()
-                                                });
-
-                                                let tokens = split_line_to_words(&line_text);
-                                                let line_confidence = result.confidence;
-
-                                                if tokens.is_empty() {
-                                                    ocr_lines.push(OcrLine {
-                                                        words: vec![OcrWord { text: line_text, x: bx, y: by, w: bw, h: bh }],
-                                                        points: line_points,
-                                                        confidence: line_confidence,
-                                                    });
-                                                    continue;
-                                                }
-
-                                                let total_weight: f64 = tokens.iter().map(|t| token_width_weight(t)).sum();
-                                                let mut words: Vec<OcrWord> = Vec::new();
-                                                let mut x_offset = 0.0f64;
-                                                for token in &tokens {
-                                                    let token_w = if total_weight > 0.0 { bw * token_width_weight(token) / total_weight } else { bw };
-                                                    words.push(OcrWord { text: token.clone(), x: bx + x_offset, y: by, w: token_w, h: bh });
-                                                    x_offset += token_w;
-                                                }
-                                                ocr_lines.push(OcrLine { words, points: line_points, confidence: line_confidence });
-                                            }
-
-                                            drop(lock); // release engine lock ASAP
-
-                                            let flat_text = flat_text_parts.join("\n");
-                                            Some(OcrResult { text: flat_text, lines: ocr_lines, img_w: orig_w, img_h: orig_h })
-                                        }
-                                        Err(e) => {
-                                            log::warn!("PDF页{} OCR识别失败: {:?}", i + 1, e);
-                                            None
-                                        }
-                                    }
-                                }
-                                None => None,
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("PDF页{} 获取OCR引擎失败: {}", i + 1, e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("PDF页{} 图片解码失败: {}", i + 1, e);
-                    None
-                }
-            }
-        } else {
-            None // shutting down
-        };
-
-        let ocr_elapsed = t_ocr_start.elapsed().as_millis();
-
-        // Encode to base64 data URL for preview
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-        let data_url = format!("data:image/png;base64,{}", b64);
-
-        let ocr_info = ocr_result.as_ref()
-            .map(|r| format!("{} chars, {} lines", r.text.len(), r.lines.len()))
-            .unwrap_or_else(|| "skipped".to_string());
-
-        log::info!(
-            "Render+OCR page {} ({}x{}) @ {}dpi, OCR: {}ms ({})",
-            i + 1, dest_w, dest_h, effective_dpi, ocr_elapsed, ocr_info
-        );
-
-        results.push(RenderedOcrPage {
-            index: i,
-            image_data_url: data_url,
-            width: dest_w,
-            height: dest_h,
-            render_dpi: effective_dpi,
-            ocr_result,
-        });
-    }
-
-    drop(doc);
-    drop(file);
-
-    Ok(results)
-}
-
-#[cfg(all(not(target_os = "windows"), feature = "ocr"))]
-pub(crate) fn render_and_ocr_pdf(_pdf_path: &str, _dpi: u32) -> Result<Vec<RenderedOcrPage>, String> {
-    Ok(vec![])
-}
-
 // =====================================================
 // Read files from disk
 // =====================================================
@@ -713,14 +360,14 @@ pub fn read_invoice_files(paths: Vec<String>) -> Result<Vec<FileData>, String> {
     // sending the full base64-encoded image. A 300 DPI invoice (~3MB) would become
     // ~4MB in base64 — the thumbnail is only ~30KB, a 100x reduction in IPC data.
     // The original file path is passed so Rust can read the full image for OCR/PDF.
-    // For PDF files, data_url is empty — they are rendered via render_and_ocr_pdf.
+    // For PDF files, data_url is empty — they are rendered via ocr_pdf_page.
     const THUMB_MAX_DIM: u32 = 600; // Thumbnail max longest side in pixels
 
     let parallel_results: Vec<FileData> = non_ofd_paths
         .par_iter()
         .filter_map(|(path_str, name, ext, size)| {
             if ext == "pdf" {
-                // PDF files: no data_url needed — rendered on demand by render_and_ocr_pdf
+                // PDF files: no data_url needed — rendered on demand by ocr_pdf_page
                 return Some(FileData {
                     name: name.clone(),
                     ext: ext.clone(),
@@ -2801,7 +2448,7 @@ pub struct RenderSettings {
 ///
 /// **Optimization**: If `file_path` is provided, Rust reads the image directly
 /// from disk, avoiding the expensive base64 encode→IPC→decode round-trip.
-/// For images that only exist in memory (e.g. PDF pages rendered by WinRT,
+/// For images that only exist in memory (e.g. PDF pages rendered by PDFium,
 /// OFD-extracted images), `file_path` is None and `data_url` is used instead.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

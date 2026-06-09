@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 
 pub mod pdf_engine;
 pub mod pdfium_bindings;
+pub mod pdfium_installer;
 pub mod pdfium_render;
 pub mod platform;
 pub mod session;
@@ -29,7 +30,6 @@ pub fn shell_execute_print(pdf_path: &std::path::Path, printer_name: Option<&str
     let printer_str = resolved_printer.as_deref()
         .ok_or("未找到默认打印机，请在系统设置中配置打印机，或在打印设置中手动选择。")?;
 
-    let _com = pdf_engine::ComGuard::init();
     unsafe {
         let file: HSTRING = pdf_path.to_string_lossy().to_string().into();
 

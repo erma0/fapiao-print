@@ -78,6 +78,16 @@
 - 移除 `CompressionLayer` 修复 tower-http 0.6 内部 413,改由 nginx 负责 Web 压缩
 - 性能优化: 合并 render+text 提取 / 二进制页面端点 / 动态 Semaphore（commit `f0a05c1`）
 
+### 🧹 后续清理 (v2.1.0)
+
+- **彻底移除 WinRT 全部代码**: 删除 `ocr_pdf_page` 的 `windows.Data.Pdf` 实现,改用 PDFium 单页 `render_pdf_page_to_image` → `run_ocr_on_image` 零往返,删除死代码 `render_and_ocr_pdf`、COM 守卫 `ComGuard`、OCR 一体化路径中的 WinRT 依赖
+- **Cargo.toml features 收紧**: 移除 `Data_Pdf` / `Storage` / `Storage_Streams` / `Foundation*` / `Win32_System_Com` 五个 WinRT 特性, `windows` crate 体积显著减少, Linux/macOS 不变(本来就不引入)
+- **PDFium 启动自动下载**: 新增 `pdfium_installer.rs`, 启动时检测 `<exe>/tools/pdfium.{dll|so|dylib}`, 缺失时后台从 GitHub releases 自动下载并解压
+- **新 API 端点**:
+  - `POST /api/v1/install_pdfium` — 同步触发下载 + 解压(供前端手动触发)
+  - `POST /api/v1/pdfium_status` — 返回 `{ installed, progress, downloadUrl }` 状态
+- **`reqwest` 增加 `blocking` feature**: 用于自动下载的同步 HTTP 客户端
+
 ---
 
 ## v2.0.7 — XML 数电票 + 文件列表记忆 + 打印状态

@@ -172,6 +172,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/write_text_file", post(write_text_file))
         .route("/get_temp_dir", post(get_temp_dir))
         .route("/get_downloads_dir", post(get_downloads_dir))
+        .route("/install_pdfium", post(install_pdfium))
+        .route("/pdfium_status", post(pdfium_status))
         ;
 
     let cors = CorsLayer::permissive();
@@ -232,6 +234,33 @@ async fn health() -> Json<ApiResponse> {
         "ocr": cfg!(feature = "ocr"),
         "version": env!("CARGO_PKG_VERSION"),
     })))
+}
+
+async fn pdfium_status() -> Json<ApiResponse> {
+    let installed = crate::pdfium_bindings::find_pdfium_lib().is_some();
+    let progress = crate::pdfium_installer::get_install_progress();
+    let url = crate::platform::get_pdfium_download_url();
+    Json(ApiResponse::ok(json!({
+        "installed": installed,
+        "progress": progress,
+        "downloadUrl": url,
+    })))
+}
+
+async fn install_pdfium() -> Result<Json<ApiResponse>, AppError> {
+    let lib_dir = crate::platform::get_pdfium_lib_dir()
+        .ok_or_else(|| AppError::Internal("无法定位 tools 目录".to_string()))?;
+
+    let result = tokio::task::spawn_blocking(move || {
+        crate::pdfium_installer::ensure_pdfium_blocking(&lib_dir)
+    }).await
+        .map_err(|e| AppError::Internal(format!("安装任务崩溃: {}", e)))?
+        .map_err(AppError::Internal)?;
+
+    Ok(Json(ApiResponse::ok(json!({
+        "success": true,
+        "path": result.to_string_lossy(),
+    }))))
 }
 
 async fn upload_files(

@@ -180,3 +180,122 @@ pub fn render_pdf_to_images(
 
     Ok(results)
 }
+
+/// Render a single PDF page directly to an `image::DynamicImage`.
+/// Returns the decoded RGBA bitmap at the requested DPI; no base64 / data URL encoding.
+/// Used by `ocr_pdf_page` for zero-IPC PDF→OCR pipeline.
+pub fn render_pdf_page_to_image(
+    pdf_bytes: &[u8],
+    page_index: u32,
+    dpi: u32,
+) -> Result<image::DynamicImage, String> {
+    if crate::pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return Err("应用正在关闭".to_string());
+    }
+
+    let pdf_len = pdf_bytes.len();
+    if pdf_len > i32::MAX as usize {
+        return Err(format!("PDF 文件过大 ({} bytes)", pdf_len));
+    }
+
+    let (rgba_w, rgba_h, rgba_bytes) = with_pdfium(|funcs| {
+        let doc = unsafe {
+            (funcs.load_mem_document)(
+                pdf_bytes.as_ptr() as *const c_void,
+                pdf_len as i32,
+                ptr::null(),
+            )
+        };
+        if doc.is_null() {
+            let err = unsafe { (funcs.get_last_error)() };
+            return Err(format!("PDFium 无法加载 PDF 文档 (错误: {})", pdfium_err_desc(err)));
+        }
+
+        let pc = unsafe { (funcs.get_page_count)(doc) };
+        if pc <= 0 {
+            let err = unsafe { (funcs.get_last_error)() };
+            unsafe { (funcs.close_document)(doc) };
+            return Err(format!("PDF 文档没有页面 (错误: {})", pdfium_err_desc(err)));
+        }
+        if (page_index as i32) >= pc {
+            unsafe { (funcs.close_document)(doc) };
+            return Err(format!("页码越界: {} >= {}", page_index, pc));
+        }
+
+        let result = (|| -> Result<(u32, u32, Vec<u8>), String> {
+            let page = unsafe { (funcs.load_page)(doc, page_index as i32) };
+            if page.is_null() {
+                let err = unsafe { (funcs.get_last_error)() };
+                return Err(format!("无法加载第 {} 页 (错误: {})", page_index + 1, pdfium_err_desc(err)));
+            }
+
+            let page_w = unsafe { (funcs.get_page_width_f)(page) };
+            let page_h = unsafe { (funcs.get_page_height_f)(page) };
+            if page_w <= 0.0 || page_h <= 0.0 {
+                unsafe { (funcs.close_page)(page) };
+                return Err(format!("第 {} 页尺寸无效 ({:.1}x{:.1})", page_index + 1, page_w, page_h));
+            }
+
+            let scale = dpi as f32 / 72.0;
+            let bmp_w = (page_w * scale).round() as i32;
+            let bmp_h = (page_h * scale).round() as i32;
+            if bmp_w <= 0 || bmp_h <= 0 {
+                unsafe { (funcs.close_page)(page) };
+                return Err(format!("第 {} 页渲染尺寸无效 ({}x{})", page_index + 1, bmp_w, bmp_h));
+            }
+
+            let bitmap = unsafe { (funcs.bitmap_create)(bmp_w, bmp_h, 0) };
+            if bitmap.is_null() {
+                unsafe { (funcs.close_page)(page) };
+                return Err(format!("创建位图失败 (第 {} 页, {}x{})", page_index + 1, bmp_w, bmp_h));
+            }
+
+            unsafe { (funcs.bitmap_fill_rect)(bitmap, 0, 0, bmp_w, bmp_h, 0xFFFFFFFF) };
+            unsafe {
+                (funcs.render_page_bitmap)(
+                    bitmap, page,
+                    0, 0, bmp_w, bmp_h,
+                    0,
+                    FPDF_ANNOT,
+                );
+            }
+
+            let stride = unsafe { (funcs.bitmap_get_stride)(bitmap) };
+            let buffer = unsafe { (funcs.bitmap_get_buffer)(bitmap) };
+
+            let mut rgba = Vec::with_capacity(bmp_w as usize * bmp_h as usize * 4);
+            if !buffer.is_null() && stride > 0 {
+                let row_len = (bmp_w as usize * 4).min(stride as usize);
+                for y in 0..bmp_h {
+                    let row_start = unsafe { buffer.add(y as usize * stride as usize) };
+                    let row = unsafe { std::slice::from_raw_parts(row_start as *const u8, row_len) };
+                    for x in 0..bmp_w as usize {
+                        let b = row[x * 4];
+                        let g = row[x * 4 + 1];
+                        let r = row[x * 4 + 2];
+                        rgba.push(r);
+                        rgba.push(g);
+                        rgba.push(b);
+                        rgba.push(255);
+                    }
+                }
+            }
+
+            unsafe { (funcs.bitmap_destroy)(bitmap) };
+            unsafe { (funcs.close_page)(page) };
+
+            if rgba.is_empty() {
+                return Err(format!("PDF 页面 {} 渲染结果为空", page_index + 1));
+            }
+
+            Ok((bmp_w as u32, bmp_h as u32, rgba))
+        })();
+
+        unsafe { (funcs.close_document)(doc) };
+        result
+    })?;
+
+    let img = image::RgbaImage::from_raw(rgba_w, rgba_h, rgba_bytes)
+        .ok_or_else(|| format!("PDFium 单页 RGBA 缓冲组装失败 ({}x{})", rgba_w, rgba_h))?;
+    Ok(image::DynamicImage::ImageRgba8(img))
+}

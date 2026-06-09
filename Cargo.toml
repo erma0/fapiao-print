@@ -40,7 +40,7 @@ invoice-engine = { path = "invoice-engine" }
 flate2 = "1.1.9"
 tar = "0.4"
 zip = "2"
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["rustls-tls", "blocking"], default-features = false }
 libloading = "0.8"
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
@@ -55,7 +55,6 @@ env_logger = "0.11"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
-    "Win32_System_Com",
     "Win32_System_Threading",
     "Win32_System_SystemInformation",
     "Win32_System_LibraryLoader",
@@ -68,11 +67,6 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Printing",
     "Win32_Storage_Xps",
     "Win32_Storage_Xps_Printing",
-    "Data_Pdf",
-    "Storage",
-    "Storage_Streams",
-    "Foundation",
-    "Foundation_Collections",
 ] }
 
 [profile.release]

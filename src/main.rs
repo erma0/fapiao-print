@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use app_lib::pdfium_installer;
+use app_lib::platform::get_pdfium_lib_dir;
 use app_lib::server::{self, AppState, ProgressTracker};
 
 #[tokio::main]
@@ -29,6 +31,24 @@ async fn main() {
         .ok()
         .and_then(|a| a.parse().ok())
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+
+    // Auto-install PDFium if missing — fire-and-forget so the server can boot offline.
+    if let Some(lib_dir) = get_pdfium_lib_dir() {
+        if let Ok(entries) = std::fs::read_dir(&lib_dir) {
+            let has_pdfium = entries
+                .filter_map(|e| e.ok())
+                .any(|e| {
+                    let name = e.file_name().to_string_lossy().to_lowercase();
+                    name.starts_with("pdfium") || name.starts_with("libpdfium")
+                });
+            if !has_pdfium {
+                log::info!("PDFium 未在 {:?} 中找到，启动后台下载", lib_dir);
+                pdfium_installer::ensure_pdfium_background(lib_dir);
+            } else {
+                log::info!("PDFium 已就绪: {:?}", lib_dir);
+            }
+        }
+    }
 
     // Clean up stale sessions from previous runs
     server::cleanup_all_sessions(&session_dir);
