@@ -1,44 +1,65 @@
 # 📋 更新日志
 
-## v2.1.0 — 跨平台 + Web 部署（feat/web-cross-platform）
+## v2.1.0 — 纯 Web 重构（feat/web-cross-platform）
+
+> ⚠️ **本版本是一次彻底的架构简化,不是"加 Web 模式"**。
+> 移除 Tauri 桌面壳,`src-tauri/` 目录、`tauri.conf.json`、`tauri-cli` 构建链、NSIS 打包、桌面安装包**全部废弃**。
+> 唯一发布形态是 `ticketchan-server` 单二进制 + 浏览器静态文件,客户端为任意现代浏览器。
+> 桌面版用户请使用 v2.0.7 或回退到 `master` 分支对应 tag。
+
+### 🗑️ 桌面壳彻底移除
+
+- **目录重构**: `src-tauri/src/*` → 根 `src/*`（移除 `src-tauri/` 一层嵌套）
+- **前端迁移**: Tauri 嵌入的 `src/*.{html,js,css}` → 根 `frontend/*`（无 `__TAURI_INTERNALS__` 依赖）
+- **Tauri IPC 全替换**: 61 处 `invoke()` → `__api.call()` HTTP,`_isDesktop` 检测 / `is_desktop` 字段全部删除
+- **配置文件清理**:
+  - 删除 `package.json`（前端不再需要 Node.js 构建）
+  - 删除 `tauri.conf.json` + `tauri.ocr.conf.json`（Tauri 配置废弃）
+  - 删除 `tauri-cli` 构建脚本和 `tauri::Builder` 调用链
+  - 删除 NSIS 打包配置、图标 (`icons/icon.ico`/`icon.png`/`icon.icns`)
+  - 版本号统一在 `Cargo.toml` `[package].version`（单一数据源）
+- **构建产物**: 从 `ticketchan.exe` (3.5MB 轻量 / 24MB OCR) + NSIS 安装包,缩减为单一 `ticketchan-server` 二进制
+- **关键 commit**: `f639776` (纯 Web 迁移) / `ebe24f5` (移除 is_desktop) / `1eb4390` (Phase 4-5 跨平台)
 
 ### 🌐 Web 部署支持
 
-- **Axum HTTP Server 嵌入**：新增 `server.rs`（942 行），25 个 REST API 端点覆盖全部发票功能
-- **Docker 一键部署**：`Dockerfile` + `docker-compose.yml` + `nginx.conf` + `deploy.sh`
-- **裸金属部署**：`ticketchan-server` 二进制 + `ticketchan.service` systemd 文件
-- **Session 管理**：`session.rs` — 24h TTL、定时清理、路径穿越防护、UUID 文件重命名
-- **SSE 进度推送**：PDF 生成进度通过 `EventSource` 实时推送，替代 Tauri event 系统
-- **100MB 上传限制**：Axum `RequestBodyLimitLayer` + Nginx `client_max_body_size` 双重保护
-- **可选 Token 认证**：`TICKETCHAN_AUTH_TOKEN` 环境变量启用 Bearer token 中间件
+- **Axum HTTP Server 嵌入**: `src/server.rs`（1002 行）,25 个 REST API 端点覆盖全部发票功能
+- **Docker 一键部署**: `Dockerfile`（多阶段构建: rust:1.82-bookworm → debian:bookworm-slim）+ `docker-compose.yml` + `nginx.conf` + `deploy.sh`
+- **裸金属部署**: `ticketchan-server` 二进制 + `ticketchan.service`（systemd unit,自动重启 + 日志）
+- **Session 管理**: `src/session.rs`（122 行）— 24h TTL、定时清理、`Path::canonicalize` 防路径穿越、UUID 文件重命名
+- **SSE 进度推送**: PDF 生成进度通过 `EventSource` 实时推送,替代 Tauri event 系统
+- **100MB 上传限制**: Axum `RequestBodyLimitLayer` + Nginx `client_max_body_size` 双重保护
+- **可选 Token 认证**: `TICKETCHAN_AUTH_TOKEN` 环境变量启用 Bearer token 中间件
+- **环境变量体系**: 5 个 `TICKETCHAN_*` 变量（PORT / BIND_ADDR / AUTH_TOKEN / FRONTEND_DIR / SESSION_DIR）
 
-### 🖥️ 跨平台桌面支持
+### 🖥️ 跨平台桌面支持（保留）
 
-- **统一通信层（模式 B）**：Tauri 启动时 spawn 本地 Axum server，前端统一 `fetch()`，桌面版与 Web 版零差异
-- **`platform.rs`**（371 行）：平台抽象层，PDFium 加载/下载/打印机枚举/文件打开三平台实现
-- **Linux 打印机支持**：`list_printers()` + `get_default_printer_name()` 通过 CUPS `lpstat` 实现
-- **macOS 兼容**：PDFium 加载路径、文件打开 (`open` crate)、打印机 CUPS 接口
-- **PDFium 跨平台下载**：`download_pdfium_dll` 命令统一三平台（`.dll` / `.so` / `.dylib`），自动识别系统
+> 注: "桌面支持" 在 v2.1.0 仅指**服务器侧**（Web 部署宿主平台）的桌面打印能力,客户端始终是浏览器。
+
+- **统一通信层（模式 B 已固化）**: Tauri 退化为窗口壳,所有业务逻辑走 Axum HTTP localhost
+- **`src/platform.rs`**（361 行）: 平台抽象层,PDFium 加载/下载/打印机枚举/文件打开三平台实现
+- **Linux 打印机支持**: `list_printers()` + `get_default_printer_name()` 通过 CUPS `lpstat` 实现
+- **macOS 兼容**: PDFium 加载路径、文件打开（`open` crate）、打印机 CUPS 接口
+- **PDFium 跨平台下载**: `download_pdfium_dll` 命令统一三平台（`.dll` / `.so` / `.dylib`）,自动识别系统
 
 ### 🏗️ 架构重构
 
-- **通信模式 B**：Tauri 退化为窗口壳，所有业务逻辑走 Axum HTTP localhost
-- **前端 `api.js`**（281 行）：统一适配层，`__api.call()` 运行时检测桌面/Web，自动路由 IPC/HTTP
-- **PDFium 模块拆分**：`pdfium_bindings.rs`（FFI）+ `pdfium_render.rs`（位图渲染）+ `pdfium_print.rs`（Windows GDI 矢量打印）
-- **Mutex → RwLock**：PDFium 全局锁升级，允许多线程并发渲染不同文档（2-4x 提升）
-- **JPEG 预览优化**：RGBA→RGB 颜色空间转换，A4@150dpi 传输体积缩减 6x
+- **通信架构**: 纯 HTTP `fetch()`,无 IPC fallback,前后端完全解耦
+- **前端 `frontend/js/api.js`**: 统一 HTTP 通信层,`__api.call()` 构造 `/api/v1/<cmd>` POST,`__api.listen()` SSE 进度监听
+- **PDFium 模块拆分**: `pdfium_bindings.rs`（FFI, 149 行）+ `pdfium_render.rs`（位图渲染, 182 行）+ `pdfium_print.rs`（Windows GDI 矢量打印, 465 行, `#[cfg(target_os = "windows")]`)
+- **PDFium 锁机制**: 早期尝试 `RwLock` 允许多线程并发渲染不同文档（commit `1eb4390` 引入）,实际运行遇 `ACCESS_VIOLATION` 原生崩溃,**已回退 `Mutex`**（commit `556180c`）
+- **JPEG 预览优化**: RGBA→RGB 颜色空间转换,A4@150dpi 传输体积缩减 6x
 
 ### 🗑️ 冗余清理
 
-- **SumatraPDF 完整移除**：`find_sumatrapdf` / `print_with_sumatrapdf` / `SumatraPdfInfo` 全部删除，打印模式从 4 缩减到 3
-- **前端 `invoke()` 全部替换**：61 处 Tauri IPC 调用 → `__api.call()` HTTP（仅 6 个系统命令保留 IPC fallback）
-- **`download_pdfium_dll` 统一**：Windows/Linux/macOS 共享同一下载逻辑，消除重复代码
+- **SumatraPDF 完整移除**: `find_sumatrapdf` / `print_with_sumatrapdf` / `SumatraPdfInfo` 全部删除,打印模式从 4 缩减到 3
+- **`download_pdfium_dll` 统一**: Windows/Linux/macOS 共享同一下载逻辑,消除 ~100 行重复代码
 
 ### 🔒 安全增强
 
-- **Web 版路径穿越防护**：`Session::resolve_path()` — canonicalize + starts_with 校验，Web 模式拒绝绝对路径
-- **文件操作隔离**：`check_path_exists` / `copy_file` / `rename_file` / `write_text_file` — Web 模式限制在 session 目录
-- **优雅关机**：SIGTERM/SIGINT 信号处理 + CancellationToken 清理任务协同
+- **Web 版路径穿越防护**: `Session::resolve_path()` — `canonicalize` + `starts_with` 校验,Web 模式拒绝绝对路径外访问
+- **文件操作隔离**: `check_path_exists` / `copy_file` / `rename_file` / `write_text_file` — Web 模式限制在 session 目录
+- **优雅关机**: SIGTERM/SIGINT 信号处理 + CancellationToken 清理任务协同
 
 ### 🐛 修复
 
@@ -46,6 +67,16 @@
 - 空 PDF 页面渲染返回错误而非空 data URL
 - `cancel_download` Web 版返回成功（Docker 内 PDFium 已内置）
 - 下载进度 UI 在 Web 版条件隐藏
+- `RenderedPage` 添加 `#[serde(rename_all = "camelCase")]` 修复 HTTP 不走 Tauri 自动转换导致的字段名不匹配
+- `get_app_version` 返回纯字符串而非对象（修复前端 `v[object Object]`）
+- 桌面版 CORS 缺少 `allow_headers` 导致 preflight 拦截
+- `tauri::async_runtime::block_on` 替代 `tokio Handle::current` 修复 `no reactor running` 崩溃
+- `sessionId` 缺失导致 PDF 渲染反序列化失败
+- `check_path_exists` 缺少 `isFile/isDir` 字段导致文件记忆功能判定全部失败
+- `get_downloads_dir` 返回对象而非字符串导致 CSV 导出 `endsWith is not function`
+- 全局 100MB body limit 在 `generate_pdf`（含 base64 图片数据）时超限,改为仅 upload 端点限制
+- 移除 `CompressionLayer` 修复 tower-http 0.6 内部 413,改由 nginx 负责 Web 压缩
+- 性能优化: 合并 render+text 提取 / 二进制页面端点 / 动态 Semaphore（commit `f0a05c1`）
 
 ---
 
