@@ -229,6 +229,7 @@ async fn health() -> Json<ApiResponse> {
     Json(ApiResponse::ok(json!({
         "status": "ok",
         "pdfium": crate::pdfium_bindings::find_pdfium_lib().is_some(),
+        "ocr": cfg!(feature = "ocr"),
         "version": env!("CARGO_PKG_VERSION"),
     })))
 }

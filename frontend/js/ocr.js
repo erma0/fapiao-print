@@ -606,6 +606,7 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
  * @param {string} [filePath] - Disk path to the image file (preferred — skips base64)
  */
 async function applyOcr(fileObj, dataUrl, filePath) {
+  if (!hasOcr) return;
   try {
     var ocrResult = await __api.call('ocr_image', {
       dataUrl: dataUrl || '',
@@ -626,6 +627,7 @@ async function applyOcr(fileObj, dataUrl, filePath) {
  * Instead: Rust render → decode in memory → OCR → return result directly.
  */
 async function applyOcrPdfPage(fileObj) {
+  if (!hasOcr) return;
   try {
     var ocrResult = await __api.call('ocr_pdf_page', {
       pdfPath: fileObj._pdfPath,
