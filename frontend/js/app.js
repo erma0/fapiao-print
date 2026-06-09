@@ -573,7 +573,7 @@ function readFileAsArrayBuffer(file) {
 async function loadPdfFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
   await window.__idb.putFile(id, name, file.type || 'application/pdf', buffer);
-  var loaded = await window.__pdfClient.loadPdfFromArrayBuffer(buffer);
+  var loaded = await window.__pdfClient.loadPdfConcurrent(buffer);
   var results = [];
   for (var p = 0; p < loaded.pages.length; p++) {
     var pg = loaded.pages[p];
@@ -1280,15 +1280,11 @@ function syncLayoutHighlight() {
   });
   syncToolbarHighlight(c, r);
 }
-var _printersLoaded = false;
 function switchTab(n, el) {
   document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.sidebar-panel').forEach(function(p) { p.classList.add('hidden'); });
   el.classList.add('active');
   document.getElementById('panel-' + n).classList.remove('hidden');
-  // Lazy-load printers on first visit to print tab
-  _printersLoaded = true;
-  refreshPrinters();
 }
 function onPaperChange() { document.getElementById('customPaperRow').style.display = document.getElementById('paperSize').value === 'custom' ? 'flex' : 'none'; updatePreview(); }
 function onFitChange() {
@@ -1416,8 +1412,7 @@ function getSettings() {
     footerMargin: (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
     customFm: S.feat.customFM,
     copies: parseInt(document.getElementById('copies').value) || 1,
-    collate: S.feat.collate, duplex: S.feat.duplex,
-    printerName: document.getElementById('printerSel').value || null
+    collate: S.feat.collate, duplex: S.feat.duplex
   };
 }
 
@@ -1438,7 +1433,6 @@ function markFilesAsPrinted(files) {
 
 function getActiveFiles() {
   var files = S.files.filter(function(f) { return f.checked && !f._loading && !f._xmlInvoice; });
-  if (document.getElementById('pageOrder').value === 'reverse') files = files.slice().reverse();
   var exp = [];
   files.forEach(function(f) { for (var c = 0; c < Math.max(1, f.copies); c++) exp.push(f); });
   return exp;
@@ -1580,8 +1574,6 @@ function saveSettings() {
     globalRotation: document.getElementById('globalRotation').value,
     copies: document.getElementById('copies').value,
     colorMode: document.getElementById('colorMode').value,
-    pageOrder: document.getElementById('pageOrder').value,
-    printMode: document.getElementById('printMode').value,
     feat: {}
   };
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory'];
@@ -1676,8 +1668,6 @@ function loadSettings() {
   if (o.globalRotation) document.getElementById('globalRotation').value = o.globalRotation;
   if (o.copies) document.getElementById('copies').value = o.copies;
   if (o.colorMode) document.getElementById('colorMode').value = o.colorMode;
-  if (o.pageOrder) document.getElementById('pageOrder').value = o.pageOrder;
-  if (o.printMode) document.getElementById('printMode').value = o.printMode;
   if (o.feat) {
     var featMap = {
       cutline: 'toggleCutline', number: 'toggleNumber', border: 'toggleBorder',
@@ -1783,7 +1773,7 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, colorMode: document.getElementById('colorMode').value, printMode: document.getElementById('printMode').value };
+  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, colorMode: document.getElementById('colorMode').value };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -1810,7 +1800,6 @@ function resetSettings() {
   document.getElementById('globalRotation').value = '0';
   document.getElementById('copies').value = 1;
   document.getElementById('colorMode').value = 'color';
-  document.getElementById('pageOrder').value = 'normal';
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
@@ -1834,7 +1823,6 @@ function resetSettings() {
   document.getElementById('footerMarginRow').style.display = 'none';
   document.getElementById('footerMargin').value = 8; document.getElementById('footerMarginN').value = 8;
   document.getElementById('ocrPrecision').value = 'standard';
-  document.getElementById('printMode').value = 'pdf';
   document.getElementById('themeMode').value = 'light';
   document.documentElement.classList.remove('dark');
   try { localStorage.removeItem('ticketchan-theme'); } catch(e) {}
@@ -1977,17 +1965,6 @@ document.getElementById('orientation').value = 'landscape';
     if (m && (m === 'tax' || m === 'notax' || m === 'both')) {
       S.amtMode = m;
       document.getElementById('amtMode').value = m;
-    }
-  } catch(e) {}
-})();
-
-(function() {
-  try {
-    var pm = localStorage.getItem('ticketchan-print-mode');
-    if (pm && (pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
-      document.getElementById('printMode').value = pm;
-    } else {
-      document.getElementById('printMode').value = 'pdf';
     }
   } catch(e) {}
 })();

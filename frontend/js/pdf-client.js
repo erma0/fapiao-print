@@ -5,24 +5,33 @@
 // render_pdf_pages_pdfium + extract_pdf_texts endpoints.
 // Loads ArrayBuffer → renders pages to JPEG dataURL → extracts
 // text content with word-level coordinates for extractByCoordinates().
+//
+// Multi-worker concurrency: spawns multiple PDF.js worker instances
+// based on navigator.hardwareConcurrency for parallel document parsing.
 
 import * as pdfjsLib from './vendor/pdf.min.mjs';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.min.mjs', import.meta.url).toString();
 
 const CMAP_URL = new URL('./vendor/cmaps/', import.meta.url).toString();
 const PDF_RENDER_DPI = 300;
 const PDF_PREVIEW_DPI = 150;
 const JPEG_QUALITY = 0.82;
 
-async function loadDocument(arrayBuffer) {
+// Auto-detect concurrency: half the logical cores, min 1, max 4
+const MAX_CONCURRENT = Math.min(4, Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+
+// Pre-create worker source URLs for parallel parsing
+var _workerSrcUrl = new URL('./vendor/pdf.worker.min.mjs', import.meta.url).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = _workerSrcUrl;
+
+async function loadDocument(arrayBuffer, workerIdx) {
   var data = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
   var task = pdfjsLib.getDocument({
     data: data,
     cMapUrl: CMAP_URL,
     cMapPacked: true,
     standardFontDataUrl: CMAP_URL.replace(/cmaps\/$/, ''),
-    isEvalSupported: false
+    isEvalSupported: false,
+    workerSrc: _workerSrcUrl
   });
   return await task.promise;
 }
@@ -42,26 +51,6 @@ async function renderPageToCanvas(pdfPage, dpi) {
   return { canvas: canvas, width: canvas.width, height: canvas.height, dpi: targetDpi };
 }
 
-/**
- * Extract text with word-level coordinates from a PDF page via PDF.js.
- * Produces a PdfTextResult-compatible structure that applyPdfTextResult()
- * in ocr.js can consume — same shape as the Rust extract_pdf_text output.
- *
- * PDF.js getTextContent() items have:
- *   str: text string
- *   transform: [scaleX, skewX, skewY, scaleY, translateX, translateY]
- *   width: width of the text string in PDF points
- *   height: font size (approximate)
- *
- * Coordinate conversion:
- *   PDF.js transform[4,5] are in PDF pt space (origin bottom-left, y-up).
- *   We convert to the same pixel coordinate system as Rust extract_pdf_text:
- *   scale = RENDER_DPI / 72
- *   x = transform[4] * scale
- *   y = (pageHeight - transform[5] - fontSize) * scale  (flip y, baseline→top)
- *   w = width * scale (or approximate from character count)
- *   h = fontSize * scale
- */
 async function extractTextWithCoords(pdfPage) {
   var tc = await pdfPage.getTextContent();
   var vp = pdfPage.getViewport({ scale: 1.0 });
@@ -154,8 +143,42 @@ export async function loadPdfFromArrayBuffer(arrayBuffer) {
   return { numPages: pages.length, pages: pages };
 }
 
+// Semaphore-based concurrent loader: limits how many PDFs are parsed simultaneously
+var _activeCount = 0;
+var _waitQueue = [];
+
+function _acquire() {
+  if (_activeCount < MAX_CONCURRENT) {
+    _activeCount++;
+    return Promise.resolve();
+  }
+  return new Promise(function(resolve) { _waitQueue.push(resolve); });
+}
+
+function _release() {
+  _activeCount--;
+  if (_waitQueue.length > 0) {
+    _activeCount++;
+    var next = _waitQueue.shift();
+    next();
+  }
+}
+
+export async function loadPdfConcurrent(arrayBuffer) {
+  await _acquire();
+  try {
+    return await loadPdfFromArrayBuffer(arrayBuffer);
+  } finally {
+    _release();
+  }
+}
+
 export async function getPageBytesForLayout(pdf, pageIndex) {
   return null;
 }
 
-window.__pdfClient = { loadPdfFromArrayBuffer: loadPdfFromArrayBuffer };
+window.__pdfClient = {
+  loadPdfFromArrayBuffer: loadPdfFromArrayBuffer,
+  loadPdfConcurrent: loadPdfConcurrent,
+  maxConcurrent: MAX_CONCURRENT
+};

@@ -21,7 +21,6 @@
     <div class="sidebar-tabs">
       <button class="sidebar-tab active" onclick="switchTab('files',this)">📁 发票</button>
       <button class="sidebar-tab" onclick="switchTab('settings',this)">⚙ 排版</button>
-      <button class="sidebar-tab" onclick="switchTab('print',this)">🖨 打印</button>
       <button class="sidebar-tab" onclick="switchTab('prefs',this)">🔧 设置</button>
     </div>
 
@@ -127,6 +126,14 @@
           <div class="trow"><label class="tlbl">编号</label><button class="tgl" id="toggleNumber" onclick="toggleFeature('number',this)"></button></div>
           <div class="trow"><label class="tlbl">边框</label><button class="tgl" id="toggleBorder" onclick="toggleFeature('border',this)"></button></div>
           <div class="trow"><label class="tlbl">裁剪白边</label><button class="tgl" id="toggleTrimWhite" onclick="toggleFeature('trimWhite',this)"></button></div>
+          <div class="trow"><label class="tlbl">页码</label><button class="tgl" id="togglePageNum" onclick="toggleFeature('pageNum',this)"></button></div>
+          <div class="trow"><label class="tlbl">打印日期</label><button class="tgl" id="toggleDate" onclick="toggleFeature('printDate',this)"></button></div>
+          <div class="trow"><label class="tlbl">自定义页脚</label><button class="tgl" id="toggleFooter" onclick="toggleFeature('footer',this)"></button></div>
+          <div id="footerOpts" style="display:none;margin-top:6px;padding:6px 8px;background:var(--bg-main);border-radius:6px">
+            <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-input);color:var(--text);box-sizing:border-box">
+          </div>
+          <div id="customFMRow" class="trow" style="display:none"><label class="tlbl">自定义下边距</label><button class="tgl" id="toggleCustomFM" onclick="toggleFeature('customFM',this)"></button></div>
+          <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" style="width:64px" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
         </div>
         <div class="sec">
           <div class="sec-title">🖊 水印</div>
@@ -170,48 +177,14 @@
           </div>
         </div>
       </div>
-      <div class="sidebar-panel-footer"></div>
-    </div>
-
-    <div class="sidebar-panel hidden" id="panel-print">
-      <div class="sidebar-panel-scroll">
-        <div class="sec">
-          <div class="sec-title">🖨 打印机</div>
-          <div class="row"><label class="lbl">选择</label><div class="ctrl"><select id="printerSel"><option value="">默认打印机</option></select></div></div>
-          <div style="margin-top: 8px;">
-            <button class="btn btn-sm" style="width:100%" onclick="refreshPrinters()">🔄 刷新打印机列表</button>
-          </div>
-          <div style="margin-top: 12px;"></div>
-          <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="try{localStorage.setItem('ticketchan-print-mode',this.value)}catch(e){}"><option value="confirm">弹窗确认</option><option value="pdfium">静默打印（PDFium）⭐</option><option value="pdf">PDF阅读器</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">弹窗确认：确认后打印；PDFium：推荐，打印清晰（需下载）；PDF阅读器：通过默认阅读器打印（不支持选择打印机）。</div>
-        </div>
-        <div class="sec">
-          <div class="sec-title">🔢 打印份数</div>
-          <div class="row"><label class="lbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:52px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
-          <div class="trow"><label class="tlbl">逐份打印</label><button class="tgl on" id="toggleCollate" onclick="toggleFeature('collate',this)"></button></div>
-          <div class="trow"><label class="tlbl">双面打印</label><button class="tgl" id="toggleDuplex" onclick="toggleFeature('duplex',this)"></button></div>
-        </div>
-        <div class="sec">
-          <div class="sec-title">🎨 颜色模式</div>
-          <div class="row"><label class="lbl">模式</label><div class="ctrl"><select id="colorMode" onchange="updatePreview()"><option value="color">彩色</option><option value="grayscale">灰度</option><option value="bw">黑白</option></select></div></div>
-        </div>
-        <div class="sec">
-          <div class="sec-title">📄 页面选项</div>
-          <div class="row"><label class="lbl">顺序</label><div class="ctrl"><select id="pageOrder" onchange="updatePreview()"><option value="normal">正向</option><option value="reverse">反向</option></select></div></div>
-          <div class="trow"><label class="tlbl">打印页码</label><button class="tgl" id="togglePageNum" onclick="toggleFeature('pageNum',this)"></button></div>
-          <div class="trow"><label class="tlbl">打印日期</label><button class="tgl" id="toggleDate" onclick="toggleFeature('printDate',this)"></button></div>
-          <div class="trow"><label class="tlbl">自定义页脚</label><button class="tgl" id="toggleFooter" onclick="toggleFeature('footer',this)"></button></div>
-          <div id="footerOpts" style="display:none;margin-top:6px;padding:6px 8px;background:var(--bg-main);border-radius:6px">
-            <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-input);color:var(--text);box-sizing:border-box">
-          </div>
-          <div id="customFMRow" class="trow" style="display:none"><label class="tlbl">自定义下边距</label><button class="tgl" id="toggleCustomFM" onclick="toggleFeature('customFM',this)"></button></div>
-          <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" style="width:64px" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
-        </div>
-      </div>
       <div class="sidebar-panel-footer">
-        <div class="sec" style="display:flex;flex-direction:column;gap:8px;border-bottom:0">
-          <button class="btn btn-success" style="width:100%;padding:12px;font-size:15px" onclick="doPrint()">🖨 开始打印</button>
-          <button class="btn btn-warning" style="width:100%;padding:10px" onclick="savePdf()">📥 保存为PDF</button>
+        <div class="sec" style="display:flex;flex-direction:column;gap:6px;border-bottom:0">
+          <div class="trow" style="padding:0 2px"><label class="tlbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:44px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
+          <div class="trow" style="padding:0 2px"><label class="tlbl">逐份</label><button class="tgl on" id="toggleCollate" onclick="toggleFeature('collate',this)"></button></div>
+          <div class="trow" style="padding:0 2px"><label class="tlbl">双面</label><button class="tgl" id="toggleDuplex" onclick="toggleFeature('duplex',this)"></button></div>
+          <div class="row" style="padding:0 2px"><label class="lbl" style="font-size:12px">颜色</label><div class="ctrl"><select id="colorMode" onchange="updatePreview()" style="font-size:12px"><option value="color">彩色</option><option value="grayscale">灰度</option><option value="bw">黑白</option></select></div></div>
+          <button class="btn btn-success" style="width:100%;padding:10px;font-size:14px" onclick="doPrint()">🖨 打印</button>
+          <button class="btn btn-warning" style="width:100%;padding:8px" onclick="savePdf()">📥 保存PDF</button>
         </div>
       </div>
     </div>
