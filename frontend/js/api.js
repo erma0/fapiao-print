@@ -28,9 +28,9 @@ var __api = (function () {
     }
 
     async function call(cmd, params) {
-        if (cmd === 'check_pdfium_available' || cmd === 'check_ocr_available') {
+        if (cmd === 'check_pdfium_available') {
             var resp = await _fetch('/api/v1/health', {}, 'GET');
-            return resp.data && (cmd === 'check_ocr_available' ? resp.data.ocr === true : resp.data.pdfium === true);
+            return resp.data && resp.data.pdfium === true;
         }
 
         var endpoint = _mapEndpoint(cmd);
