@@ -86,17 +86,23 @@ function _fontFamilyCSS(normalized) {
 }
 
 function _fillAttr(color, alpha) {
-  if (!color) return ' fill="none"';
-  var a = alpha != null ? (alpha / 255).toFixed(3) : null;
-  if (a && a !== '1.000') return ' fill="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')" fill-opacity="' + a + '"';
-  return ' fill="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')"';
+  if (color) {
+    var a = alpha != null ? (alpha / 255).toFixed(2) : null;
+    if (a && a !== '1.00') return ' fill="rgba(' + color[0] + ',' + color[1] + ',' + color[2] + ',' + a + ')"';
+    return ' fill="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')"';
+  }
+  if (alpha != null) return ' fill="rgba(0,0,0,' + (alpha / 255).toFixed(2) + ')"';
+  return '';
 }
 
 function _strokeAttr(color, alpha) {
-  if (!color) return '';
-  var a = alpha != null ? (alpha / 255).toFixed(3) : null;
-  if (a && a !== '1.000') return ' stroke="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')" stroke-opacity="' + a + '"';
-  return ' stroke="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')"';
+  if (color) {
+    var a = alpha != null ? (alpha / 255).toFixed(2) : null;
+    if (a && a !== '1.00') return ' stroke="rgba(' + color[0] + ',' + color[1] + ',' + color[2] + ',' + a + ')"';
+    return ' stroke="rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')"';
+  }
+  if (alpha != null) return ' stroke="rgba(0,0,0,' + (alpha / 255).toFixed(2) + ')"';
+  return '';
 }
 
 function _escXml(s) {
@@ -166,57 +172,57 @@ function _buildSvgText(t, fontMap, colorSpaces, scaleX, scaleY) {
   var bold = t.weight >= 700 ? ' font-weight="bold"' : '';
 
   var text = t.text;
-  var boundary = t.boundary;
-  var textX = t.textX;
-  var textY = t.textY;
-  var deltaX = t.deltaX;
-
-  var tx = boundary[0] * scaleX;
-  var ty = boundary[1] * scaleY;
-  var bw = boundary[2] * scaleX;
-  var bh = boundary[3] * scaleY;
-
-  var baseX = textX * scaleX;
-  var baseY = (boundary[3] - textY) * scaleY;
-
-  var fsScaled = fontSize * scaleY;
-
+  var hasDelta = t.deltaX.length > 0 && text.length > 1;
   var fillStr = _fillAttr(t.fillColor || (t.layerDrawParam ? null : [0, 0, 0]), t.alpha);
   var strokeStr = t.strokeColor ? _strokeAttr(t.strokeColor, t.alpha) : '';
 
+  // CTM transform: translate to boundary origin, apply matrix, then text at local coords
   if (t.ctm) {
-    var a = t.ctm[0] * scaleX;
-    var b = -t.ctm[1] * scaleY;
-    var c = -t.ctm[2] * scaleX;
-    var d = t.ctm[3] * scaleY;
-    var e = t.ctm[4] * scaleX;
-    var f = -t.ctm[5] * scaleY;
-    return '<text transform="translate(' + tx.toFixed(4) + ',' + ty.toFixed(4) + ') matrix(' +
-      a.toFixed(4) + ',' + b.toFixed(4) + ',' + c.toFixed(4) + ',' + d.toFixed(4) + ',' + e.toFixed(4) + ',' + f.toFixed(4) + ')"' +
-      ' font-family="' + _escXmlAttr(fontFamily) + '"' +
-      ' font-size="' + fsScaled.toFixed(2) + '"' + bold + fillStr + strokeStr + '>' +
-      _escXml(text) + '</text>';
-  }
-
-  if (deltaX.length > 0 && text.length > 1) {
-    var tspans = '';
-    var charX = baseX;
-    for (var ci = 0; ci < text.length; ci++) {
-      var xp = charX.toFixed(2);
-      tspans += '<tspan x="' + xp + '">' + _escXml(text[ci]) + '</tspan>';
-      if (ci < deltaX.length) charX += deltaX[ci] * scaleX;
+    var baseX = t.textX * scaleX;
+    var baseY = t.textY * scaleY;
+    var content;
+    if (hasDelta) {
+      var chars = Array.from(text);
+      content = '<tspan x="' + baseX.toFixed(4) + '">' + _escXml(chars[0]) + '</tspan>';
+      var xPos = baseX;
+      for (var ci = 1; ci < chars.length; ci++) {
+        var dx = ci - 1 < t.deltaX.length ? t.deltaX[ci - 1] : (t.deltaX[t.deltaX.length - 1] || fontSize);
+        xPos += dx * scaleX;
+        content += '<tspan x="' + xPos.toFixed(4) + '">' + _escXml(chars[ci]) + '</tspan>';
+      }
+    } else {
+      content = _escXml(text);
     }
-    return '<text transform="translate(' + tx.toFixed(4) + ',' + ty.toFixed(4) + ')"' +
+    return '<text transform="translate(' + (t.boundary[0] * scaleX).toFixed(4) + ',' + (t.boundary[1] * scaleY).toFixed(4) + ') matrix(' +
+      t.ctm[0] + ',' + t.ctm[1] + ',' + t.ctm[2] + ',' + t.ctm[3] + ',' +
+      (t.ctm[4] * scaleX).toFixed(4) + ',' + (t.ctm[5] * scaleY).toFixed(4) + ')"' +
+      ' x="' + baseX.toFixed(4) + '" y="' + baseY.toFixed(4) + '"' +
       ' font-family="' + _escXmlAttr(fontFamily) + '"' +
-      ' font-size="' + fsScaled.toFixed(2) + '"' + bold + fillStr + strokeStr + '>' +
-      tspans + '</text>';
+      ' font-size="' + (fontSize * scaleX).toFixed(2) + '"' + bold + fillStr + strokeStr + '>' +
+      content + '</text>';
   }
 
-  return '<text transform="translate(' + tx.toFixed(4) + ',' + ty.toFixed(4) + ')"' +
-    ' x="' + baseX.toFixed(2) + '" y="' + baseY.toFixed(2) + '"' +
+  // Normal: position = Boundary + TextCode offset (absolute SVG coords, no Y-flip needed)
+  var baseX = (t.boundary[0] + t.textX) * scaleX;
+  var baseY = (t.boundary[1] + t.textY) * scaleY;
+  var content;
+  if (hasDelta) {
+    var chars = Array.from(text);
+    content = '<tspan x="' + baseX.toFixed(4) + '">' + _escXml(chars[0]) + '</tspan>';
+    var xPos = baseX;
+    for (var ci = 1; ci < chars.length; ci++) {
+      var dx = ci - 1 < t.deltaX.length ? t.deltaX[ci - 1] : (t.deltaX[t.deltaX.length - 1] || fontSize);
+      xPos += dx * scaleX;
+      content += '<tspan x="' + xPos.toFixed(4) + '">' + _escXml(chars[ci]) + '</tspan>';
+    }
+  } else {
+    content = _escXml(text);
+  }
+
+  return '<text x="' + baseX.toFixed(4) + '" y="' + baseY.toFixed(4) + '"' +
     ' font-family="' + _escXmlAttr(fontFamily) + '"' +
-    ' font-size="' + fsScaled.toFixed(2) + '"' + bold + fillStr + strokeStr + '>' +
-    _escXml(text) + '</text>';
+    ' font-size="' + (fontSize * scaleX).toFixed(2) + '"' + bold + fillStr + strokeStr + '>' +
+    content + '</text>';
 }
 
 function _buildSvgPath(p, scale) {
@@ -257,7 +263,7 @@ function _buildSvgImage(img, imageData, scale) {
   var attrs = ' x="' + ix.toFixed(2) + '" y="' + iy.toFixed(2) + '" width="' + iw.toFixed(2) + '" height="' + ih.toFixed(2) + '"';
   if (img.alpha != null) attrs += ' opacity="' + (img.alpha / 255).toFixed(3) + '"';
 
-  return '<image' + attrs + ' xlink:href="' + _escXmlAttr(dataUrl) + '"/>';
+  return '<image href="' + _escXmlAttr(dataUrl) + '"' + attrs + '/>';
 }
 
 // =====================================================
@@ -769,7 +775,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   var ofdXml = await zipReadStr('OFD.xml');
   if (!ofdXml) throw new Error('OFD.xml 不存在');
 
-  // 2. Find DocRoot
+  // 2. Find DocRoot (usually "Doc_0/Document.xml")
   var docRoot = 'Doc_0/Document.xml';
   var ofdDoc = new DOMParser().parseFromString(ofdXml, 'text/xml');
   var docRootEls = ofdDoc.getElementsByTagName('DocRoot');
@@ -779,7 +785,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
 
   var baseDir = docRoot.indexOf('/') >= 0 ? docRoot.substring(0, docRoot.lastIndexOf('/')) : 'Doc_0';
 
-  // 3. Parse CustomData
+  // 3. Parse CustomData from OFD.xml
   var customData = _parseCustomData(ofdXml);
 
   // 4. Read Document.xml
@@ -788,36 +794,32 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
 
   var docDom = new DOMParser().parseFromString(docXml, 'text/xml');
 
-  // Page size
-  var pageDataEls = docDom.getElementsByTagName('Page');
-  var pageW = 210, pageH = 297;
-  if (pageDataEls.length > 0) {
-    var ps = _parseF4(_attr(pageDataEls[0], 'PhysicalBox'));
-    if (ps) { pageW = ps[2]; pageH = ps[3]; }
-  }
-
-  // Template
-  var tplFile = null;
-  var tplEls = docDom.getElementsByTagName('Template');
+  // Parse template and page paths from Document.xml
+  // OFD spec: <TemplatePage BaseLoc="..."> and <Page BaseLoc="...">
+  // NOT textContent — BaseLoc attribute holds the path
+  var tplPath = '';
+  var pagePaths = [];
+  var tplEls = docDom.getElementsByTagName('TemplatePage');
   if (tplEls.length > 0) {
-    tplFile = (tplEls[0].textContent || '').trim();
+    var baseLoc = _attr(tplEls[0], 'BaseLoc');
+    if (baseLoc) tplPath = baseDir + '/' + baseLoc;
+  }
+  // Fallback: also check <Template> (older OFD versions)
+  if (!tplPath) {
+    var tEls = docDom.getElementsByTagName('Template');
+    if (tEls.length > 0) {
+      var tBaseLoc = _attr(tEls[0], 'BaseLoc');
+      if (tBaseLoc) tplPath = baseDir + '/' + tBaseLoc;
+    }
   }
 
-  // Page content file
-  var contentFile = null;
-  var contentEls = docDom.getElementsByTagName('Content');
-  if (contentEls.length > 0) {
-    contentFile = (contentEls[0].textContent || '').trim();
+  var pageEls = docDom.getElementsByTagName('Page');
+  for (var pi = 0; pi < pageEls.length; pi++) {
+    var pBaseLoc = _attr(pageEls[pi], 'BaseLoc');
+    if (pBaseLoc) pagePaths.push(baseDir + '/' + pBaseLoc);
   }
 
-  // Annotation file
-  var annotFile = null;
-  var annotEls = docDom.getElementsByTagName('Annotations');
-  if (annotEls.length > 0) {
-    annotFile = (annotEls[0].textContent || '').trim();
-  }
-
-  // 5. Parse PublicRes.xml
+  // 5. Parse PublicRes.xml for fonts + DrawParam
   var publicResXml = await zipReadStr(baseDir + '/PublicRes.xml');
   var fontResult = publicResXml ? _parseFonts(publicResXml) : { fonts: {}, colorSpaces: {}, drawParams: {} };
 
@@ -826,54 +828,51 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   var imageResources = docResXml ? _parseImageResources(docResXml) : {};
 
   // Load image data as base64 data URLs
+  // OFD spec: image file paths in DocumentRes.xml are relative to baseDir/Res/
   var imageData = {};
+  var imageRawBytes = {};
+  var imageFileNames = {};
   var imageEntries = Object.keys(imageResources);
   for (var ii = 0; ii < imageEntries.length; ii++) {
     var imgId = imageEntries[ii];
-    var imgPath = imageResources[imgId];
-    var imgBytes = await zipReadBytes(baseDir + '/' + imgPath);
+    var imgPath = baseDir + '/Res/' + imageResources[imgId];
+    var imgBytes = await zipReadBytes(imgPath);
     if (imgBytes) {
-      var mime = imgPath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-      var b64 = '';
-      for (var bi = 0; bi < imgBytes.length; bi++) b64 += String.fromCharCode(imgBytes[bi]);
-      imageData[imgId] = 'data:' + mime + ';base64,' + btoa(b64);
+      imageRawBytes[imgId] = imgBytes;
+      imageFileNames[imgId] = imageResources[imgId];
     }
   }
 
   // Also scan per-page resources
-  var pagesEls = docDom.getElementsByTagName('Page');
-  for (var pi = 0; pi < pagesEls.length; pi++) {
-    var pageEl = pagesEls[pi];
-    var pageFile = (pageEl.textContent || '').trim();
-    if (!pageFile) continue;
-    var pageXml = await zipReadStr(baseDir + '/' + pageFile);
+  for (var ppi = 0; ppi < pagePaths.length; ppi++) {
+    var pageXml = await zipReadStr(pagePaths[ppi]);
     if (!pageXml) continue;
-    var pageResEls = new DOMParser().parseFromString(pageXml, 'text/xml').getElementsByTagName('Resource');
-    for (var ri = 0; ri < pageResEls.length; ri++) {
-      var resFile = (pageResEls[ri].textContent || '').trim();
-      if (!resFile) continue;
-      var resXml = await zipReadStr(baseDir + '/' + resFile);
+    var pageDom = new DOMParser().parseFromString(pageXml, 'text/xml');
+    var resEls = pageDom.getElementsByTagName('Resource');
+    for (var ri = 0; ri < resEls.length; ri++) {
+      var resBaseLoc = _attr(resEls[ri], 'BaseLoc');
+      if (!resBaseLoc) continue;
+      var resXml = await zipReadStr(baseDir + '/' + resBaseLoc);
       if (!resXml) continue;
       var pageImgRes = _parseImageResources(resXml);
       var pageImgKeys = Object.keys(pageImgRes);
       for (var ki = 0; ki < pageImgKeys.length; ki++) {
         var pid = pageImgKeys[ki];
-        if (imageData[pid]) continue;
-        var pImgBytes = await zipReadBytes(baseDir + '/' + pageImgRes[pid]);
+        if (imageRawBytes[pid]) continue;
+        var pImgPath = baseDir + '/Res/' + pageImgRes[pid];
+        var pImgBytes = await zipReadBytes(pImgPath);
         if (pImgBytes) {
-          var pMime = pageImgRes[pid].toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-          var pB64 = '';
-          for (var bj = 0; bj < pImgBytes.length; bj++) pB64 += String.fromCharCode(pImgBytes[bj]);
-          imageData[pid] = 'data:' + pMime + ';base64,' + btoa(pB64);
+          imageRawBytes[pid] = pImgBytes;
+          imageFileNames[pid] = pageImgRes[pid];
         }
       }
     }
   }
 
-  // 7. Parse template content
+  // 7. Parse template content (background layer)
   var tplTexts = [], tplPaths = [], tplImgs = [];
-  if (tplFile) {
-    var tplXml = await zipReadStr(baseDir + '/' + tplFile);
+  if (tplPath) {
+    var tplXml = await zipReadStr(tplPath);
     if (tplXml) {
       var tplContent = _parseOfdContent(tplXml);
       tplTexts = tplContent.texts;
@@ -882,48 +881,121 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
     }
   }
 
-  // 8. Parse page content
-  var pageTexts = [], pagePaths = [], pageImgs = [];
-  if (contentFile) {
-    var contentXml = await zipReadStr(baseDir + '/' + contentFile);
+  // 8. Parse page content (data layer)
+  // Page content Layer has no DrawParam → OFD default: black (0,0,0).
+  // Do NOT apply DrawParam inheritance — invoice data text and ¥ are naturally black.
+  var pageTexts = [], pageObjPaths = [], pageImgs = [];
+  if (pagePaths.length > 0) {
+    var contentXml = await zipReadStr(pagePaths[0]);
     if (contentXml) {
       var pageContent = _parseOfdContent(contentXml);
       pageTexts = pageContent.texts;
-      pagePaths = pageContent.paths;
+      pageObjPaths = pageContent.paths;
       pageImgs = pageContent.images;
     }
   }
 
-  // 9. Parse annotations
+  // 9. Parse annotations (watermark layer)
   var annotTexts = [], annotImgs = [];
-  if (annotFile) {
-    var annotXml = await zipReadStr(baseDir + '/' + annotFile);
-    if (annotXml) {
-      var annotContent = _parseAnnotations(annotXml);
-      annotTexts = annotContent.texts;
-      annotImgs = annotContent.images;
+  var annotsPath = baseDir + '/Annots/Page_0/Annotation.xml';
+  var annotXml = await zipReadStr(annotsPath);
+  if (annotXml) {
+    var annotContent = _parseAnnotations(annotXml);
+    annotTexts = annotContent.texts;
+    annotImgs = annotContent.images;
+  }
+
+  // 7b. Apply DrawParam defaults to template objects only
+  // (page content objects keep default black, no DrawParam inheritance)
+  _applyDrawParamDefaults(tplPaths, tplTexts, fontResult.drawParams);
+
+  // 6b. Generate image data URLs (applying ImageMask compositing where needed)
+  var maskMap = {};
+  function collectMasks(imgs) {
+    for (var mi = 0; mi < imgs.length; mi++) {
+      if (imgs[mi].imageMask != null) {
+        maskMap[imgs[mi].resourceId] = imgs[mi].imageMask;
+      }
+    }
+  }
+  collectMasks(tplImgs);
+  collectMasks(pageImgs);
+  collectMasks(annotImgs);
+
+  var imageRawKeys = Object.keys(imageRawBytes);
+  for (var ik = 0; ik < imageRawKeys.length; ik++) {
+    var resId = imageRawKeys[ik];
+    var bytes = imageRawBytes[resId];
+    var fName = imageFileNames[resId] || '';
+    var mime = fName.toLowerCase().endsWith('.png') || fName.toLowerCase().endsWith('.bmp')
+      ? 'image/png' : 'image/jpeg';
+
+    // Check if this image has a mask
+    if (maskMap[resId] && imageRawBytes[maskMap[resId]]) {
+      // Try canvas compositing for ImageMask
+      try {
+        var mainImg = await _loadImageFromBytes(bytes, mime);
+        var maskBytes = imageRawBytes[maskMap[resId]];
+        var maskMime = 'image/jpeg'; // masks are usually JPEG
+        var maskImg = await _loadImageFromBytes(maskBytes, maskMime);
+        if (mainImg.width === maskImg.width && mainImg.height === maskImg.height) {
+          var compCanvas = document.createElement('canvas');
+          compCanvas.width = mainImg.width;
+          compCanvas.height = mainImg.height;
+          var compCtx = compCanvas.getContext('2d');
+          compCtx.drawImage(mainImg, 0, 0);
+          var mainData = compCtx.getImageData(0, 0, compCanvas.width, compCanvas.height);
+          var maskCanvas = document.createElement('canvas');
+          maskCanvas.width = maskImg.width;
+          maskCanvas.height = maskImg.height;
+          var maskCtx = maskCanvas.getContext('2d');
+          maskCtx.drawImage(maskImg, 0, 0);
+          var maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+          for (var px = 0; px < mainData.data.length; px += 4) {
+            mainData.data[px + 3] = maskData.data[px]; // Use red channel as alpha
+          }
+          compCtx.putImageData(mainData, 0, 0);
+          imageData[resId] = compCanvas.toDataURL('image/png');
+          continue;
+        }
+      } catch (e) {
+        console.warn('ImageMask compositing failed for resource ' + resId + ', using unmasked');
+      }
+    }
+
+    // Default: encode as-is
+    var b64 = '';
+    for (var bi = 0; bi < bytes.length; bi++) b64 += String.fromCharCode(bytes[bi]);
+    imageData[resId] = 'data:' + mime + ';base64,' + btoa(b64);
+  }
+
+  // 10. Get page dimensions from page content XML
+  // OFD spec: PhysicalBox is an element inside the page XML, not an attribute of <Page> in Document.xml
+  var pageW = 210, pageH = 140;
+  if (pagePaths.length > 0) {
+    var firstPageXml = await zipReadStr(pagePaths[0]);
+    if (firstPageXml) {
+      var fpDom = new DOMParser().parseFromString(firstPageXml, 'text/xml');
+      var pbEls = fpDom.getElementsByTagName('PhysicalBox');
+      if (pbEls.length > 0) {
+        var pbText = (pbEls[0].textContent || '').trim();
+        var pb = _parseF4(pbText);
+        if (pb) { pageW = pb[2]; pageH = pb[3]; }
+      }
     }
   }
 
-  // 10. Parse CustomTag
-  var customTagFile = null;
-  var ctEls = docDom.getElementsByTagName('Tags');
-  if (ctEls.length > 0) customTagFile = (ctEls[0].textContent || '').trim();
-  var customTag = {};
-  if (customTagFile) {
-    var ctXml = await zipReadStr(baseDir + '/' + customTagFile);
-    if (ctXml) customTag = _parseCustomTag(ctXml);
-  }
+  // 11. Parse CustomTag.xml
+  var customTagPath = baseDir + '/Tags/CustomTag.xml';
+  var ctXml = await zipReadStr(customTagPath);
+  var customTag = ctXml ? _parseCustomTag(ctXml) : {};
 
-  // 11. Apply DrawParam defaults
-  var allTexts = tplTexts.concat(pageTexts, annotTexts);
-  var allPaths = tplPaths.concat(pagePaths);
-  _applyDrawParamDefaults(allPaths, allTexts, fontResult.drawParams);
-
-  // 12. Extract invoice info
+  // 12. Extract invoice info from structured data
   var invoiceInfo = _extractFromCustomData(customData);
 
-  var ctInfo = _extractFromCustomTag(customTag, allTexts);
+  // From CustomTag — only fill fields not already set
+  var allTextsForTag = tplTexts.concat(pageTexts);
+  var ctInfo = _extractFromCustomTag(customTag, allTextsForTag);
   if (!invoiceInfo.invoiceNo && ctInfo.invoiceNo) invoiceInfo.invoiceNo = ctInfo.invoiceNo;
   if (!invoiceInfo.invoiceDate && ctInfo.invoiceDate) invoiceInfo.invoiceDate = ctInfo.invoiceDate;
   if (!invoiceInfo.buyerName && ctInfo.buyerName) invoiceInfo.buyerName = ctInfo.buyerName;
@@ -934,9 +1006,29 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   if (!invoiceInfo.taxAmount && ctInfo.taxAmount) invoiceInfo.taxAmount = ctInfo.taxAmount;
   if (!invoiceInfo.amountTax && ctInfo.amountTax) invoiceInfo.amountTax = ctInfo.amountTax;
 
-  // Text-based fallback
-  if (!invoiceInfo.invoiceNo && !invoiceInfo.sellerName) {
-    var textInfo = _extractInvoiceFromText(allTexts);
+  // Detect invoice type from template texts
+  if (!invoiceInfo.invoiceType) {
+    for (var tti = 0; tti < tplTexts.length; tti++) {
+      var tt = tplTexts[tti].text || '';
+      if (tt.indexOf('增值税专用') >= 0) { invoiceInfo.invoiceType = '增值税专用发票'; break; }
+      if (tt.indexOf('增值税普通') >= 0 || tt.indexOf('增值税电子普通') >= 0) { invoiceInfo.invoiceType = '增值税普通发票'; break; }
+      if (tt.indexOf('电子发票') >= 0) { invoiceInfo.invoiceType = '电子发票'; break; }
+    }
+  }
+  if (!invoiceInfo.invoiceType) {
+    for (var pti = 0; pti < pageTexts.length; pti++) {
+      var pt = pageTexts[pti].text || '';
+      if (pt.indexOf('增值税专用') >= 0) { invoiceInfo.invoiceType = '增值税专用发票'; break; }
+      if (pt.indexOf('增值税普通') >= 0 || pt.indexOf('增值税电子普通') >= 0) { invoiceInfo.invoiceType = '增值税普通发票'; break; }
+      if (pt.indexOf('电子发票') >= 0) { invoiceInfo.invoiceType = '电子发票'; break; }
+    }
+  }
+
+  // Text-based fallback extraction when no CustomData or CustomTag
+  if (!invoiceInfo.invoiceNo && !invoiceInfo.invoiceDate &&
+      !invoiceInfo.buyerName && !invoiceInfo.sellerName) {
+    var allTextsForExtraction = tplTexts.concat(pageTexts);
+    var textInfo = _extractInvoiceFromText(allTextsForExtraction);
     var textKeys = Object.keys(textInfo);
     for (var tk = 0; tk < textKeys.length; tk++) {
       if (!invoiceInfo[textKeys[tk]]) invoiceInfo[textKeys[tk]] = textInfo[textKeys[tk]];
@@ -944,7 +1036,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   }
 
   // 13. Build SVG
-  var svg = _buildOfdSvg(pageW, pageH, tplTexts, tplPaths, tplImgs, pageTexts, pagePaths, pageImgs, annotTexts, annotImgs, fontResult.fonts, fontResult.colorSpaces, imageData);
+  var svg = _buildOfdSvg(pageW, pageH, tplTexts, tplPaths, tplImgs, pageTexts, pageObjPaths, pageImgs, annotTexts, annotImgs, fontResult.fonts, fontResult.colorSpaces, imageData);
 
   return {
     svg: svg,
@@ -952,6 +1044,19 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
     pageWidth: pageW,
     pageHeight: pageH
   };
+}
+
+// Helper: load image bytes into an HTML Image element
+function _loadImageFromBytes(bytes, mime) {
+  return new Promise(function(resolve, reject) {
+    var b64 = '';
+    for (var i = 0; i < bytes.length; i++) b64 += String.fromCharCode(bytes[i]);
+    var dataUrl = 'data:' + mime + ';base64,' + btoa(b64);
+    var img = new Image();
+    img.onload = function() { resolve(img); };
+    img.onerror = function() { reject(new Error('Image load failed')); };
+    img.src = dataUrl;
+  });
 }
 
 window.__ofdClient = {
