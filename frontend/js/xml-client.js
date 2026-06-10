@@ -149,16 +149,7 @@ var __xmlClient = (function() {
   // Internal helpers
   // =====================================================
 
-  /**
-   * Strip XML namespace prefixes (same as ofd-client.js).
-   * EInvoice XML may have namespace prefixes that break getElementsByTagName.
-   */
-  function _stripXmlNs(xml) {
-    var s = xml.replace(/\s+xmlns:\w+\s*=\s*"[^"]*"/g, '');
-    s = s.replace(/\s+xmlns\s*=\s*"[^"]*"/g, '');
-    s = s.replace(/<(\/?)(\w+):/g, '<$1');
-    return s;
-  }
+  // _stripXmlNs / _parseXml are defined in xml-utils.js (loaded before this file)
 
   /**
    * Find first element by tag name and return its text content.

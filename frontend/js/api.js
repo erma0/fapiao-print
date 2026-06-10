@@ -15,18 +15,14 @@ var __api = (function () {
         'list_printers': '/api/v1/printers',
         'pdfium_print': '/api/v1/pdfium_print',
         'print_pdf_file': '/api/v1/print',
+        'ocr_image': '/api/v1/ocr_image',
+        'ocr_pdf_page': '/api/v1/ocr_pdf_page',
         'parse_ofd': '/api/v1/parse_ofd',
         'parse_xml_invoice': '/api/v1/parse_xml_invoice',
         'open_ofd_images': '/api/v1/open_ofd_images',
-        'check_path_exists': '/api/v1/check_path_exists',
-        'get_config': '/api/v1/get_config',
         'get_app_version': '/api/v1/get_app_version',
         'trim_image': '/api/v1/trim_image',
-        'copy_file': '/api/v1/copy_file',
         'rename_file': '/api/v1/rename_file',
-        'write_text_file': '/api/v1/write_text_file',
-        'get_temp_dir': '/api/v1/get_temp_dir',
-        'get_downloads_dir': '/api/v1/get_downloads_dir',
     };
 
     function _mapEndpoint(cmd) {

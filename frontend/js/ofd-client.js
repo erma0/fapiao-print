@@ -15,31 +15,7 @@ var OFD_SVG_SCALE = 3.5;
 // Helpers
 // =====================================================
 
-/**
- * Strip XML namespace prefixes before DOMParser parsing.
- * OFD files use <ofd:Page>, <ofd:Layer> etc., but getElementsByTagName('Page')
- * won't match <ofd:Page> in browser DOMParser. Strip all prefixes so
- * <ofd:Page> → <Page>, <ofd:TextObject> → <TextObject>, etc.
- * Also removes xmlns:xxx declarations to keep XML clean.
- */
-function _stripXmlNs(xml) {
-  // Remove xmlns declarations: xmlns:ofd="..." → (removed)
-  var s = xml.replace(/\s+xmlns:\w+\s*=\s*"[^"]*"/g, '');
-  // Also remove bare xmlns="..."
-  s = s.replace(/\s+xmlns\s*=\s*"[^"]*"/g, '');
-  // Strip namespace prefixes from opening/closing/self-closing tags:
-  // <ofd:XXX → <XXX, </ofd:XXX → </XXX
-  s = s.replace(/<(\/?)(\w+):/g, '<$1');
-  return s;
-}
-
-/**
- * Parse XML string with namespace stripping.
- * All OFD XML files should be parsed through this function.
- */
-function _parseXml(xml) {
-  return new DOMParser().parseFromString(_stripXmlNs(xml), 'text/xml');
-}
+// _stripXmlNs / _parseXml are defined in xml-utils.js (loaded before this file)
 
 function _attr(el, name) {
   if (!el || !el.getAttribute) return null;
@@ -562,7 +538,20 @@ function _parseAnnotations(xml) {
       var offsetX = apBoundary ? apBoundary[0] : 0;
       var offsetY = apBoundary ? apBoundary[1] : 0;
 
-      var content = _parseOfdContent(new XMLSerializer().serializeToString(ap));
+      // Same as Rust: ensure Content>Layer wrapper exists before parsing.
+      // Standard OFD Appearance already has <Content><Layer>, but non-standard
+      // files may place TextObject/ImageObject directly inside Appearance.
+      var apXml = new XMLSerializer().serializeToString(ap);
+      var apDoc = _parseXml(apXml);
+      var layers = apDoc.getElementsByTagName('Layer');
+      var content;
+      if (layers.length > 0) {
+        content = _parseOfdContent(apXml);
+      } else {
+        // Wrap in Content>Layer so _parseOfdContent can find objects
+        var innerXml = _stripXmlNs(apXml).replace(/<\?[^?]*\?>/g, '');
+        content = _parseOfdContent('<Content><Layer>' + innerXml + '</Layer></Content>');
+      }
       for (var ci = 0; ci < content.texts.length; ci++) {
         var t = content.texts[ci];
         t.boundary[0] += offsetX;
