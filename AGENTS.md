@@ -20,6 +20,7 @@ fapiao/
     ├── layout.js           # 排版计算 + 预览渲染
     ├── print.js            # PDF 合成 (pdf-lib) + iframe.print()
     ├── pdf-client.js       # PDF.js 封装 (ESM): 渲染+文字提取
+    ├── pdf-text.js         # PDF 文字层字段提取 (正则匹配)
     ├── ofd-client.js       # OFD 前端解析 (~960行)
     ├── xml-client.js       # XML 数电票解析
     ├── xml-utils.js        # 共享: _stripXmlNs/_parseXml
@@ -37,7 +38,7 @@ fapiao/
 
 | 类型 | 函数 | 解析器 |
 |------|------|--------|
-| `.pdf` | `loadPdfFromFile()` | PDF.js 渲染 + `applyPdfTextResult` 字段提取 |
+| `.pdf` | `loadPdfFromFile()` | PDF.js 渲染 + `applyPdfTextResult` 字段提取 (pdf-text.js) |
 | `.ofd` | `loadOfdFromFile()` | ofd-client.js → SVG → Canvas → PNG 300DPI |
 | `.xml` | `loadXmlFromFile()` | xml-client.js DOMParser → `_xmlInvoice:true` |
 | 图片 | `loadImageFromFile()` | FileReader → Image |
@@ -96,3 +97,12 @@ var S = {
 - 依赖浏览器 `<iframe>.print()`，Safari/移动端可能有差异
 - OFD 打印走位图路径（非矢量）
 - XML 数电票不可打印/不可渲染（纯数据格式）
+
+## JS vs Rust 解析对比
+
+| 部分 | 一致性 | 说明 |
+|------|--------|------|
+| XML 解析 | ✅ 一致 | xml-client.js 已修复命名空间前缀检测 + 直接子元素检查，对齐 Rust quick_xml |
+| OFD 解析 | ✅ 一致+增强 | CustomData/CustomTag/文字扫描完全对齐；JS 额外支持从 CustomData 提取购销方名称 |
+| PDF 文字 | ⚠️ 引擎差异 | Rust 用 PDFium、JS 用 PDF.js，文字提取结果可能略有差异（PDF 版式固有属性） |
+| PDF 字段 | ⚠️ 精度差异 | Rust 用坐标+关键词匹配(extractByCoordinates)，JS 用正则文本匹配(pdf-text.js)，后者代码量减少95%但精度稍低 |
