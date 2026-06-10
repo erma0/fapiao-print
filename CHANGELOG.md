@@ -1,5 +1,44 @@
 # 📋 更新日志
 
+## v2.2.0 — 纯前端（零后端）
+
+> 完成从 Rust 版到纯前端版的最终迁移。Rust 后端、invoice-engine、OCR 全部删除。
+> 所有功能在浏览器内自给自足，无需任何服务器。
+
+### 🗑️ 删除
+
+- **Rust 后端全部代码**: `src/` 目录、`Cargo.toml`、`Cargo.lock`、所有 Rust 依赖
+- **invoice-engine OFD 解析器**: Rust 版 OFD 引擎（已完全移植到 ofd-client.js）
+- **OCR 引擎**: MNN / PP-OCRv5 模型文件全部删除
+- **Docker / Nginx / systemd**: 部署配置文件全部删除（不再需要服务器）
+- **批量文件重命名**: 纯浏览器无法写本地文件系统
+- **打印控制（份数/双面/颜色/打印机选择）**: 浏览器无打印 API
+- **api.js**: 旧 Rust HTTP API 层，index.html 未加载、零引用（ff54427）
+
+### 🔄 前端解析器（完全移植自 Rust）
+
+- **ofd-client.js**: OFD ZIP→XML→SVG→PNG 300DPI，对齐 Rust invoice-engine 全部逻辑
+- **xml-client.js**: XML 数电票 DOMParser 解析，对齐 Rust `parse_xml_invoice_content()`
+- **xml-utils.js**: 共享 XML 工具 `_stripXmlNs` / `_parseXml`，处理命名空间前缀
+
+### ✅ 功能完整性
+
+所有核心功能与 Rust v2.0.7 版对齐：
+- PDF/OFD/XML/Image 文件加载与渲染
+- 发票字段提取（三级优先级：PDF文字层 > OFD XML > XML数电票）
+- PDF 矢量直通合成（pdf-lib embedPage，保留印章/签章）
+- 汇总表（14字段可勾选、CSV UTF-8 BOM）
+- 单票调整（slotScale/slotOffset、九宫格对齐、滚轮缩放）
+- 全部辅助功能（裁切线/编号/边框/水印/页码/页脚）
+- IndexedDB 文件缓存
+- 设置持久化（localStorage）
+
+### 🗂️ 目录扁平化
+
+`frontend/` 内容提到根目录，无子目录嵌套。
+
+---
+
 ## v2.1.0 — 纯 Web 重构（feat/web-cross-platform）
 
 > ⚠️ **本版本是一次彻底的架构简化,不是"加 Web 模式"**。
