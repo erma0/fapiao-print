@@ -194,19 +194,6 @@
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后从 PDF 文字层提取发票字段（销售方、金额等）。对扫描件/图片 PDF 无效。默认关闭以提高加载速度；需要结构化字段时再开启。</div>
         </div>
         <div class="sec">
-          <div class="sec-title">✅ 发票查验</div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(false)">🔍 官方查验平台</button>
-            <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(true)">🔍 备用查验平台</button>
-          </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">主平台为国家税务总局全国增值税发票查验平台，备用平台为仿真平台（官方证书异常时可使用）。🚧 自动查验功能规划中。</div>
-        </div>
-        <div class="sec">
-          <div class="sec-title">📄 PDF 设置</div>
-          <div class="trow"><label class="tlbl">保存后自动打开</label><button class="tgl on" id="toggleAutoOpenPdf" onclick="togglePref('autoOpenPdf',this)"></button></div>
-        </div>
-
-        <div class="sec">
           <div class="sec-title">💰 金额统计</div>
           <div class="row"><label class="lbl">统计模式</label><div class="ctrl"><select id="amtMode" onchange="S.amtMode=this.value;try{localStorage.setItem('ticketchan-amt-mode',this.value)}catch(e){};updateAmountSummary()"><option value="tax">含税总价</option><option value="notax">不含税金额</option><option value="both">同时显示</option></select></div></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">自动识别发票价税合计（含税）和合计金额（不含税），火车票识别票价。</div>
@@ -215,15 +202,6 @@
           <div class="sec-title">🎯 单票调整</div>
           <div class="trow"><label class="tlbl">记忆调整配置</label><button class="tgl" id="toggleSlotAdjMemory" onclick="togglePref('slotAdjMemory',this)"></button></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后关闭软件重新打开时，自动恢复每张发票的缩放、偏移和对齐设置（按文件名匹配）。</div>
-        </div>
-        <div class="sec">
-          <div class="sec-title">📋 发票管理</div>
-          <div class="trow"><label class="tlbl">记忆发票列表</label>
-            <button class="tgl" id="toggleFileListMemory" onclick="toggleFileListMemory(this)"></button>
-          </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
-            开启后关闭软件重新打开时自动恢复上次的发票列表和打印状态。关闭则每次打开均为空白。
-          </div>
         </div>
         <div class="sec">
           <div class="sec-title">🎨 外观</div>

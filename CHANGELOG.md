@@ -13,6 +13,13 @@
 - **Docker / Nginx / systemd**: 部署配置文件全部删除（不再需要服务器）
 - **批量文件重命名**: 纯浏览器无法写本地文件系统
 - **打印控制（份数/双面/颜色/打印机选择）**: 浏览器无打印 API
+
+### 🧹 偏好设置清理
+
+- **删除「保存后自动打开」**(autoOpenPdf): flag 存了但从未被实际使用，死开关
+- **删除「记忆发票列表」**(fileListMemory): 纯前端无法恢复本地文件路径，load 代码块为空
+- **删除「发票查验」板块**: 仅跳转外部链接无实际功能，提示文字自标注"规划中"
+- **删除 resetSettings 残留引用**: toggleCollate/toggleDuplex/ticketchan-save-dir 对应元素不存在
 - **api.js**: 旧 Rust HTTP API 层，index.html 未加载、零引用（ff54427）
 
 ### 🔄 前端解析器（完全移植自 Rust）

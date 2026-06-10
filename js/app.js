@@ -31,10 +31,8 @@ var S = {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, pageNum: false,
     printDate: false, footer: false,
-    autoOpenPdf: true,
     pdfTextEnabled: true,
-    customFM: false,
-    fileListMemory: false
+    customFM: false
   }
 };
 
@@ -1465,7 +1463,7 @@ function saveSettings() {
     copies: document.getElementById('copies').value,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','pageNum','printDate','footer','customFM','slotAdjMemory'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
@@ -1503,24 +1501,13 @@ function saveSettings() {
   var notesMap = {};
   S.files.forEach(function(f) { if (f.note && f.name) notesMap[f.name] = f.note; });
   if (Object.keys(notesMap).length > 0) o.summaryNotes = notesMap;
-  // Save printed state (always, regardless of fileListMemory switch)
+  // Save printed state
   var printedMap = {};
   S.files.forEach(function(f) {
     var key = f._filePath || f._pdfPath;
     if (key && f._printed) printedMap[key] = true;
   });
   o.printedMap = printedMap;
-  // Save file paths only when memory is enabled (always write to clear stale data)
-  if (S.feat.fileListMemory) {
-    var filePaths = [];
-    S.files.forEach(function(f) {
-      var p = f._filePath || f._pdfPath;
-      if (p && filePaths.indexOf(p) < 0) filePaths.push(p);
-    });
-    o.filePaths = filePaths;
-  } else {
-    o.filePaths = [];
-  }
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(o)); } catch(e) {}
 }
 
@@ -1561,9 +1548,8 @@ function loadSettings() {
       cutline: 'toggleCutline', number: 'toggleNumber', border: 'toggleBorder',
       trimWhite: 'toggleTrimWhite', watermark: 'toggleWatermark',
       pageNum: 'togglePageNum', printDate: 'toggleDate',
-      footer: 'toggleFooter', autoOpenPdf: 'toggleAutoOpenPdf', customFM: 'toggleCustomFM',
-      slotAdjMemory: 'toggleSlotAdjMemory',
-      fileListMemory: 'toggleFileListMemory'
+      footer: 'toggleFooter', customFM: 'toggleCustomFM',
+      slotAdjMemory: 'toggleSlotAdjMemory'
     };
     Object.keys(featMap).forEach(function(k) {
       if (o.feat[k] != null) {
@@ -1613,9 +1599,6 @@ function loadSettings() {
   // Restore printed state (always, regardless of switch)
   if (o.printedMap) _printedMap = o.printedMap;
   else _printedMap = {};
-  // Restore file paths only when memory is enabled
-  if (o.filePaths && o.filePaths.length > 0 && S.feat.fileListMemory) {
-  }
 }
 
 function togglePref(k, btn) {
@@ -1625,25 +1608,6 @@ function togglePref(k, btn) {
     try { localStorage.setItem('ticketchan-pdf-text-enabled', S.feat[k] ? '1' : '0'); } catch(e) {}
   }
   saveSettings();
-}
-
-function toggleFileListMemory(btn) {
-  S.feat.fileListMemory = !S.feat.fileListMemory;
-  btn.classList.toggle('on', S.feat.fileListMemory);
-  saveSettings();
-}
-
-
-
-async function verifyInvoice(backup) {
-  // 主：国家税务总局官方查验平台；备：仿真平台（证书有效）
-  var urls = {
-    primary: 'https://inv-veri.chinatax.gov.cn/',
-    backup: 'https://fz.chinaive.com/fpcy/'
-  };
-  var url = backup ? urls.backup : urls.primary;
-  if (backup) { url = urls.backup; } else { url = urls.primary; }
-  window.open(url, '_blank');
 }
 
 function applyTheme() {
@@ -1664,7 +1628,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, autoOpenPdf: true, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false };
   S.viewZoom = 0;
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
@@ -1688,11 +1652,8 @@ function resetSettings() {
   document.getElementById('toggleBorder').classList.remove('on');
   document.getElementById('toggleTrimWhite').classList.remove('on');
   document.getElementById('toggleWatermark').classList.remove('on');
-  document.getElementById('toggleCollate').classList.add('on');
-  document.getElementById('toggleDuplex').classList.remove('on');
   document.getElementById('togglePageNum').classList.remove('on');
   document.getElementById('toggleDate').classList.remove('on');
-  document.getElementById('toggleAutoOpenPdf').classList.add('on');
   document.getElementById('togglePdfText').classList.add('on');
   document.getElementById('toggleFooter').classList.remove('on');
   document.getElementById('toggleCustomFM').classList.remove('on');
@@ -1703,7 +1664,6 @@ function resetSettings() {
   document.getElementById('themeMode').value = 'light';
   document.documentElement.classList.remove('dark');
   try { localStorage.removeItem('ticketchan-theme'); } catch(e) {}
-  try { localStorage.removeItem('ticketchan-save-dir'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-amt-mode'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}

@@ -85,8 +85,8 @@ var S = {
   amtMode: 'tax', printedFilter: 'all',
   layout: { cols, rows, orient },
   feat: { cutline, number, border, trimWhite, watermark,
-          footer, pageNum, printDate, autoOpenPdf,
-          pdfTextEnabled, customFM, slotAdjMemory, fileListMemory },
+          footer, pageNum, printDate,
+          pdfTextEnabled, customFM, slotAdjMemory },
   // localStorage: ticketchan-settings / ticketchan-filelist
 };
 ```
