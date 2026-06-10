@@ -2,7 +2,6 @@
 // 发票酱 — Web 入口
 // =====================================================
 var APP_VERSION = '';
-var hasOcr = false;  // Pure-frontend: OCR removed, always false
 
 // =====================================================
 // Constants
@@ -28,13 +27,11 @@ var S = {
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
   printedFilter: 'all',
-  ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, pageNum: false,
     printDate: false, footer: false,
     autoOpenPdf: true,
-    ocrEnabled: false,
     pdfTextEnabled: true,
     customFM: false,
     fileListMemory: false
@@ -77,16 +74,12 @@ function createFileObj(opts) {
     buyerName: opts.buyerName || '',
     buyerCreditCode: opts.buyerCreditCode || '',
     invoiceType: opts.invoiceType || '',
-    _ocrText: opts._ocrText || '',
     _isTicket: opts._isTicket || false,
     _loading: opts._loading || false,
-    _ocrPending: false,
     _xmlInvoice: opts._xmlInvoice || false,
     // Disk path for the original file (when available).
     // Used by Rust to read bytes directly, skipping base64 encode/decode.
     _filePath: opts.filePath || '',
-    // PDF source info for ocr_pdf_page command (zero IPC round-trip OCR).
-    // Set when this fileObj represents a PDF page rendered via render_pdf_pages.
     _pdfPath: opts.pdfPath || '',
     _pdfPageIdx: opts.pdfPageIdx != null ? opts.pdfPageIdx : -1,
     // Per-slot adjustment: scale & position within the layout slot
@@ -130,7 +123,7 @@ function createFileObj(opts) {
 var toastT = null;
 function toast(msg, dur) { dur = dur || 2500; var e = document.getElementById('toast'); e.textContent = msg; e.classList.add('show'); clearTimeout(toastT); if (dur > 0) toastT = setTimeout(function() { e.classList.remove('show'); }, dur); else clearTimeout(toastT); }
 function toastHtml(msg, dur) { dur = dur || 2500; var e = document.getElementById('toast'); e.innerHTML = msg; e.classList.add('show'); clearTimeout(toastT); if (dur > 0) toastT = setTimeout(function() { e.classList.remove('show'); }, dur); else clearTimeout(toastT); }
-function toastLoading(msg) { _ocrToastActive = true; toastHtml('<span class="toast-spinner"></span>' + msg, 0); }
+function toastLoading(msg) { toastHtml('<span class="toast-spinner"></span>' + msg, 0); }
 function toastDone(msg) { toast(msg, 2500); }
 function hideToast() { var e = document.getElementById('toast'); e.classList.remove('show'); clearTimeout(toastT); }
 function syncSlider(s, n) { document.getElementById(n).value = s.value; }
@@ -216,39 +209,6 @@ function dataUrlToUint8Array(dataUrl) {
   var bytes = new Uint8Array(binaryStr.length);
   for (var i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
   return bytes;
-}
-
-// Downsample a data URL image for faster OCR IPC transfer.
-// Renders to a canvas at max `maxDim` pixels on the longest side, exports as JPEG.
-// Returns a Promise<string> with the downsampled data URL.
-function downsampleForOcr(dataUrl, maxDim) {
-  return new Promise(function(resolve) {
-    if (!dataUrl || dataUrl.length < 100000) { resolve(dataUrl); return; }
-    try {
-      var img = new Image();
-      img.onload = function() {
-        var longest = Math.max(img.naturalWidth, img.naturalHeight);
-        if (longest <= maxDim) { resolve(dataUrl); return; }
-        var scale = maxDim / longest;
-        var w = Math.round(img.naturalWidth * scale);
-        var h = Math.round(img.naturalHeight * scale);
-        var canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        var ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
-      };
-      img.onerror = function() { resolve(dataUrl); };
-      img.src = dataUrl;
-    } catch(e) { resolve(dataUrl); }
-  });
-}
-
-function ocrMaxDim() {
-  var p = S.ocrPrecision || 'standard';
-  if (p === 'fast') return 1280;
-  if (p === 'precise') return 2800;
-  return 1920;
 }
 
 // =====================================================
@@ -352,107 +312,6 @@ async function processFileList(fileList) {
   }
 }
 // =====================================================
-// Fast loading functions — show preview first, OCR in background
-// =====================================================
-
-function _drainOcrQueue() {
-  // OCR queue cleanup skipped in web mode
-  while (_ocrRunning < _ocrMaxConcurrent && _ocrQueue.length > 0) {
-    var task = _ocrQueue.shift();
-    _ocrRunning++;
-    task().then(_onOcrTaskDone).catch(_onOcrTaskDone);
-  }
-  // All OCR done — dismiss loading toast (but NOT if batch loading is still active)
-  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive && !_loadingBatchActive) {
-    _ocrToastActive = false;
-    var wasBatchTotal = _ocrBatchTotal;
-    var wasAddedCount = _ocrBatchAddedCount;
-    var wasFromButton = _ocrFromButton;
-    _ocrBatchTotal = 0;
-    _ocrBatchAddedCount = 0;
-    _ocrFromButton = false;
-    updateOcrAllBtn();
-    // Single-file OCR from button click shows its own result toast in applyOcrAsync
-    // For batch operations (loading or ocrAll), show completion toast here
-    if (!wasFromButton) {
-      if (wasAddedCount > 0) {
-        toastDone('已加载并识别 ' + wasAddedCount + ' 张发票');
-      } else if (wasBatchTotal > 0) {
-        toastDone('识别完成');
-      }
-    }
-  }
-}
-
-function updateOcrAllBtn() {
-  var btn = document.getElementById('ocrAllBtn');
-  if (!btn) return;
-  var remaining = _ocrQueue.length + _ocrRunning;
-  if (remaining > 0) {
-    var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
-    btn.innerHTML = _ocrBatchTotal > 0
-      ? '<span class="ocr-spinner"></span> ' + done + '/' + _ocrBatchTotal
-      : '<span class="ocr-spinner"></span> ' + remaining;
-    btn.disabled = true;
-    btn.title = '识别中 ' + (_ocrBatchTotal > 0 ? done + '/' + _ocrBatchTotal : '剩余' + remaining);
-  } else {
-    btn.textContent = '\uD83D\uDD0D';
-    btn.disabled = false;
-    btn.title = '一键识别';
-  }
-}
-
-function applyOcrAsync(fileObj, dataUrl) {
-  if (!hasOcr) return;
-  // Skip OCR if PDF text extraction already covered all key fields
-  if (fileObj._pdfTextExtracted && fileObj.sellerName && fileObj.amountTax > 0) {
-    console.log('[OCR] PDF文字提取已覆盖关键字段，跳过OCR');
-    return;
-  }
-  fileObj._ocrPending = true;
-  updateFileItem(fileObj);
-  updateOcrAllBtn();
-  var hasFilePath = !!(fileObj._filePath);
-  var isPdfPage = !!(fileObj._pdfPath && fileObj._pdfPageIdx >= 0);
-  _ocrQueue.push(function() {
-    var ocrPromise;
-    if (isPdfPage) {
-      // PDF page: use ocr_pdf_page — Rust renders + OCRs in one pass (zero IPC round-trip)
-      ocrPromise = applyOcrPdfPage(fileObj);
-    } else if (hasFilePath) {
-      ocrPromise = applyOcr(fileObj, '', fileObj._filePath);
-    } else {
-      ocrPromise = downsampleForOcr(dataUrl, ocrMaxDim()).then(function(ocrDataUrl) {
-        return applyOcr(fileObj, ocrDataUrl);
-      });
-    }
-    return ocrPromise.then(function() {
-      fileObj._ocrPending = false;
-      updateFileItem(fileObj);
-      updateAmountSummary();
-      // Show result toast only for single-file OCR triggered by button click
-      // (_ocrFromButton === true means user clicked OCR on one file)
-      // During batch loading or ocrAll, progress is shown via _onOcrTaskDone
-      if (_ocrFromButton && _ocrQueue.length === 0 && _ocrRunning <= 1) {
-        var amt = fileObj.amountTax || fileObj.amountNoTax;
-        toast(amt > 0 ? '识别成功 \u00A5' + amt.toFixed(2) : '识别完成，未识别到金额', 2500);
-      }
-    }).catch(function(e) {
-      fileObj._ocrPending = false;
-      console.warn('[OCR] 后台识别失败:', e);
-      if (_ocrFromButton && _ocrQueue.length === 0 && _ocrRunning <= 1) {
-        toast('识别失败', 2500);
-      }
-    });
-  });
-  // Show toast with remaining count
-  var remaining = _ocrQueue.length + _ocrRunning;
-  if (_ocrToastActive) {
-    var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
-    toastLoading(_ocrBatchTotal > 0 ? '识别中 ' + done + '/' + _ocrBatchTotal : '识别中，剩余 ' + remaining + ' 张');
-  }
-  _drainOcrQueue();
-}
 
 function buildAmtBadge(f) {
   if (f.amountTax > 0 || f.amountNoTax > 0) {
@@ -465,9 +324,6 @@ function buildAmtBadge(f) {
       '\n税额: \u00A5' + v.taxAmount.toFixed(2) +
       '\n验证: \u00A5' + v.amountNoTax.toFixed(2) + ' + \u00A5' + v.taxAmount.toFixed(2) + ' = \u00A5' + (Math.round((v.amountNoTax + v.taxAmount) * 100) / 100).toFixed(2) + ' \u2260 \u00A5' + v.amountTax.toFixed(2);
     return '<span class="amt-warn-badge" title="' + escHtml(tip) + '">\u26A0\u00A5' + v.amountTax.toFixed(2) + '</span>';
-  }
-  if (f._ocrPending) {
-    return '<span class="ocr-spinner" title="识别中"></span>';
   }
   return '';
 }
@@ -485,7 +341,7 @@ function updateFileItem(fileObj) {
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
   var ab = buildAmtBadge(f);
-  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : /非税/.test(f.invoiceType || '') ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
   var metaEl = items[idx].querySelector('.file-meta');
   var sellerEl = items[idx].querySelector('.file-seller');
   if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
@@ -502,21 +358,6 @@ function updateFileItem(fileObj) {
       newSeller.title = f.sellerName || '';
       newSeller.innerHTML = sb;
       nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
-    }
-  }
-  // Update per-file OCR button state
-  var ocrBtn = items[idx].querySelector('.ocr-btn');
-  if (ocrBtn) {
-    if (f._ocrPending) {
-      ocrBtn.innerHTML = '<span class="ocr-spinner"></span>';
-      ocrBtn.disabled = true;
-      ocrBtn.title = '识别中';
-      ocrBtn.onclick = null;
-    } else {
-      ocrBtn.textContent = '\uD83D\uDD0D';
-      ocrBtn.disabled = false;
-      ocrBtn.title = 'OCR识别';
-      ocrBtn.onclick = (function(i) { return function() { ocrFile(i); }; })(idx);
     }
   }
 }
@@ -788,19 +629,13 @@ function renderFileList() {
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var ab = buildAmtBadge(f);
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : /非税/.test(f.invoiceType || '') ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     var typeBadgeText = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : safeType;
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
-    var ocrBtnHtml = hasOcr
-      ? (f._ocrPending
-        ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
-        : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>')
-      : '';
-    var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
       : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + ab + '</div>' +
@@ -808,7 +643,7 @@ function renderFileList() {
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
         '<button class="ib sort-btn' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
-        ocrBtnHtml + '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>';
+        '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>';
     return '<div class="' + cls + '" data-idx="' + i + '" data-printed="' + (f._printed ? '1' : '0') + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + typeBadgeText + '</div></div>' +
@@ -844,28 +679,6 @@ function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); re
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
-function ocrFile(i) {
-  var f = S.files[i];
-  if (f._loading || f._ocrPending) return;
-  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
-  _ocrBatchTotal = 1;
-  _ocrFromButton = true;
-  _ocrToastActive = true;
-  applyOcrAsync(f, f.previewUrl);
-}
-function ocrAll() {
-  if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
-  var running = _ocrQueue.length + _ocrRunning;
-  if (running > 0) { toast('正在识别中，请稍候'); return; }
-  var targets = S.files.filter(function(f) {
-    return !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
-  });
-  if (targets.length === 0) { toast('没有需要识别的发票'); return; }
-  _ocrBatchTotal = targets.length;
-  updateOcrAllBtn();
-  toastLoading('识别中，共 ' + targets.length + ' 张...');
-  targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
-}
 function clearAll() {
   if (!S.files.length) return;
   if (!confirm('确认清除所有发票？')) return;
@@ -1011,8 +824,6 @@ function updateAmountSummary() {
 function openInvModal(i) {
   if (S.files[i]._loading) return; // Don't open modal for loading placeholders
   S.editIdx = i; var f = S.files[i];
-  var ocrText = f._ocrText || '';
-  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
   var _fw = 'width:140px;flex:none;text-align:right;font-size:12px';
   var _fwm = _fw + ';font-family:monospace';
   var mRF = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl end">' + html + '</div></div>'; };
@@ -1036,8 +847,7 @@ function openInvModal(i) {
     mRF('缩放', '<input type="number" id="mSlotScale" value="' + Math.round((f.slotScale || 1) * 100) + '" min="20" max="300" style="' + _fw + '"><span style="font-size:11px;color:var(--text-muted);width:16px;flex-shrink:0;text-align:left">%</span>') +
     mRF('X偏移', '<input type="number" id="mSlotOffX" value="' + (f.slotOffsetX || 0) + '" min="-50" max="50" step="0.5" style="' + _fw + '"><span style="font-size:11px;color:var(--text-muted);width:16px;flex-shrink:0;text-align:left">mm</span>') +
     mRF('Y偏移', '<input type="number" id="mSlotOffY" value="' + (f.slotOffsetY || 0) + '" min="-50" max="50" step="0.5" style="' + _fw + '"><span style="font-size:11px;color:var(--text-muted);width:16px;flex-shrink:0;text-align:left">mm</span>') +
-    '</div>' +
-    ocrHtml;
+    '</div>';
   document.getElementById('invModal').classList.remove('hidden');
 }
 function changeModalCopies(d) { var e = document.getElementById('mCopies'); e.value = Math.max(1, Math.min(99, parseInt(e.value) + d)); }
@@ -1811,9 +1621,6 @@ function loadSettings() {
 function togglePref(k, btn) {
   S.feat[k] = !S.feat[k];
   btn.classList.toggle('on', S.feat[k]);
-  if (k === 'ocrEnabled') {
-    try { localStorage.setItem('ticketchan-ocr-enabled', S.feat[k] ? '1' : '0'); } catch(e) {}
-  }
   if (k === 'pdfTextEnabled') {
     try { localStorage.setItem('ticketchan-pdf-text-enabled', S.feat[k] ? '1' : '0'); } catch(e) {}
   }
@@ -1826,10 +1633,6 @@ function toggleFileListMemory(btn) {
   saveSettings();
 }
 
-function setOcrPrecision(val) {
-  S.ocrPrecision = val;
-  try { localStorage.setItem('ticketchan-ocr-precision', val); } catch(e) {}
-}
 
 
 async function verifyInvoice(backup) {
@@ -1851,7 +1654,7 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value };
+  var data = { layout: S.layout, feat: S.feat, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -1861,8 +1664,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false };
-  S.ocrPrecision = 'standard';
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, autoOpenPdf: true, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false };
   S.viewZoom = 0;
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
@@ -1891,7 +1693,6 @@ function resetSettings() {
   document.getElementById('togglePageNum').classList.remove('on');
   document.getElementById('toggleDate').classList.remove('on');
   document.getElementById('toggleAutoOpenPdf').classList.add('on');
-  document.getElementById('toggleOcrEnabled').classList.remove('on');
   document.getElementById('togglePdfText').classList.add('on');
   document.getElementById('toggleFooter').classList.remove('on');
   document.getElementById('toggleCustomFM').classList.remove('on');
@@ -1899,14 +1700,11 @@ function resetSettings() {
   document.getElementById('customFMRow').style.display = 'none';
   document.getElementById('footerMarginRow').style.display = 'none';
   document.getElementById('footerMargin').value = 8; document.getElementById('footerMarginN').value = 8;
-  document.getElementById('ocrPrecision').value = 'standard';
   document.getElementById('themeMode').value = 'light';
   document.documentElement.classList.remove('dark');
   try { localStorage.removeItem('ticketchan-theme'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-save-dir'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-amt-mode'); } catch(e) {}
-  try { localStorage.removeItem('ticketchan-ocr-enabled'); } catch(e) {}
-  try { localStorage.removeItem('ticketchan-ocr-precision'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}
   _printedMap = {};
@@ -2015,8 +1813,6 @@ window.addEventListener('resize', function() { if (S.files.length) updatePreview
 
 // beforeunload safety net — stop all work if the window is being destroyed
 window.addEventListener('beforeunload', function() {
-  _ocrQueue.length = 0;
-  _ocrRunning = 0;
   _loadingBatchActive = false;
 });
 
@@ -2046,17 +1842,6 @@ document.getElementById('orientation').value = 'landscape';
   } catch(e) {}
 })();
 
-// Restore OCR enabled setting
-(function() {
-  try {
-    var v = localStorage.getItem('ticketchan-ocr-enabled');
-    if (v === '1') {
-      S.feat.ocrEnabled = true;
-      document.getElementById('toggleOcrEnabled').classList.add('on');
-    }
-  } catch(e) {}
-})();
-
 // Restore PDF text extraction setting
 (function() {
   try {
@@ -2068,17 +1853,6 @@ document.getElementById('orientation').value = 'landscape';
     } else {
       S.feat.pdfTextEnabled = true;
       if (btn) btn.classList.add('on');
-    }
-  } catch(e) {}
-})();
-
-// Restore OCR precision setting
-(function() {
-  try {
-    var p = localStorage.getItem('ticketchan-ocr-precision');
-    if (p && (p === 'fast' || p === 'standard' || p === 'precise')) {
-      S.ocrPrecision = p;
-      document.getElementById('ocrPrecision').value = p;
     }
   } catch(e) {}
 })();
@@ -2196,9 +1970,8 @@ function getSummaryCellValue(fileObj, field, idx) {
   switch (field.key) {
     case 'seq': return String(idx + 1);
     case 'invoiceType':
-      if (fileObj._xmlInvoice && fileObj.invoiceType) return fileObj.invoiceType;
+      if (fileObj.invoiceType) return fileObj.invoiceType;
       if (fileObj._isTicket) return fileObj.sellerName || '车票'; // sellerName holds ticket label
-      if (fileObj._ocrText && /非税/.test(fileObj._ocrText)) return '非税票据';
       return '增值税发票';
     case 'amountTax': return fileObj.amountTax > 0 ? fileObj.amountTax.toFixed(2) : '';
     case 'amountNoTax': return fileObj.amountNoTax > 0 ? fileObj.amountNoTax.toFixed(2) : '';

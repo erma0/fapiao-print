@@ -44,7 +44,6 @@
                 <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
               </div>
             </div>
-            <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别">🔍</button>
             <button class="ib" onclick="selectAll()" title="全选">☑</button>
             <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
             <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
@@ -189,16 +188,10 @@
     <!-- Settings / Preferences panel -->
     <div class="sidebar-panel hidden" id="panel-prefs">
       <div class="sidebar-panel-scroll">
-        <div class="sec" id="ocrSection">
-          <div class="sec-title">🔍 OCR 识别</div>
-          <div class="trow"><label class="tlbl">自动识别</label><button class="tgl" id="toggleOcrEnabled" onclick="togglePref('ocrEnabled',this)"></button></div>
-          <div class="row" style="margin-top:8px"><label class="lbl">识别精度</label><div class="ctrl"><select id="ocrPrecision" onchange="setOcrPrecision(this.value)"><option value="fast">快速（1280px）</option><option value="standard" selected>标准（1920px）</option><option value="precise">精确（2800px）</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后添加发票时自动 OCR 识别金额、销售方等信息；关闭后可手动点击识别按钮触发。快速模式速度最快但小字可能模糊；标准模式兼顾速度与准确度；精确模式最准但速度较慢。</div>
-        </div>
         <div class="sec" id="pdfTextSection">
           <div class="sec-title">📝 PDF 文字提取</div>
           <div class="trow"><label class="tlbl">自动提取</label><button class="tgl on" id="togglePdfText" onclick="togglePref('pdfTextEnabled',this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后从 PDF 文字层提取发票字段（销售方、金额等），无需 OCR。对扫描件/图片 PDF 无效。默认关闭以提高加载速度；需要结构化字段时再开启。</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">开启后从 PDF 文字层提取发票字段（销售方、金额等）。对扫描件/图片 PDF 无效。默认关闭以提高加载速度；需要结构化字段时再开启。</div>
         </div>
         <div class="sec">
           <div class="sec-title">✅ 发票查验</div>
@@ -352,7 +345,6 @@
 <script src="js/ofd-client.js?v=3"></script>
 <script src="js/xml-client.js?v=3"></script>
 <script src="js/layout.js?v=3"></script>
-<script src="js/ocr.js?v=3"></script>
 <script src="js/print.js?v=3"></script>
 <script src="js/app.js?v=3"></script>
 </body>
