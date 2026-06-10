@@ -15,8 +15,6 @@ var __api = (function () {
         'list_printers': '/api/v1/printers',
         'pdfium_print': '/api/v1/pdfium_print',
         'print_pdf_file': '/api/v1/print',
-        'ocr_image': '/api/v1/ocr_image',
-        'ocr_pdf_page': '/api/v1/ocr_pdf_page',
         'parse_ofd': '/api/v1/parse_ofd',
         'parse_xml_invoice': '/api/v1/parse_xml_invoice',
         'open_ofd_images': '/api/v1/open_ofd_images',

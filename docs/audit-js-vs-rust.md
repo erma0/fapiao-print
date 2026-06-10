@@ -220,8 +220,6 @@ sh = (ph - rows*(mt+mb) - (rows-1)*gv - effectiveFm) / rows
 | `list_printers` | `/api/v1/printers` | ✅ (同上) | 正常 |
 | `pdfium_print` | `/api/v1/pdfium_print` | ✅ server.rs 存在 | 正常 |
 | `print_pdf_file` | `/api/v1/print` | ✅ server.rs 存在 | 正常 |
-| **`ocr_image`** | **`/api/v1/ocr_image`** | **✅ server.rs 存在** | **⚠️ 缺失映射 → 已修复** |
-| **`ocr_pdf_page`** | **`/api/v1/ocr_pdf_page`** | **✅ server.rs 存在** | **⚠️ 缺失映射 → 已修复** |
 | `parse_ofd` | `/api/v1/parse_ofd` | ✅ | 正常 |
 | `parse_xml_invoice` | `/api/v1/parse_xml_invoice` | ✅ | 正常 |
 | `open_ofd_images` | `/api/v1/open_ofd_images` | ✅ server.rs 存在 | 正常 |
@@ -235,13 +233,15 @@ sh = (ph - rows*(mt+mb) - (rows-1)*gv - effectiveFm) / rows
 | ~~`get_temp_dir`~~ | ~~`/api/v1/get_temp_dir`~~ | ✅ server.rs 存在 | 已清理（纯桌面用） |
 | ~~`get_downloads_dir`~~ | ~~`/api/v1/get_downloads_dir`~~ | ✅ server.rs 存在 | 已清理（纯桌面用） |
 
-### 6.2 ⚠️ 差异点 D7 — API 端点映射缺失 + 桌面遗留清理
+**注意**: `ocr_image`/`ocr_pdf_page` 不在映射中。虽然 `ocr.js` 中调用了这两个命令，但 `app.js` 中 `hasOcr = false`（硬编码），`applyOcr`/`applyOcrPdfPage` 入口均有 `if (!hasOcr) return;` 守卫，OCR 代码不会执行。纯前端模式下不需要 OCR 端点。
 
-**复核发现**: 原审计遗漏了一个**实际 Bug** — `ocr.js` 调用 `__api.call('ocr_image')` 和 `__api.call('ocr_pdf_page')`，但 `_endpoints` 映射中缺少这两个条目，调用会直接抛 "Command not available" 错误。服务器端 `server.rs` 实际有这两个路由。
+### 6.2 ⚠️ 差异点 D7 — API 端点映射清理
 
-原审计标注的 `pdfium_print`/`print`/`open_ofd_images`/`get_app_version`/`trim_image`/`rename_file` 等端点，在 `server.rs` 中**均存在**，原标注"可能不存在"有误。
+**原审计标注**: 多个端点"可能不存在"——实为误标，`server.rs` 中均存在。
 
-**修复**: 已添加 `ocr_image` 和 `ocr_pdf_page` 映射，清理纯桌面模式遗留端点。
+**实际处理**:
+- 清理了纯桌面模式遗留端点（`check_path_exists`, `get_config`, `copy_file`, `write_text_file`, `get_temp_dir`, `get_downloads_dir`）
+- `ocr_image`/`ocr_pdf_page` **不添加映射** — 纯前端模式 `hasOcr=false`，OCR 调用被守卫跳过，无需端点
 
 ---
 
@@ -307,11 +307,14 @@ sh = (ph - rows*(mt+mb) - (rows-1)*gv - effectiveFm) / rows
 | **D3** | `_stripXmlNs` 代码重复 | 维护负担 | ✅ 已修复 — 提取到 xml-utils.js |
 | **D7** | API 端点映射缺失 + 桌面遗留 | ocr.js OCR 调用失败 | ✅ 已修复 — 添加 OCR 端点，清理桌面遗留 |
 
-### 复核新增发现 (P1 → 已修复 ✅)
+### 已确认无需修复 (P3)
 
-| ID | 差异 | 影响 | 状态 |
-|----|------|------|------|
-| **D7b** | `ocr_image`/`ocr_pdf_page` 端点映射缺失 | ocr.js 调用 OCR 功能必然失败 | ✅ 已修复 |
+| ID | 差异 | 原因 |
+|----|------|------|
+| D2 | XML LabelName 查找 — JS 更鲁棒 | 无退化，无需修复 |
+| D4 | 纯前端无 OCR 引擎 | `hasOcr=false` 守卫，OCR 代码不执行，架构限制 |
+| D5 | JPEG 可能重编码质量差异 | 矢量直通不受影响，肉眼不可见 |
+| D6 | 打印控制能力缺失 | 已知架构限制 |
 
 ### 无需处理 (P3)
 
