@@ -15,6 +15,32 @@ var OFD_SVG_SCALE = 3.5;
 // Helpers
 // =====================================================
 
+/**
+ * Strip XML namespace prefixes before DOMParser parsing.
+ * OFD files use <ofd:Page>, <ofd:Layer> etc., but getElementsByTagName('Page')
+ * won't match <ofd:Page> in browser DOMParser. Strip all prefixes so
+ * <ofd:Page> → <Page>, <ofd:TextObject> → <TextObject>, etc.
+ * Also removes xmlns:xxx declarations to keep XML clean.
+ */
+function _stripXmlNs(xml) {
+  // Remove xmlns declarations: xmlns:ofd="..." → (removed)
+  var s = xml.replace(/\s+xmlns:\w+\s*=\s*"[^"]*"/g, '');
+  // Also remove bare xmlns="..."
+  s = s.replace(/\s+xmlns\s*=\s*"[^"]*"/g, '');
+  // Strip namespace prefixes from opening/closing/self-closing tags:
+  // <ofd:XXX → <XXX, </ofd:XXX → </XXX
+  s = s.replace(/<(\/?)(\w+):/g, '<$1');
+  return s;
+}
+
+/**
+ * Parse XML string with namespace stripping.
+ * All OFD XML files should be parsed through this function.
+ */
+function _parseXml(xml) {
+  return new DOMParser().parseFromString(_stripXmlNs(xml), 'text/xml');
+}
+
 function _attr(el, name) {
   if (!el || !el.getAttribute) return null;
   return el.getAttribute(name);
@@ -302,8 +328,7 @@ function _parseOfdContent(xml) {
   var pathObjs = [];
   var imgObjs = [];
 
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
   var layers = doc.getElementsByTagName('Layer');
 
   for (var li = 0; li < layers.length; li++) {
@@ -383,8 +408,7 @@ function _parseOfdContent(xml) {
 
 function _parseCustomData(xml) {
   var map = {};
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
   var items = doc.getElementsByTagName('CustomData');
   for (var i = 0; i < items.length; i++) {
     var name = _attr(items[i], 'Name');
@@ -395,8 +419,7 @@ function _parseCustomData(xml) {
 
 function _parseCustomTag(xml) {
   var map = {};
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
 
   var fieldTags = ['InvoiceNo', 'IssueDate', 'BuyerName', 'BuyerTaxID',
     'SellerName', 'SellerTaxID', 'TaxExclusiveTotalAmount',
@@ -430,8 +453,7 @@ function _parseFonts(xml) {
   var colorSpaces = {};
   var drawParams = {};
 
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
 
   var fontEls = doc.getElementsByTagName('Font');
   for (var i = 0; i < fontEls.length; i++) {
@@ -513,8 +535,7 @@ function _applyDrawParamDefaults(paths, texts, drawParams) {
 
 function _parseImageResources(xml) {
   var images = {};
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
   var mmEls = doc.getElementsByTagName('MultiMedia');
   for (var i = 0; i < mmEls.length; i++) {
     var id = parseInt(_attr(mmEls[i], 'ID'));
@@ -529,8 +550,7 @@ function _parseImageResources(xml) {
 function _parseAnnotations(xml) {
   var allTexts = [];
   var allImgs = [];
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(xml, 'text/xml');
+  var doc = _parseXml(xml);
   var annots = doc.getElementsByTagName('Annot');
 
   for (var ai = 0; ai < annots.length; ai++) {
@@ -817,7 +837,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
 
   // 2. Find DocRoot (usually "Doc_0/Document.xml")
   var docRoot = 'Doc_0/Document.xml';
-  var ofdDoc = new DOMParser().parseFromString(ofdXml, 'text/xml');
+  var ofdDoc = _parseXml(ofdXml);
   var docRootEls = ofdDoc.getElementsByTagName('DocRoot');
   if (docRootEls.length > 0 && docRootEls[0].textContent) {
     docRoot = docRootEls[0].textContent.trim().replace(/^\//, '');
@@ -832,7 +852,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   var docXml = await zipReadStr(docRoot);
   if (!docXml) throw new Error(docRoot + ' 不存在');
 
-  var docDom = new DOMParser().parseFromString(docXml, 'text/xml');
+  var docDom = _parseXml(docXml);
 
   // Parse template and page paths from Document.xml
   // OFD spec: <TemplatePage BaseLoc="..."> and <Page BaseLoc="...">
@@ -887,7 +907,7 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   for (var ppi = 0; ppi < pagePaths.length; ppi++) {
     var pageXml = await zipReadStr(pagePaths[ppi]);
     if (!pageXml) continue;
-    var pageDom = new DOMParser().parseFromString(pageXml, 'text/xml');
+    var pageDom = _parseXml(pageXml);
     var resEls = pageDom.getElementsByTagName('Resource');
     for (var ri = 0; ri < resEls.length; ri++) {
       var resBaseLoc = _attr(resEls[ri], 'BaseLoc');
@@ -1009,13 +1029,21 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
     imageData[resId] = 'data:' + mime + ';base64,' + btoa(b64);
   }
 
-  // 10. Get page dimensions from page content XML
-  // OFD spec: PhysicalBox is an element inside the page XML, not an attribute of <Page> in Document.xml
+  // 10. Get page dimensions
+  // Priority: page content XML PhysicalBox > Document.xml CommonData/PageArea > default
   var pageW = 210, pageH = 140;
+  // First try Document.xml CommonData/PageArea/PhysicalBox
+  var commonDataPb = docDom.getElementsByTagName('PhysicalBox');
+  if (commonDataPb.length > 0) {
+    var cdPbText = (commonDataPb[0].textContent || '').trim();
+    var cdPb = _parseF4(cdPbText);
+    if (cdPb) { pageW = cdPb[2]; pageH = cdPb[3]; }
+  }
+  // Then try page content XML (overrides Document.xml if present)
   if (pagePaths.length > 0) {
     var firstPageXml = await zipReadStr(pagePaths[0]);
     if (firstPageXml) {
-      var fpDom = new DOMParser().parseFromString(firstPageXml, 'text/xml');
+      var fpDom = _parseXml(firstPageXml);
       var pbEls = fpDom.getElementsByTagName('PhysicalBox');
       if (pbEls.length > 0) {
         var pbText = (pbEls[0].textContent || '').trim();
