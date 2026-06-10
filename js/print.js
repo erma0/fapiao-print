@@ -49,9 +49,12 @@ function _jpegBlobFromDataUrl(dataUrl) {
 async function _getOrLoadSrcPdf(fileObj) {
   var key = fileObj.id.replace(/_p\d+$/, '');
   if (_srcPdfDocs[key]) return _srcPdfDocs[key];
-  var bytes = fileObj.srcPdfBytes instanceof Uint8Array
-    ? fileObj.srcPdfBytes
-    : new Uint8Array(fileObj.srcPdfBytes);
+  // Copy the buffer — pdf-lib may transfer/detach the original ArrayBuffer,
+  // causing subsequent reads to fail with "detached ArrayBuffer".
+  var raw = fileObj.srcPdfBytes;
+  var bytes = raw instanceof Uint8Array
+    ? new Uint8Array(raw)
+    : new Uint8Array(raw.slice(0));
   var doc = await pdfLib.PDFDocument.load(bytes, { ignoreEncryption: true });
   _srcPdfDocs[key] = doc;
   return doc;
@@ -186,25 +189,41 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     }
   }
 
+  // pdf-lib StandardFonts (Helvetica) only support WinAnsiEncoding (Latin-1).
+  // CJK characters (Chinese, Japanese, Korean) must be replaced with ASCII equivalents
+  // to avoid "WinAnsi cannot encode" errors.
+  function _safeText(s) {
+    if (!s) return '';
+    var result = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c <= 0xFF) { result += s.charAt(i); }
+    }
+    return result.replace(/\s+/g, ' ').trim();
+  }
+
   if (settings.watermark && settings.wmText) {
-    var wmSize = settings.wmSize || 60;
-    var wmOpacity = settings.wmOpacity != null ? settings.wmOpacity : 0.15;
-    page.drawText(settings.wmText, {
-      x: pw / 2 - settings.wmText.length * wmSize * 0.15,
-      y: ph / 2,
-      size: wmSize,
-      font: settings._fontBold,
-      color: pdfLib.rgb(0.6, 0.6, 0.6),
-      opacity: wmOpacity,
-      rotate: pdfLib.degrees(30)
-    });
+    var wmText = _safeText(settings.wmText);
+    if (wmText) {
+      var wmSize = settings.wmSize || 60;
+      var wmOpacity = settings.wmOpacity != null ? settings.wmOpacity : 0.15;
+      page.drawText(wmText, {
+        x: pw / 2 - wmText.length * wmSize * 0.15,
+        y: ph / 2,
+        size: wmSize,
+        font: settings._fontBold,
+        color: pdfLib.rgb(0.6, 0.6, 0.6),
+        opacity: wmOpacity,
+        rotate: pdfLib.degrees(30)
+      });
+    }
   }
 
   if (settings.pageNum || settings.printDate || (settings.footerText || '').trim()) {
     var dateStr = new Date().toISOString().slice(0, 10);
     var line1 = '';
-    if (settings.pageNum) line1 = '第 ' + (pageIdx + 1) + ' 页';
-    if (settings.printDate) line1 += (line1 ? '   ' : '') + '打印日期 ' + dateStr;
+    if (settings.pageNum) line1 = 'Page ' + (pageIdx + 1);
+    if (settings.printDate) line1 += (line1 ? '  ' : '') + 'Printed ' + dateStr;
     if (line1) {
       page.drawText(line1, {
         x: pw / 2 - line1.length * 1.5,
@@ -215,8 +234,10 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
       });
     }
     if (settings.footerText && settings.footerText.trim()) {
-      page.drawText(settings.footerText, {
-        x: pw / 2 - settings.footerText.length * 1.5,
+      var ftText = _safeText(settings.footerText);
+      if (ftText) {
+        page.drawText(ftText, {
+          x: pw / 2 - ftText.length * 1.5,
         y: 2,
         size: 8,
         font: settings._font,
