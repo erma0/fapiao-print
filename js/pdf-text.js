@@ -1,16 +1,15 @@
 // =====================================================
 // PDF Text Extraction — Coordinate-first invoice field extraction
 // =====================================================
-// Ported from ocr.js (deleted in d244d68, restored in c564731).
-// OCR-specific functions (applyOcrResult, applyOcr, applyOcrPdfPage) removed.
+// Extracts structured invoice fields from PDF text layer coordinates.
+// Uses multi-strategy approach: coordinate positioning + keyword matching + regex fallback.
 //
 // Entry point: applyPdfTextResult(fileObj, pdfTextResult)
-//   → extractByCoordinates(pdfTextResult)  [line 2318]
+//   → extractByCoordinates(pdfTextResult)
 //   → coordinate + keyword + regex multi-strategy extraction
 //
 // pdfTextResult format (from pdf-client.js extractTextWithCoords):
 //   { text: string, lines: [{words: [{text,x,y,w,h}]}], imgW, imgH, hasTextLayer }
-// Compatible with OcrResult structure that this code was originally designed for.
 
 // Credit code label pattern — allows \s* between CJK chars for dzcp split-char PDFs
 // where each character is on its own line: "统\n一\n社\n会\n信\n用\n代\n码"
@@ -43,7 +42,7 @@ function parseChineseNumeral(str) {
 
   // Digit map
   var digitMap = { '零': 0, '壹': 1, '贰': 2, '叁': 3, '肆': 4, '伍': 5, '陆': 6, '柒': 7, '捌': 8, '玖': 9 };
-  // Also support simplified variants commonly found in OCR
+  // Also support simplified variants commonly found in extracted text
   var digitMapSimple = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
 
   function toDigit(ch) {
@@ -178,8 +177,8 @@ function getNonTaxLabel(text) {
 }
 
 /**
- * Normalize OCR currency symbol artifacts.
- * OCR commonly misreads digits and ¥ symbols because they look similar:
+ * Normalize currency symbol artifacts.
+ * Text extraction commonly produces digit/symbol confusion:
  *   - "1" as "¥" → "¥¥72.68" should be "¥172.68" (second ¥ is misread "1")
  *   - "¥" as "1" → "1317.00" should be "¥317.00" (handled by keyword-based rule)
  *   - Mixed full-width ￥ and half-width ¥
@@ -235,7 +234,7 @@ function classifyRegion(wx, wy, ww, wh, imgW, imgH) {
 }
 
 /**
- * Build a region-annotated word list from OCR coordinates.
+ * Build a region-annotated word list from text line coordinates.
  * Each entry: { text, x, y, w, h, region, lineIdx, wordIdx, confidence }
  */
 function buildWordMap(ocrLines, imgW, imgH) {
@@ -292,8 +291,8 @@ function getRegionText(wordMap, region) {
 }
 
 /**
- * Clean an OCR amount string: strip ¥/￥ prefix, handle "1" misread of "¥".
- * OCR often misreads "¥317.00" as "1317.00" (¥→1). We detect this by checking
+ * Clean an amount string: strip ¥/￥ prefix, handle "1" misread of "¥".
+ * Text extraction often misreads "¥317.00" as "1317.00" (¥→1). We detect this by checking
  * if a leading "1" could be a misread ¥ symbol: the number after removing "1"
  * must have exactly 2 decimal places and be a reasonable amount.
  * Returns the cleaned numeric string.
@@ -306,7 +305,7 @@ function cleanOcrAmtStr(raw) {
   // AND the number has 4+ digits before decimal (1 + 3+ digits).
   // When ¥ is present (e.g., "¥172.68"), the "1" is a legitimate digit,
   // not a misread ¥. Without ¥ prefix (e.g., "1317.00"), the "1" is likely
-  // a misread "¥" symbol (they look very similar in OCR).
+  // a misread "¥" symbol (they look very similar in text extraction).
   // 4+ digit check prevents stripping "1" from 3-digit amounts like "172.68"
   // which are common and legitimate (stripping would give wrong "72.68").
   // e.g., "1317.00" (4 digits, no ¥) → "317.00" ✓
@@ -325,7 +324,7 @@ function cleanOcrAmtStr(raw) {
 
 /**
  * Check if a numeric value looks like a year or date.
- * OCR can produce "2025.01" or "2025.00" from dates like "2025年01月" or "2025/01/15".
+ * Text extraction can produce "2025.01" or "2025.00" from dates like "2025年01月" or "2025/01/15".
  * These should NOT be treated as monetary amounts.
  * Returns true if the value looks like a year/date, false otherwise.
  */
@@ -347,7 +346,7 @@ function collectAmountWords(wordMap, imgW, imgH, regionFilter, nxMin, nxMax, nyM
   var results = [];
   wordMap.forEach(function(w) {
     if (regionFilter && w.region !== regionFilter && regionFilter !== 'any') return;
-    // Skip low-confidence OCR results (< 0.3) — likely garbage
+    // Skip low-confidence results (< 0.3) — likely garbage
     if (w.confidence !== undefined && w.confidence < 0.3) return;
     if (imgW > 0 && imgH > 0) {
       var nx = (w.x + w.w / 2) / imgW;
@@ -392,19 +391,16 @@ function findWordsNear(wordMap, regex, region, contextWords) {
 
 /**
  * Apply PDF text layer extraction result to a file object.
- * Called BEFORE OCR — structured extraction (PDF text / OFD XML) takes priority.
- * The PdfTextResult has the same structure as OcrResult (text + lines + imgW/imgH),
- * so we reuse extractByCoordinates() for field extraction.
+ * Uses extractByCoordinates() for coordinate-based field extraction.
  *
  * Modifies fileObj in place. Only fills empty fields (never overwrites).
  * @param {Object} fileObj - The file object to update
- * @param {Object} pdfTextResult - Result from Rust extract_pdf_text command
+ * @param {Object} pdfTextResult - Text extraction result from pdf-client.js
  */
 function applyPdfTextResult(fileObj, pdfTextResult) {
   if (!pdfTextResult || !pdfTextResult.lines || pdfTextResult.lines.length === 0) return;
   try {
     // PdfTextResult lines use {words: [{text,x,y,w,h}], confidence: 1.0}
-    // This is compatible with OcrLine structure expected by extractByCoordinates
 
     // 调试：查看原始文本内容
     console.log('[PDF文字提取] 原始文本内容:', pdfTextResult.text);
@@ -482,7 +478,7 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
       if (info.sellerCreditCode && !fileObj.sellerCreditCode) fileObj.sellerCreditCode = info.sellerCreditCode;
     }
 
-    // Amounts — same guard logic as applyOcrResult
+    // Amounts — same guard logic as structured extraction
     var effAmt = info.amountTax > 0 ? info.amountTax : info.amountNoTax;
     console.log('[PDF文字提取] 金额写入检查: effAmt=' + effAmt +
       ', fileObj.amountTax=' + (fileObj.amountTax||0) +
@@ -515,11 +511,10 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
 
 
 // =====================================================
-// v1.7.0 — Coordinate-first invoice extraction
+// Coordinate-first invoice extraction
 // =====================================================
-// Designed for PP-OCRv5's high-accuracy bbox output.
-// Strategy: Use real OCR coordinates to locate fields directly,
-// then fall back to simple regex only when coordinates can't resolve.
+// Strategy: Use text coordinates to locate fields directly,
+// then fall back to regex only when coordinates can't resolve.
 //
 // Invoice layout (normalized 0~1 coordinates, Y-axis: top=0, bottom=1):
 //
@@ -554,7 +549,7 @@ function _normText(s) {
 }
 
 /**
- * Normalize OCR text for structured extraction.
+ * Normalize text for structured extraction.
  * Like _normText() but preserves newlines (critical for line-based regex matching).
  * The regular normText collapses CJK newlines, which merges separate "名称:" entries
  * into one line and breaks line-by-line extraction.
@@ -604,12 +599,12 @@ function _normTextForExtract(text) {
   text = text.replace(/¥[ \t]+(\d)/g, '¥$1');
   text = text.replace(/([\u4e00-\u9fff])\s+¥/g, '$1¥');
 
-  // Normalize OCR ¥↔1 misread artifacts (critical for amount accuracy)
-  // Step 1: ¥¥ patterns — OCR misreads "1" as "¥" producing "¥¥72.68" → "¥172.68"
+  // Normalize ¥↔1 misread artifacts (critical for amount accuracy)
+  // Step 1: ¥¥ patterns — text extraction misreads "1" as "¥" producing "¥¥72.68" → "¥172.68"
   text = normalizeOcrCurrency(text);
 
   // Step 2: Keyword-based ¥→1 misread correction (restored from v1.6.7)
-  // OCR often misreads "¥" as "1" (they look very similar). After amount keywords,
+  // Text extraction often misreads "¥" as "1" (they look very similar). After amount keywords,
   // "1XXX.XX" (4+ digits before decimal) should be "¥XXX.XX".
   // e.g., "价税合计1317.00" → "价税合计¥317.00"
   // Only apply after amount keywords to avoid corrupting legitimate numbers.
@@ -630,7 +625,7 @@ function _cleanName(raw) {
   // Strip trailing credit code patterns (18-char alphanumeric appended to company name)
   // e.g., "无锡天鹏菜篮子工程有限公司91320200796148368W" → "无锡天鹏菜篮子工程有限公司"
   name = name.replace(/[A-Z0-9]{15,20}$/, '');
-  // Trim at next label keyword (when OCR merges multiple labels into one line)
+  // Trim at next label keyword (when text extraction merges multiple labels into one line)
   name = name.replace(/名\s*称\s*[:：].*$/, '');
   name = name.replace(/统一社会(?:信用代码)?.*$/, '');
   name = name.replace(/纳税人识别号.*$/, '');
@@ -1148,11 +1143,11 @@ function _extractNamesByCoords(words, result) {
 }
 
 /**
- * Text-based extraction from OCR text (preserving line structure).
+ * Text-based extraction from text content (preserving line structure).
  * PRIMARY extraction method for structured fields (invoice number, date,
  * buyer/seller names and credit codes). Coordinate-based extraction is the fallback.
  *
- * Key insight: OCR output is well-formatted with clear key-value pairs:
+ * Key insight: extracted text is well-formatted with clear key-value pairs:
  *   发票号码：2532200000380892372
  *   开票日期：2025年08月19日
  *   名称：无锡市天鹏食品有限公司           ← 购买方 (1st)
@@ -1163,7 +1158,7 @@ function _extractNamesByCoords(words, result) {
  * NEW: Also supports coordinate-based extraction for PDFs where labels and values
  * are in separate text blocks but positioned adjacent to each other.
  *
- * @param {string} fullText - The full OCR text
+ * @param {string} fullText - The full text content
  * @param {Array} [words] - Optional array of word objects with {text, x, y, w, h, nx, ny}
  * @returns {Object} { invoiceNo, invoiceDate, buyerName, sellerName, buyerCreditCode, sellerCreditCode }
  */
@@ -1529,7 +1524,7 @@ function _extractByText(fullText, words) {
   }
 
   // Priority 5: Company name near the last credit code (v1.6.7 Strategy 4)
-  // Some OCR outputs have: "91440300xxxxxxxxx  深圳市某某科技有限公司"
+  // Some text outputs have: "91440300xxxxxxxxx  深圳市某某科技有限公司"
   if (!result.sellerName && ccPositions.length > 0) {
     var csSuffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
     var lastCcPos = ccPositions[ccPositions.length - 1];
@@ -1561,7 +1556,7 @@ function _extractByText(fullText, words) {
     }
   }
 
-  // Also try standalone credit codes (some OCR misses the label prefix)
+  // Also try standalone credit codes (some extractions miss the label prefix)
   if (!result.buyerCreditCode || !result.sellerCreditCode) {
     var standaloneRe = /\b([0-9][A-Z0-9]{17})\b/g;
     var sm;
@@ -1585,7 +1580,7 @@ function _extractByText(fullText, words) {
 }
 
 /**
- * Text-based amount extraction from OCR text.
+ * Text-based amount extraction from text content.
  * PRIMARY method for extracting amountTax, amountNoTax, and taxAmount.
  *
  * Key insight: In the "合计" row of a VAT invoice, there are two amounts:
@@ -1983,7 +1978,7 @@ function _extractAmountsByText(fullText) {
 }
 
 /**
- * Build a flat word array from OCR lines, with normalized positions.
+ * Build a flat word array from text lines, with normalized positions.
  * Each word: { text, normText, x, y, w, h, cx, cy, nx, ny, lineIdx, wordIdx, confidence, points }
  * cx/cy = center of word; nx/ny = normalized center (0~1).
  */
@@ -2092,7 +2087,7 @@ function _detectInvoiceType(words, imgW, imgH) {
   // Build full text from all words (not just top 60%) for more reliable detection
   var allText = words.map(function(w) { return w.normText; }).join('');
   // Check for train ticket keywords — scan ALL words (not just top 60%)
-  // because PDF text extraction may have different layout than OCR,
+  // because PDF text extraction may have different layout than image-based extraction,
   // and ticket-specific keywords (票价, 车次, 二等座, etc.) can be anywhere.
   // Also check for "铁路电子客票" / "电子客票号" which are definitive ticket markers.
   if (/(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|电\s*子\s*客\s*票\s*号|铁\s*路\s*电\s*子\s*客\s*票)/.test(allText)) {
@@ -2316,11 +2311,11 @@ function _extractSeller(words, imgW, imgH) {
 }
 
 /**
- * v1.7.0 — Coordinate-first invoice info extraction.
- * Uses PP-OCRv5's accurate bbox to locate fields directly by position,
- * with simple regex fallback for edge cases.
+ * Coordinate-first invoice info extraction.
+ * Uses text coordinates to locate fields directly by position,
+ * with regex/keyword fallback for edge cases.
  *
- * Input: { text, lines, imgW, imgH } — OCR result with coordinates
+ * Input: { text, lines, imgW, imgH } — text extraction result with coordinates
  * Output: { amountTax, amountNoTax, taxAmount, sellerName, sellerCreditCode,
  *           invoiceNo, invoiceDate, buyerName, buyerCreditCode, _ocrText, isTicket }
  */
@@ -2348,7 +2343,7 @@ function extractByCoordinates(ocrResult) {
   normText = normText.replace(/¥\s+(\d)/g, '¥$1');
 
   // --- Text-based extraction (PRIMARY for structured fields) ---
-  // OCR text is well-formatted with clear key-value pairs — leverage this first
+  // Text is well-formatted with clear key-value pairs — leverage this first
   // Pass words for coordinate-based fallback (handles PDFs with label/value in separate blocks)
   var textInfo = _extractByText(fullText, words);
   var invoiceNo = textInfo.invoiceNo;
@@ -2416,7 +2411,7 @@ function extractByCoordinates(ocrResult) {
       }
     }
     // Method 2: Positional — amount near ticket price area
-    // PDF text layout may differ from OCR — expand search area
+    // PDF text layout may differ from image-based extraction — expand search area
     if (!amountTax) {
       var ticketAmounts = words.filter(function(w) {
         if (w.confidence < 0.3) return false;
@@ -2548,7 +2543,7 @@ function extractByCoordinates(ocrResult) {
   }
 
   // --- Text-based amount extraction (PRIMARY for VAT invoices) ---
-  // OCR text has clear structure: "合计...¥金额...¥税额...价税合计...¥含税价"
+  // Text has clear structure: "合计...¥金额...¥税额...价税合计...¥含税价"
   // This is more reliable than coordinate-based matching for the "合计" row
   // which has TWO amounts that coordinate methods can't easily distinguish.
   var textAmounts = _extractAmountsByText(fullText);
