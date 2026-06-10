@@ -574,6 +574,41 @@ function readFileAsArrayBuffer(file) {
   });
 }
 
+async function loadXmlFromFile(file, id, name, size) {
+  if (!window.__xmlClient) {
+    toast('XML 解析器未加载');
+    return null;
+  }
+  var info = await window.__xmlClient.parseXmlInvoice(file);
+  if (!info.invoiceNo && !info.sellerName) {
+    toast('无法识别的 XML 发票: ' + name);
+    return null;
+  }
+  var fileObj = createFileObj({
+    id: id,
+    name: name,
+    size: size,
+    type: 'xml',
+    previewUrl: '',
+    img: null,
+    ow: 0,
+    oh: 0,
+    _xmlInvoice: true
+  });
+  if (info.invoiceNo) fileObj.invoiceNo = info.invoiceNo;
+  if (info.invoiceDate) fileObj.invoiceDate = info.invoiceDate;
+  if (info.sellerName) fileObj.sellerName = info.sellerName;
+  if (info.sellerTaxId) fileObj.sellerCreditCode = info.sellerTaxId;
+  if (info.buyerName) fileObj.buyerName = info.buyerName;
+  if (info.buyerTaxId) fileObj.buyerCreditCode = info.buyerTaxId;
+  if (info.amountTax != null) fileObj.amountTax = info.amountTax;
+  if (info.amountNoTax != null) fileObj.amountNoTax = info.amountNoTax;
+  if (info.taxAmount != null) fileObj.taxAmount = info.taxAmount;
+  if (info.invoiceType) fileObj.invoiceType = info.invoiceType;
+  fileObj._pdfTextExtracted = true;
+  return fileObj;
+}
+
 async function loadOfdFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
   if (!window.__ofdClient) {
@@ -683,8 +718,7 @@ async function loadFileFromFile(file) {
       return await loadOfdFromFile(file, id, name, size);
     }
     if (ext === 'xml') {
-      toast('XML 数电票暂不支持: ' + name);
-      return null;
+      return await loadXmlFromFile(file, id, name, size);
     }
     toast('不支持的格式: ' + ext);
     return null;
