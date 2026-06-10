@@ -50,7 +50,35 @@ function _parseColor(s) {
 
 function _parseDeltaX(s) {
   if (!s) return [];
-  return s.trim().split(/\s+/).map(function(v) { return parseFloat(v); }).filter(function(v) { return !isNaN(v); });
+  var tokens = s.trim().split(/\s+/);
+  var result = [];
+  var i = 0;
+  while (i < tokens.length) {
+    if (tokens[i] === 'g' && i + 2 < tokens.length) {
+      // Group format: g count value [extra_value...]
+      var count = parseInt(tokens[i + 1]);
+      var val = parseFloat(tokens[i + 2]);
+      if (!isNaN(count) && !isNaN(val)) {
+        for (var gi = 0; gi < count; gi++) result.push(val);
+        i += 3;
+        // Check if there's an extra value after the group
+        if (i < tokens.length && tokens[i] !== 'g') {
+          var extra = parseFloat(tokens[i]);
+          if (!isNaN(extra)) {
+            result.push(extra);
+            i += 1;
+          }
+        }
+      } else {
+        i += 1;
+      }
+    } else {
+      var v = parseFloat(tokens[i]);
+      if (!isNaN(v)) result.push(v);
+      i += 1;
+    }
+  }
+  return result;
 }
 
 function _normalizeFontName(raw) {
@@ -60,7 +88,6 @@ function _normalizeFontName(raw) {
   if (plusIdx >= 0) base = base.substring(plusIdx + 1);
   var dashIdx = base.indexOf('-');
   if (dashIdx >= 0) base = base.substring(0, dashIdx);
-  base = base.replace(/_.+$/, '');
   switch (base) {
     case 'CourierNewPSMT': return 'Courier New';
     case 'TimesNewRomanPSMT': return 'Times New Roman';
@@ -540,15 +567,28 @@ function _parseAnnotations(xml) {
 
 function _extractFromCustomData(customData) {
   var info = {};
-  if (customData['发票号码']) info.invoiceNo = customData['发票号码'];
-  if (customData['开票日期']) info.invoiceDate = customData['开票日期'];
-  if (customData['购买方名称']) info.buyerName = customData['购买方名称'];
-  if (customData['购买方纳税人识别号']) info.buyerTaxId = customData['购买方纳税人识别号'];
-  if (customData['销售方名称']) info.sellerName = customData['销售方名称'];
-  if (customData['销售方纳税人识别号']) info.sellerTaxId = customData['销售方纳税人识别号'];
+  // Skip empty strings (self-closing <CustomData Name="xxx"/> with no value)
+  function getCustom(key) {
+    var v = customData[key];
+    if (!v || !v.trim()) return null;
+    return v.trim();
+  }
+  if (getCustom('发票号码')) info.invoiceNo = getCustom('发票号码');
+  if (getCustom('开票日期')) info.invoiceDate = getCustom('开票日期');
+  if (getCustom('购买方名称')) info.buyerName = getCustom('购买方名称');
+  if (getCustom('购买方纳税人识别号')) info.buyerTaxId = getCustom('购买方纳税人识别号');
+  if (getCustom('销售方名称')) info.sellerName = getCustom('销售方名称');
+  if (getCustom('销售方纳税人识别号')) info.sellerTaxId = getCustom('销售方纳税人识别号');
   if (customData['合计金额']) info.amountNoTax = parseFloat(customData['合计金额']) || null;
   if (customData['合计税额']) info.taxAmount = parseFloat(customData['合计税额']) || null;
-  if (customData['价税合计']) info.amountTax = parseFloat(customData['价税合计']) || null;
+  // Compute total = no_tax + tax (same as Rust version)
+  if (info.amountNoTax != null && info.taxAmount != null) {
+    info.amountTax = Math.round((info.amountNoTax + info.taxAmount) * 100) / 100;
+  }
+  // Only use 价税合计 as fallback if we couldn't compute from 合计金额+合计税额
+  if (info.amountTax == null && customData['价税合计']) {
+    info.amountTax = parseFloat(customData['价税合计']) || null;
+  }
   return info;
 }
 
@@ -994,8 +1034,8 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   var invoiceInfo = _extractFromCustomData(customData);
 
   // From CustomTag — only fill fields not already set
-  var allTextsForTag = tplTexts.concat(pageTexts);
-  var ctInfo = _extractFromCustomTag(customTag, allTextsForTag);
+  // Rust version only looks up IDs in page_texts (not template texts)
+  var ctInfo = _extractFromCustomTag(customTag, pageTexts);
   if (!invoiceInfo.invoiceNo && ctInfo.invoiceNo) invoiceInfo.invoiceNo = ctInfo.invoiceNo;
   if (!invoiceInfo.invoiceDate && ctInfo.invoiceDate) invoiceInfo.invoiceDate = ctInfo.invoiceDate;
   if (!invoiceInfo.buyerName && ctInfo.buyerName) invoiceInfo.buyerName = ctInfo.buyerName;
@@ -1028,6 +1068,8 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   if (!invoiceInfo.invoiceNo && !invoiceInfo.invoiceDate &&
       !invoiceInfo.buyerName && !invoiceInfo.sellerName) {
     var allTextsForExtraction = tplTexts.concat(pageTexts);
+    // Sort by ID (same as Rust version: all_texts.sort_by_key(|t| t.id))
+    allTextsForExtraction.sort(function(a, b) { return a.id - b.id; });
     var textInfo = _extractInvoiceFromText(allTextsForExtraction);
     var textKeys = Object.keys(textInfo);
     for (var tk = 0; tk < textKeys.length; tk++) {
