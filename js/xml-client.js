@@ -30,13 +30,12 @@ var __xmlClient = (function() {
       invoiceType: null
     };
 
-    // Quick check: must contain <EInvoice> root element
-    if (content.indexOf('<EInvoice') < 0) {
+    // Strip namespace prefixes first, then check for EInvoice root
+    // (raw XML may have <ns2:EInvoice> which indexOf('<EInvoice') won't find)
+    var xmlStr = _stripXmlNs(content);
+    if (xmlStr.indexOf('<EInvoice') < 0) {
       return info;
     }
-
-    // Strip namespace prefixes (lesson from OFD: <ofd:Page> won't match getElementsByTagName)
-    var xmlStr = _stripXmlNs(content);
     var doc = new DOMParser().parseFromString(xmlStr, 'text/xml');
 
     if (doc.querySelector('parsererror')) {
@@ -166,14 +165,18 @@ var __xmlClient = (function() {
   /**
    * Get direct child element's text content by tag name.
    * Used for LabelName disambiguation (only look at direct children of a specific parent).
+   * Replicates Rust quick_xml path-tracking: checks only immediate parent, not recursive.
    */
   function _getChildText(parentEl, childTagName) {
-    if (!parentEl) return null;
-    var children = parentEl.getElementsByTagName(childTagName);
-    if (!children || children.length === 0) return null;
-    var text = children[0].textContent;
-    if (!text || !text.trim()) return null;
-    return text.trim();
+    if (!parentEl || !parentEl.children) return null;
+    for (var i = 0; i < parentEl.children.length; i++) {
+      var child = parentEl.children[i];
+      if (child.tagName === childTagName) {
+        var text = child.textContent;
+        if (text && text.trim()) return text.trim();
+      }
+    }
+    return null;
   }
 
   // Public API
