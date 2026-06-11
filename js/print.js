@@ -163,6 +163,17 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         borderWidth: 0.2
       });
     }
+
+    if (settings.number) {
+      var numStr = String(pageIdx * settings.cols * settings.rows + i + 1);
+      page.drawText(numStr, {
+        x: slot.x + 2,
+        y: ph - slot.y - 2 - 8,
+        size: 8,
+        font: settings._font,
+        color: pdfLib.rgb(0.5, 0.5, 0.5)
+      });
+    }
   }
 
   if (settings.cutline && layout.cutLines.length > 0) {
@@ -189,9 +200,6 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     }
   }
 
-  // pdf-lib StandardFonts (Helvetica) only support WinAnsiEncoding (Latin-1).
-  // CJK characters (Chinese, Japanese, Korean) must be replaced with ASCII equivalents
-  // to avoid "WinAnsi cannot encode" errors.
   function _safeText(s) {
     if (!s) return '';
     var result = '';
@@ -202,11 +210,12 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     return result.replace(/\s+/g, ' ').trim();
   }
 
-  if (settings.watermark && settings.wmText) {
-    var wmText = _safeText(settings.wmText);
+  if (settings.watermark && settings.watermarkText) {
+    var wmText = _safeText(settings.watermarkText);
     if (wmText) {
-      var wmSize = settings.wmSize || 60;
-      var wmOpacity = settings.wmOpacity != null ? settings.wmOpacity : 0.15;
+      var wmSize = settings.watermarkSize || 60;
+      var wmOpacity = settings.watermarkOpacity != null ? settings.watermarkOpacity : 0.15;
+      var wmAngle = settings.watermarkAngle || 30;
       page.drawText(wmText, {
         x: pw / 2 - wmText.length * wmSize * 0.15,
         y: ph / 2,
@@ -214,38 +223,45 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         font: settings._fontBold,
         color: pdfLib.rgb(0.6, 0.6, 0.6),
         opacity: wmOpacity,
-        rotate: pdfLib.degrees(30)
+        rotate: pdfLib.degrees(wmAngle)
       });
     }
   }
 
   if (settings.pageNum || settings.printDate || (settings.footerText || '').trim()) {
-    var dateStr = new Date().toISOString().slice(0, 10);
-    var line1 = '';
-    if (settings.pageNum) line1 = 'Page ' + (pageIdx + 1);
-    if (settings.printDate) line1 += (line1 ? '  ' : '') + 'Printed ' + dateStr;
-    if (line1) {
-      page.drawText(line1, {
-        x: pw / 2 - line1.length * 1.5,
-        y: 8,
-        size: 8,
+    var PX_PER_PT = 1;
+    var fm = layout.fm || 0;
+    var footerBottom = fm;
+    var lineHeight = 5 * PX_PER_PT;
+    var footerFontSize = 8;
+    var footerColor = pdfLib.rgb(0.5, 0.5, 0.5);
+
+    var ftText = _safeText(settings.footerText);
+    var numStr = '';
+    if (settings.pageNum) numStr = 'Page ' + (pageIdx + 1);
+    var dateStr = '';
+    if (settings.printDate) dateStr = new Date().toISOString().slice(0, 10);
+
+    var textY = footerBottom + 3 * PX_PER_PT;
+    if (ftText) {
+      page.drawText(ftText, {
+        x: pw / 2 - ftText.length * footerFontSize * 0.3,
+        y: textY,
+        size: footerFontSize,
         font: settings._font,
-        color: pdfLib.rgb(0.5, 0.5, 0.5)
+        color: footerColor
       });
+      textY += lineHeight;
     }
-    if (settings.footerText && settings.footerText.trim()) {
-      var ftText = _safeText(settings.footerText);
-      if (ftText) {
-        page.drawText(ftText, {
-          x: pw / 2 - ftText.length * 1.5,
-        y: 2,
-        size: 8,
-        font: settings._font,
-        color: pdfLib.rgb(0.5, 0.5, 0.5)
-      });
+    if (numStr && dateStr) {
+      page.drawText(numStr, { x: 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+      page.drawText(dateStr, { x: pw - dateStr.length * footerFontSize * 0.6 - 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+    } else if (numStr) {
+      page.drawText(numStr, { x: pw / 2 - numStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+    } else if (dateStr) {
+      page.drawText(dateStr, { x: pw / 2 - dateStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
     }
   }
-}
 }
 
 async function _composePdfBlob(files, settings, onProgress) {
