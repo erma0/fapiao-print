@@ -202,12 +202,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 
   function _safeText(s) {
     if (!s) return '';
-    var result = '';
-    for (var i = 0; i < s.length; i++) {
-      var c = s.charCodeAt(i);
-      if (c <= 0xFF) { result += s.charAt(i); }
-    }
-    return result.replace(/\s+/g, ' ').trim();
+    return String(s).replace(/\s+/g, ' ').trim();
   }
 
   if (settings.watermark && settings.watermarkText) {
@@ -291,8 +286,24 @@ async function _composePdfBlob(files, settings, onProgress) {
   showLoading('正在生成 PDF...');
   try {
     var pdfDoc = await pdfLib.PDFDocument.create();
-    settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
-    settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+    if (typeof fontkit !== 'undefined') pdfDoc.registerFontkit(fontkit);
+    var fontBytes = null;
+    try {
+      var fontResp = await fetch('js/vendor/msyh.ttc');
+      if (fontResp.ok) fontBytes = await fontResp.arrayBuffer();
+    } catch (e) { console.warn('[print] CJK font load failed:', e); }
+    if (fontBytes) {
+      settings._font = await pdfDoc.embedFont(fontBytes, { subset: true });
+      try {
+        var fontBoldBytes = null;
+        var fontBoldResp = await fetch('js/vendor/msyhbd.ttc');
+        if (fontBoldResp.ok) fontBoldBytes = await fontBoldResp.arrayBuffer();
+        settings._fontBold = fontBoldBytes ? await pdfDoc.embedFont(fontBoldBytes, { subset: true }) : settings._font;
+      } catch (e) { settings._fontBold = settings._font; }
+    } else {
+      settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
+      settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+    }
     var pages = buildPages(files, settings);
     for (var i = 0; i < pages.length; i++) {
       if (onProgress) onProgress(i + 1, pages.length);
