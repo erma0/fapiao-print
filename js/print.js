@@ -246,6 +246,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     }
   }
 }
+}
 
 async function _composePdfBlob(files, settings, onProgress) {
   _srcPdfDocs = {};
@@ -276,7 +277,6 @@ async function _composePdfBlob(files, settings, onProgress) {
     hideLoading();
   }
 }
-
 function _downloadBlob(blob, filename) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
