@@ -44,6 +44,13 @@
                 <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
               </div>
             </div>
+            <div class="copy-ctrl">
+              <button class="ib" onclick="toggleSortMenu()" title="按日期排序">📅</button>
+              <div class="copy-menu hidden" id="sortMenu">
+                <div class="copy-menu-item" onclick="sortByDate(1)">📅↑ 旧→新</div>
+                <div class="copy-menu-item" onclick="sortByDate(-1)">📅↓ 新→旧</div>
+              </div>
+            </div>
             <button class="ib" onclick="selectAll()" title="全选">☑</button>
             <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
             <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>

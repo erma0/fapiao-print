@@ -345,6 +345,12 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .invoice-slot { cursor: pointer; }
 .invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; overflow: visible !important; }
 .invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; }
+.invoice-slot.selected::after,
+.invoice-slot.dragging::after {
+  content: ''; position: absolute; inset: 0;
+  border: 1px dashed rgba(0, 0, 0, 0.25);
+  pointer-events: none; z-index: 10;
+}
 
 .slot-handle {
   position: absolute; width: 10px; height: 10px; background: var(--accent);

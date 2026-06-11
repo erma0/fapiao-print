@@ -662,6 +662,35 @@ function toggleCopyMenu() {
   var menu = document.getElementById('copyMenu');
   menu.classList.toggle('hidden');
 }
+function toggleSortMenu() {
+  var menu = document.getElementById('sortMenu');
+  menu.classList.toggle('hidden');
+}
+function sortByDate(dir) {
+  document.getElementById('sortMenu').classList.add('hidden');
+  if (!S.files.length) return;
+  S.files.sort(function(a, b) {
+    var da = _parseDate(a.invoiceDate);
+    var db = _parseDate(b.invoiceDate);
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    if (da < db) return -dir;
+    if (da > db) return dir;
+    return 0;
+  });
+  _activeFileIdx = -1;
+  renderFileList();
+  updatePreview();
+}
+function _parseDate(s) {
+  if (!s || typeof s !== 'string') return null;
+  var m = s.match(/(\d{4})[^\d]*(\d{1,2})[^\d]*(\d{1,2})/);
+  if (!m) return null;
+  var d = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
 function setAllCopies(e, n) {
   e.stopPropagation();
   var sel = S.files.filter(function(f) { return f.checked; });
