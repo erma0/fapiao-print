@@ -490,6 +490,7 @@ async function loadOfdFromFile(file, id, name, size) {
 
 async function loadPdfFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
+  var srcBuffer = buffer.slice(0);
   await window.__idb.putFile(id, name, file.type || 'application/pdf', buffer);
   var loaded = await window.__pdfClient.loadPdfConcurrent(buffer);
   var results = [];
@@ -505,7 +506,7 @@ async function loadPdfFromFile(file, id, name, size) {
       ow: pg.width || 0,
       oh: pg.height || 0,
       renderDpi: pg.renderDpi || PDF_RENDER_DPI,
-      srcPdfBytes: buffer,
+      srcPdfBytes: srcBuffer,
       srcPageIndex: p,
       srcPageWidthPt: pg.pdfWidthPt || 0,
       srcPageHeightPt: pg.pdfHeightPt || 0
