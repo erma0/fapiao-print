@@ -97,12 +97,12 @@ async function _embedForFile(pdfDoc, fileObj) {
 }
 
 async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
-  var layout = calculateLayout(settings);
+  var ptPerMm = 72 / 25.4;
+  var layout = calculateLayout(settings, ptPerMm);
   var pw = layout.pw;
   var ph = layout.ph;
   var page = pdfDoc.addPage([pw, ph]);
-  var bgColor = settings.colorMode === 'bw' ? [1, 1, 1] : [1, 1, 1];
-  page.drawRectangle({ x: 0, y: 0, width: pw, height: ph, color: pdfLib.rgb(bgColor[0], bgColor[1], bgColor[2]) });
+  page.drawRectangle({ x: 0, y: 0, width: pw, height: ph, color: pdfLib.rgb(1, 1, 1) });
 
   for (var i = 0; i < layout.slots.length; i++) {
     var slot = layout.slots[i];
@@ -116,15 +116,15 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     var perOffX = f.slotOffsetX || 0;
     var perOffY = f.slotOffsetY || 0;
 
-    // Use pt dimensions for PDF pages, pixel dimensions for images.
-    // Both give correct aspect ratio for fit calculation.
+    // Use pt dimensions for PDF pages, convert pixel→pt for images.
     var objW, objH;
     if (embedResult.type === 'pdfPage') {
       objW = f.srcPageWidthPt || embedResult.width;
       objH = f.srcPageHeightPt || embedResult.height;
     } else {
-      objW = f.ow || embedResult.width;
-      objH = f.oh || embedResult.height;
+      var imgDpi = f.renderDpi || 300;
+      objW = (f.ow || embedResult.width) * 72 / imgDpi;
+      objH = (f.oh || embedResult.height) * 72 / imgDpi;
     }
 
     var fitScale = Math.min(slot.w / objW, slot.h / objH);
@@ -135,8 +135,8 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 
     var drawW = objW * fitScale;
     var drawH = objH * fitScale;
-    var cx = slot.x + slot.w / 2 + perOffX;
-    var cy = ph - (slot.y + slot.h / 2 + perOffY);
+    var cx = slot.x + slot.w / 2 + perOffX * ptPerMm;
+    var cy = ph - (slot.y + slot.h / 2 + perOffY * ptPerMm);
 
     var drawOpts = {
       x: cx - drawW / 2,
@@ -213,7 +213,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
   if (settings.watermark && settings.watermarkText) {
     var wmText = _safeText(settings.watermarkText);
     if (wmText) {
-      var wmSize = settings.watermarkSize || 60;
+      var wmSize = (settings.watermarkSize || 60) * ptPerMm;
       var wmOpacity = settings.watermarkOpacity != null ? settings.watermarkOpacity : 0.15;
       var wmAngle = settings.watermarkAngle || 30;
       page.drawText(wmText, {
@@ -228,21 +228,33 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     }
   }
 
+  if (settings.number) {
+    for (var si = 0; si < layout.slots.length; si++) {
+      var sn = layout.slots[si];
+      var numStr = String(pageIdx * settings.cols * settings.rows + si + 1);
+      page.drawText(numStr, {
+        x: sn.x + 4,
+        y: ph - sn.y - 4 - 8,
+        size: 8,
+        font: settings._font,
+        color: pdfLib.rgb(0.5, 0.5, 0.5)
+      });
+    }
+  }
+
   if (settings.pageNum || settings.printDate || (settings.footerText || '').trim()) {
-    var PX_PER_PT = 1;
     var fm = layout.fm || 0;
-    var footerBottom = fm;
-    var lineHeight = 5 * PX_PER_PT;
+    var lineHeight = 5 * ptPerMm;
     var footerFontSize = 8;
     var footerColor = pdfLib.rgb(0.5, 0.5, 0.5);
 
     var ftText = _safeText(settings.footerText);
-    var numStr = '';
-    if (settings.pageNum) numStr = 'Page ' + (pageIdx + 1);
+    var pageNumStr = '';
+    if (settings.pageNum) pageNumStr = 'Page ' + (pageIdx + 1);
     var dateStr = '';
     if (settings.printDate) dateStr = new Date().toISOString().slice(0, 10);
 
-    var textY = footerBottom + 3 * PX_PER_PT;
+    var textY = 3 * ptPerMm;
     if (ftText) {
       page.drawText(ftText, {
         x: pw / 2 - ftText.length * footerFontSize * 0.3,
@@ -253,11 +265,11 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
       });
       textY += lineHeight;
     }
-    if (numStr && dateStr) {
-      page.drawText(numStr, { x: 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+    if (pageNumStr && dateStr) {
+      page.drawText(pageNumStr, { x: 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
       page.drawText(dateStr, { x: pw - dateStr.length * footerFontSize * 0.6 - 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
-    } else if (numStr) {
-      page.drawText(numStr, { x: pw / 2 - numStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+    } else if (pageNumStr) {
+      page.drawText(pageNumStr, { x: pw / 2 - pageNumStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
     } else if (dateStr) {
       page.drawText(dateStr, { x: pw / 2 - dateStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
     }
