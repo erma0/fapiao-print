@@ -186,8 +186,7 @@
       <div class="sidebar-panel-footer">
         <div class="sec" style="display:flex;flex-direction:column;gap:6px;border-bottom:0">
           <div class="trow" style="padding:0 2px"><label class="tlbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:44px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
-          <button class="btn btn-success" style="width:100%;padding:10px;font-size:14px" onclick="savePngAll()">🖼 保存 PNG</button>
-          <button class="btn btn-warning" style="width:100%;padding:8px" onclick="savePdf()">📥 保存 PDF</button>
+          <button class="btn btn-success" style="width:100%;padding:10px;font-size:14px" id="savePdfBtn" onclick="savePdf()">📥 保存 PDF</button>
         </div>
       </div>
     </div>
@@ -265,8 +264,7 @@
       <div class="toolbar-group">
         <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票">🗑</button>
         <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置">⚙</button>
-        <button class="btn btn-sm" onclick="savePdf()" title="保存为PDF">📥 PDF</button>
-        <button class="btn btn-sm btn-success" id="pngBtn" onclick="savePngAll()" disabled title="保存为PNG图片">🖼 PNG</button>
+        <button class="btn btn-sm" id="pdfBtn" onclick="savePdf()" disabled title="保存为PDF">📥 PDF</button>
       </div>
     </div>
 
@@ -274,7 +272,7 @@
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">📄</div>
         <div style="font-size:17px;font-weight:700;color:var(--text-secondary)">尚未添加发票</div>
-        <div style="font-size:13px">拖入文件或点击添加<br>Ctrl+O 添加 | Ctrl+S 保存 PNG | ←→ 翻页</div>
+        <div style="font-size:13px">拖入文件或点击添加<br>Ctrl+O 添加 | Ctrl+S 保存 PDF | ←→ 翻页</div>
         <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
