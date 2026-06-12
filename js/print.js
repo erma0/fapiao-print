@@ -10,13 +10,21 @@
 var _printCacheKey = null;
 var _printCacheBlob = null;
 
-// IndexedDB cache for CJK font (avoids re-downloading 17MB font)
+// CJK font priority: ① Local Font Access API (instant) → ② IndexedDB cache → ③ CDN download
 var _cjkFontCacheName = 'ticketchan-cjk-font';
 var _cjkFontCacheKey = 'NotoSansSC-Regular';
-// 4MB subset OTF (Regular only, no subsetting needed)
+// CDN fallback: 4MB subset OTF (Regular only, no subsetting needed)
 var _cjkFontCdnUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk/main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf';
-// Fallback: TTF variable font (17MB, supports subsetting)
-var _cjkFontCdnFallback = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk/main/Sans/OTC/NotoSansCJKsc-Regular.ttf';
+
+// CJK font names to try via Local Font Access API (ordered by priority)
+var _cjkLocalFontNames = [
+  'Microsoft YaHei', '微软雅黑',       // Windows
+  'Noto Sans SC', 'Noto Sans CJK SC',  // Linux / cross-platform
+  'Source Han Sans SC', '思源黑体',     // Adobe
+  'PingFang SC', '苹方',               // macOS
+  'SimHei', '黑体',                     // fallback Windows
+  'SimSun', '宋体',                     // ultimate fallback
+];
 
 function _hasCjk(text) {
   if (!text) return false;
@@ -79,21 +87,47 @@ async function _saveCjkFontToCache(bytes) {
   });
 }
 
-async function _fetchCjkFont() {
-  // Try main CDN, then fallback
-  var urls = [_cjkFontCdnUrl, _cjkFontCdnFallback];
-  for (var i = 0; i < urls.length; i++) {
-    try {
-      var resp = await fetch(urls[i], { mode: 'cors' });
-      if (resp.ok) {
-        var bytes = await resp.arrayBuffer();
-        if (bytes && bytes.byteLength > 100000) {
-          _saveCjkFontToCache(bytes);
-          return bytes;
+// ① Try Local Font Access API — read system CJK fonts directly, zero download.
+async function _queryLocalCjkFont() {
+  // Chrome 103+, needs 'local-fonts' permission
+  if (!window.queryLocalFonts) { console.log('[print] Local Font Access API not available'); return null; }
+  try {
+    var all = await window.queryLocalFonts();
+    console.log('[print] queried', all.length, 'local fonts, looking for CJK...');
+    for (var fj = 0; fj < _cjkLocalFontNames.length; fj++) {
+      var targetName = _cjkLocalFontNames[fj].toLowerCase();
+      for (var fi = 0; fi < all.length; fi++) {
+        var f = all[fi];
+        var full = (f.fullName || '').toLowerCase();
+        var family = (f.family || '').toLowerCase();
+        if (full.indexOf(targetName) !== -1 || family.indexOf(targetName) !== -1) {
+          console.log('[print] using local font:', f.fullName);
+          var blob = await f.blob();
+          var buf = await blob.arrayBuffer();
+          _saveCjkFontToCache(buf); // cache for next time
+          return buf;
         }
       }
-    } catch (e) { console.warn('[print] CDN font load failed:', urls[i], e); }
+    }
+    console.warn('[print] no matching CJK font found among', all.length, 'local fonts');
+  } catch (e) {
+    console.warn('[print] Local Font Access failed:', e.message || e);
   }
+  return null;
+}
+
+// ② CDN download fallback
+async function _fetchCjkFont() {
+  try {
+    var resp = await fetch(_cjkFontCdnUrl, { mode: 'cors' });
+    if (resp.ok) {
+      var bytes = await resp.arrayBuffer();
+      if (bytes && bytes.byteLength > 100000) {
+        _saveCjkFontToCache(bytes);
+        return bytes;
+      }
+    }
+  } catch (e) { console.warn('[print] CDN font load failed:', e); }
   return null;
 }
 
@@ -106,7 +140,13 @@ async function _getCjkFontBytes() {
     _cjkFontBytesCache = cached;
     return cached;
   }
-  // 3. Download from CDN
+  // 3. Try Local Font Access API (instant, user's system fonts)
+  var localBytes = await _queryLocalCjkFont();
+  if (localBytes) {
+    _cjkFontBytesCache = localBytes;
+    return localBytes;
+  }
+  // 4. Download from CDN (one-time, cached thereafter)
   var bytes = await _fetchCjkFont();
   if (bytes) {
     _cjkFontBytesCache = bytes;
