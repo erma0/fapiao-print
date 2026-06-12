@@ -289,17 +289,18 @@ async function _composePdfBlob(files, settings, onProgress) {
     if (typeof fontkit !== 'undefined') pdfDoc.registerFontkit(fontkit);
     var fontBytes = null;
     try {
-      var fontResp = await fetch('js/vendor/NotoSansSC-Regular.otf');
+      var fontResp = await fetch('js/vendor/NotoSansSC.ttf');
       if (fontResp.ok) fontBytes = await fontResp.arrayBuffer();
     } catch (e) { console.warn('[print] CJK font load failed:', e); }
     if (fontBytes) {
-      settings._font = await pdfDoc.embedFont(fontBytes, { subset: true });
       try {
-        var fontBoldBytes = null;
-        var fontBoldResp = await fetch('js/vendor/NotoSansSC-Bold.otf');
-        if (fontBoldResp.ok) fontBoldBytes = await fontBoldResp.arrayBuffer();
-        settings._fontBold = fontBoldBytes ? await pdfDoc.embedFont(fontBoldBytes, { subset: true }) : settings._font;
-      } catch (e) { settings._fontBold = settings._font; }
+        settings._font = await pdfDoc.embedFont(fontBytes, { subset: true });
+        settings._fontBold = settings._font;
+      } catch (e) {
+        console.warn('[print] CJK embed failed, fallback to Helvetica:', e);
+        settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
+        settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+      }
     } else {
       settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
       settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
