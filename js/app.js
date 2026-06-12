@@ -244,7 +244,7 @@ async function processFileList(fileList) {
     _newFileIds[ph.id] = true;
   });
 
-  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  renderFileList(); updatePreview(); updatePngBtn(); updateSummaryBtn();
   toastLoading('加载中 0/' + total);
 
   var loadPromises = fileList.map(function(file) {
@@ -260,7 +260,7 @@ async function processFileList(fileList) {
 
   var updateInterval = setInterval(function() {
     if (hasNewResults) {
-      renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+      renderFileList(); updatePreview(); updatePngBtn(); updateSummaryBtn();
       hasNewResults = false;
     }
   }, updateIntervalMs);
@@ -298,7 +298,7 @@ async function processFileList(fileList) {
   }
 
   clearInterval(updateInterval);
-  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  renderFileList(); updatePreview(); updatePngBtn(); updateSummaryBtn();
   _loadingBatchActive = false;
 
   var elapsed = Date.now() - startTime;
@@ -704,8 +704,8 @@ function setAllCopies(e, n) {
 function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
-function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePngBtn(); updateSummaryBtn(); }
+function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePngBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 function clearAll() {
   if (!S.files.length) return;
@@ -716,7 +716,7 @@ function clearAll() {
   saveSettings();
   renderFileList();
   updatePreview();
-  updatePrintBtn();
+  updatePngBtn();
   updateSummaryBtn();
 }
 
@@ -1468,7 +1468,7 @@ document.addEventListener('click', function(e) {
     if (zm) zm.classList.add('hidden');
   }
 });
-function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
+function updatePngBtn() { document.getElementById('pngBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
 
 // =====================================================
@@ -1717,7 +1717,7 @@ document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); prevPage(); }
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); nextPage(); }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); doPrint(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); savePngAll(); }
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); triggerUpload(); }
   if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); changeZoom(5); }
   if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeZoom(-5); }
