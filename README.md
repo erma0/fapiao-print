@@ -50,15 +50,16 @@ fapiao/
 │   ├── ofd-client.js       # OFD 前端解析
 │   ├── xml-client.js       # XML 数电票解析
 │   ├── xml-utils.js        # 共享 XML 工具
-│   ├── idb-store.js        # IndexedDB 存储 (ESM)
-│   └── vendor/             # 第三方库 (~2.7MB)
-│       ├── pdf.min.mjs / pdf.worker.min.mjs   # PDF.js 4.10
-│       ├── pdf-lib.min.js                     # pdf-lib 1.17
-│       ├── jszip.min.js                       # JSZip
-│       └── cmaps/                             # CJK 字符映射
-├── sample/                 # 测试样本
+│   └── idb-store.js        # IndexedDB 存储 (ESM)
+├── vendor/                 # 第三方库 (~2.7MB)
+│   ├── pdf.min.mjs / pdf.worker.min.mjs   # PDF.js 4.10
+│   ├── pdf-lib.min.js                     # pdf-lib 1.17
+│   ├── fontkit.umd.min.js                 # 字体解析
+│   ├── jszip.min.js                       # JSZip
+│   └── cmaps/                             # CJK 字符映射
+├── samples/                # 测试样本 (PDF / OFD / XML)
 ├── screenshots/
-├── AGENTS.md / CHANGELOG.md / README.md / LICENSE
+├── CHANGELOG.md / README.md / LICENSE
 └── .gitignore
 ```
 
