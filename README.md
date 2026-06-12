@@ -57,7 +57,6 @@ fapiao/
 │   ├── fontkit.umd.min.js                 # 字体解析
 │   ├── jszip.min.js                       # JSZip
 │   └── cmaps/                             # CJK 字符映射
-├── samples/                # 测试样本 (PDF / OFD / XML)
 ├── screenshots/
 ├── CHANGELOG.md / README.md / LICENSE
 └── .gitignore
