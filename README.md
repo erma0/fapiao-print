@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]()
 [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.2.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-3.0.0-blue.svg)]()
 
 **纯前端电子发票批量排版打印工具**。单页应用,零后端,零构建,浏览器即开即用。
 
@@ -88,5 +88,5 @@ fapiao/
 
 ## 📝 版本
 
-- **v2.2.0** (本分支): 纯前端,零后端零依赖
+- **v3.0.0** (本分支): 纯前端,零后端零依赖
 - **v2.0.7** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持静默打印/打印机选择
