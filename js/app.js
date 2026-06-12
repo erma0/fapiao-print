@@ -10,6 +10,8 @@ var PAPER = { A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:21
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
+var _loadingBatchActive = false;
+var _printedMap = {};
 var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }

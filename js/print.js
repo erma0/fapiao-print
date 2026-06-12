@@ -550,9 +550,3 @@ async function savePdf() {
   }
 }
 
-// Backward-compat shims
-async function doPdfiumPrint() { return savePdf(); }
-async function doPdfReaderPrint() { return savePdf(); }
-function doPrint() { return savePdf(); }
-function showPrintConfirm() { savePdf(); }
-function confirmPrint() { savePdf(); }

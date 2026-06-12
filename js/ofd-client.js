@@ -135,7 +135,7 @@ function _strokeAttr(color, alpha) {
 }
 
 function _escXml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function _escXmlAttr(s) {
