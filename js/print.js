@@ -10,6 +10,112 @@
 var _printCacheKey = null;
 var _printCacheBlob = null;
 
+// IndexedDB cache for CJK font (avoids re-downloading 17MB font)
+var _cjkFontCacheName = 'ticketchan-cjk-font';
+var _cjkFontCacheKey = 'NotoSansSC-Regular';
+// 4MB subset OTF (Regular only, no subsetting needed)
+var _cjkFontCdnUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk/main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf';
+// Fallback: TTF variable font (17MB, supports subsetting)
+var _cjkFontCdnFallback = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk/main/Sans/OTC/NotoSansCJKsc-Regular.ttf';
+
+function _hasCjk(text) {
+  if (!text) return false;
+  // CJK Unified Ideographs + CJK Extension + Hangul + Hiragana/Katakana
+  return /[\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af\u3040-\u309f\u30a0-\u30ff]/.test(text);
+}
+
+function _needsCjkFont(settings) {
+  if (settings.watermark && settings.watermarkText && _hasCjk(settings.watermarkText)) return true;
+  if (settings.footer && settings.footerText && _hasCjk(settings.footerText)) return true;
+  if (settings.number) return true; // numbers are ASCII, but user might customize
+  return false;
+}
+
+async function _loadCjkFontFromCache() {
+  return new Promise(function(resolve) {
+    var req = indexedDB.open(_cjkFontCacheName, 1);
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains('fonts')) {
+        db.createObjectStore('fonts');
+      }
+    };
+    req.onsuccess = function(e) {
+      var db = e.target.result;
+      try {
+        var tx = db.transaction('fonts', 'readonly');
+        var store = tx.objectStore('fonts');
+        var getReq = store.get(_cjkFontCacheKey);
+        getReq.onsuccess = function() {
+          resolve(getReq.result || null);
+        };
+        getReq.onerror = function() { resolve(null); };
+      } catch (err) { resolve(null); }
+    };
+    req.onerror = function() { resolve(null); };
+  });
+}
+
+async function _saveCjkFontToCache(bytes) {
+  return new Promise(function(resolve) {
+    var req = indexedDB.open(_cjkFontCacheName, 1);
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains('fonts')) {
+        db.createObjectStore('fonts');
+      }
+    };
+    req.onsuccess = function(e) {
+      var db = e.target.result;
+      try {
+        var tx = db.transaction('fonts', 'readwrite');
+        var store = tx.objectStore('fonts');
+        store.put(bytes, _cjkFontCacheKey);
+        tx.oncomplete = function() { resolve(true); };
+        tx.onerror = function() { resolve(false); };
+      } catch (err) { resolve(false); }
+    };
+    req.onerror = function() { resolve(false); };
+  });
+}
+
+async function _fetchCjkFont() {
+  // Try main CDN, then fallback
+  var urls = [_cjkFontCdnUrl, _cjkFontCdnFallback];
+  for (var i = 0; i < urls.length; i++) {
+    try {
+      var resp = await fetch(urls[i], { mode: 'cors' });
+      if (resp.ok) {
+        var bytes = await resp.arrayBuffer();
+        if (bytes && bytes.byteLength > 100000) {
+          _saveCjkFontToCache(bytes);
+          return bytes;
+        }
+      }
+    } catch (e) { console.warn('[print] CDN font load failed:', urls[i], e); }
+  }
+  return null;
+}
+
+async function _getCjkFontBytes() {
+  // 1. Check memory cache
+  if (_cjkFontBytesCache) return _cjkFontBytesCache;
+  // 2. Check IndexedDB cache
+  var cached = await _loadCjkFontFromCache();
+  if (cached) {
+    _cjkFontBytesCache = cached;
+    return cached;
+  }
+  // 3. Download from CDN
+  var bytes = await _fetchCjkFont();
+  if (bytes) {
+    _cjkFontBytesCache = bytes;
+  }
+  return bytes || null;
+}
+
+var _cjkFontBytesCache = null;
+
 // Source PDF document cache: avoids re-loading the same ArrayBuffer for
 // multi-page PDFs. Cleared after each compose call.
 var _srcPdfDocs = {};
@@ -288,18 +394,35 @@ async function _composePdfBlob(files, settings, onProgress) {
     var pdfDoc = await pdfLib.PDFDocument.create();
     if (typeof fontkit !== 'undefined') pdfDoc.registerFontkit(fontkit);
     var fontBytes = null;
-    try {
-      var fontResp = await fetch('js/vendor/NotoSansSC.ttf');
-      if (fontResp.ok) fontBytes = await fontResp.arrayBuffer();
-    } catch (e) { console.warn('[print] CJK font load failed:', e); }
+    // Only download CJK font when watermark/footer contains CJK characters.
+    // Font is cached in IndexedDB after first download (~8-17MB one-time cost).
+    if (_needsCjkFont(settings)) {
+      console.log('[print] CJK text detected, loading font...');
+      fontBytes = await _getCjkFontBytes();
+      if (!fontBytes) console.warn('[print] CJK font download failed, will fallback to Helvetica');
+    }
     if (fontBytes) {
       try {
+        // Try subsetting first (works for TTF/glyf fonts)
         settings._font = await pdfDoc.embedFont(fontBytes, { subset: true });
         settings._fontBold = settings._font;
       } catch (e) {
-        console.warn('[print] CJK embed failed, fallback to Helvetica:', e);
-        settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
-        settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+        // CFF/OTF fonts don't support subsetting — retry without subset
+        if (e.message && e.message.indexOf('CFF') !== -1) {
+          try {
+            settings._font = await pdfDoc.embedFont(fontBytes);
+            settings._fontBold = settings._font;
+            console.log('[print] CJK font embedded without subset (OTF/CFF)');
+          } catch (e2) {
+            console.warn('[print] CJK embed failed, fallback to Helvetica:', e2);
+            settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
+            settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+          }
+        } else {
+          console.warn('[print] CJK embed failed, fallback to Helvetica:', e);
+          settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
+          settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
+        }
       }
     } else {
       settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
