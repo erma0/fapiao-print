@@ -173,7 +173,7 @@ function _settingsKey(s) {
     paperW: s.paperW, paperH: s.paperH, paperSize: s.paperSize, orientation: s.orientation,
     marginTop: s.marginTop, marginBottom: s.marginBottom, marginLeft: s.marginLeft, marginRight: s.marginRight,
     gapH: s.gapH, gapV: s.gapV, colorMode: s.colorMode, cutline: s.cutline, border: s.border,
-    watermark: s.watermark, wmText: s.wmText, wmSize: s.wmSize, wmOpacity: s.wmOpacity,
+    watermark: s.watermark, watermarkText: s.watermarkText, watermarkSize: s.watermarkSize, watermarkOpacity: s.watermarkOpacity,
     globalRotation: s.globalRotation, footerText: s.footerText, pageNum: s.pageNum,
     printDate: s.printDate, footerMargin: s.footerMargin
   };
@@ -353,7 +353,6 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 
   if (settings.watermark && settings.watermarkText) {
     var wmText = _safeText(settings.watermarkText);
-    console.log('[print] watermark on=' + settings.watermark + ' text=' + JSON.stringify(settings.watermarkText) + ' safe=' + JSON.stringify(wmText));
     if (wmText) {
       var wmSize = (settings.watermarkSize || 60) * ptPerMm;
       var wmOpacity = settings.watermarkOpacity != null ? settings.watermarkOpacity : 0.15;
@@ -371,7 +370,6 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
   }
 
   if (settings.number) {
-    console.log('[print] number on, slots=' + layout.slots.length);
     for (var si = 0; si < layout.slots.length; si++) {
       var sn = layout.slots[si];
       var numStr = String(pageIdx * settings.cols * settings.rows + si + 1);
@@ -386,7 +384,6 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
   }
 
   if (settings.pageNum || settings.printDate || (settings.footerText || '').trim()) {
-    console.log('[print] footer on, pageNum=' + settings.pageNum + ' printDate=' + settings.printDate + ' footerText=' + JSON.stringify(settings.footerText));
     var fm = layout.fm || 0;
     var lineHeight = 5 * ptPerMm;
     var footerFontSize = 8;
