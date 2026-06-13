@@ -262,27 +262,13 @@ async function processFileList(fileList) {
   renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
   toastLoading('加载中 0/' + total);
 
-  var loadPromises = fileList.map(function(file) {
-    return loadFileFromFile(file).catch(function(err) {
-      console.error('Load file error:', file.name, err);
-      return null;
-    });
-  });
-
   var startTime = Date.now();
-  var updateIntervalMs = Math.max(50, Math.min(150, Math.floor(500 / total)));
-  var hasNewResults = false;
-
-  var updateInterval = setInterval(function() {
-    if (hasNewResults) {
-      renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
-      hasNewResults = false;
-    }
-  }, updateIntervalMs);
-
   var lastToastUpdate = 0;
   for (var fdIdx = 0; fdIdx < fileList.length; fdIdx++) {
-    var r = await loadPromises[fdIdx];
+    var r = await loadFileFromFile(fileList[fdIdx]).catch(function(err) {
+      console.error('Load file error:', fileList[fdIdx].name, err);
+      return null;
+    });
     completed++;
 
     var file = fileList[fdIdx];
@@ -308,11 +294,9 @@ async function processFileList(fileList) {
       toastLoading(isLast ? '加载完成' : ('加载中 ' + completed + '/' + total));
     }
 
-    hasNewResults = true;
+    renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
     await nextFrame();
   }
-
-  clearInterval(updateInterval);
   renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
   _loadingBatchActive = false;
 
