@@ -187,6 +187,7 @@
         <div class="sec" style="display:flex;flex-direction:column;gap:6px;border-bottom:0">
           <div class="trow" style="padding:0 2px"><label class="tlbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:44px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
           <button class="btn btn-success" style="width:100%;padding:10px;font-size:14px" id="savePdfBtn" onclick="savePdf()">📥 保存 PDF</button>
+          <button class="btn" style="width:100%;padding:8px;font-size:13px" id="saveRasterPdfBtn" onclick="saveRasterPdf()">📄 保存图片PDF</button>
         </div>
       </div>
     </div>

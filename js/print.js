@@ -284,12 +284,13 @@ async function _getOrLoadSrcPdf(fileObj) {
 // For PDF sources: returns { type:'pdfPage', embedded, width(pt), height(pt) }
 // For image sources: returns { type:'image', embedded, width(px), height(px) }
 // On failure or unsupported type: returns null.
-async function _embedForFile(pdfDoc, fileObj) {
+// When rasterOnly=true, skip vector embedding and always use raster image.
+async function _embedForFile(pdfDoc, fileObj, rasterOnly) {
   if (!fileObj) return null;
   if (fileObj._xmlInvoice) return null;
 
-  // Vector path: embed original PDF page
-  if (fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
+  // Vector path: embed original PDF page (skip if rasterOnly)
+  if (!rasterOnly && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
     try {
       var srcDoc = await _getOrLoadSrcPdf(fileObj);
       var srcPage = srcDoc.getPage(fileObj.srcPageIndex);
@@ -328,7 +329,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     var slot = layout.slots[i];
     var f = pageFiles ? pageFiles[i] : null;
     if (!f) continue;
-    var embedResult = await _embedForFile(pdfDoc, f);
+    var embedResult = await _embedForFile(pdfDoc, f, settings._rasterOnly);
     if (!embedResult) continue;
 
     var rot = getRotation(f, slot, settings);
@@ -493,7 +494,8 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 
 async function _composePdfBlob(files, settings, onProgress) {
   _srcPdfDocs = {};
-  var key = _settingsKey(settings) + '|' + files.map(function(f) { return f.id + ':' + f.copies + ':' + f.rotation; }).join(',');
+  var rasterKey = settings._rasterOnly ? 'R' : 'V';
+  var key = _settingsKey(settings) + '|' + rasterKey + '|' + files.map(function(f) { return f.id + ':' + f.copies + ':' + f.rotation; }).join(',');
   if (_printCacheKey === key && _printCacheBlob) {
     return _printCacheBlob;
   }
@@ -617,6 +619,22 @@ async function savePdf() {
     markFilesAsPrinted(files);
   } catch (e) {
     console.error('savePdf error:', e);
+    toast('保存失败：' + e.message);
+  }
+}
+
+async function saveRasterPdf() {
+  var files = getActiveFiles();
+  if (!files.length) { toast('请先添加发票！'); return; }
+  var settings = getSettings();
+  settings._rasterOnly = true;
+  try {
+    var blob = await _composePdfBlob(files, settings);
+    var ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    _downloadBlob(blob, '发票-' + ts + '.pdf');
+    markFilesAsPrinted(files);
+  } catch (e) {
+    console.error('saveRasterPdf error:', e);
     toast('保存失败：' + e.message);
   }
 }
