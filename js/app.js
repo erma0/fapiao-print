@@ -1327,7 +1327,7 @@ function getSettings() {
     pageNum: S.feat.pageNum, printDate: S.feat.printDate,
     footerText: S.feat.footer ? document.getElementById('footerText').value : '',
     footerMargin: (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
-    customFm: S.feat.customFM,
+    customFM: S.feat.customFM,
     copies: parseInt(document.getElementById('copies').value) || 1
   };
 }
@@ -1853,7 +1853,7 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.0.0';
+    APP_VERSION = '3.1.0';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);

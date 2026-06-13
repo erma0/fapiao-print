@@ -246,9 +246,10 @@ function _settingsKey(s) {
     layout: s.layout, fitMode: s.fitMode, customScale: s.customScale,
     paperW: s.paperW, paperH: s.paperH, paperSize: s.paperSize, orientation: s.orientation,
     marginTop: s.marginTop, marginBottom: s.marginBottom, marginLeft: s.marginLeft, marginRight: s.marginRight,
-    gapH: s.gapH, gapV: s.gapV, colorMode: s.colorMode, cutline: s.cutline, border: s.border,
+    gapH: s.gapH, gapV: s.gapV, colorMode: s.colorMode, cutline: s.cutline, border: s.border, number: s.number,
     watermark: s.watermark, watermarkText: s.watermarkText, watermarkSize: s.watermarkSize, watermarkOpacity: s.watermarkOpacity,
-    globalRotation: s.globalRotation, footerText: s.footerText, pageNum: s.pageNum,
+    watermarkColor: s.watermarkColor, watermarkAngle: s.watermarkAngle,
+    globalRotation: s.globalRotation, footerText: s.footerText, pageNum: s.pageNum, customFM: s.customFM,
     printDate: s.printDate, footerMargin: s.footerMargin
   };
   return JSON.stringify(k);
@@ -415,12 +416,16 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         var wmAngle = settings.watermarkAngle || 30;
         var slotCx = slot.x + slot.w / 2;
         var slotCy = ph - (slot.y + slot.h / 2);
+        var wmColor = settings.watermarkColor || '#ff0000';
+        var wmR = parseInt(wmColor.slice(1, 3), 16) / 255;
+        var wmG = parseInt(wmColor.slice(3, 5), 16) / 255;
+        var wmB = parseInt(wmColor.slice(5, 7), 16) / 255;
         page.drawText(wmText, {
           x: slotCx - wmText.length * wmSize * 0.15,
           y: slotCy,
           size: wmSize,
           font: settings._fontBold,
-          color: pdfLib.rgb(0.6, 0.6, 0.6),
+          color: pdfLib.rgb(wmR, wmG, wmB),
           opacity: wmOpacity,
           rotate: pdfLib.degrees(wmAngle)
         });

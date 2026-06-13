@@ -29,3 +29,4 @@ sample.ofd
 sample_ofd_extracted/
 test-emf-vector/
 frontend/
+node_modules/

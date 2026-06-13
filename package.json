@@ -1,0 +1,24 @@
+{
+  "name": "fapiao",
+  "version": "1.0.0",
+  "description": "[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]() [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]() [![Version](https://img.shields.io/badge/Version-3.1.0-blue.svg)]()",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/erma0/fapiao-print.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/erma0/fapiao-print/issues"
+  },
+  "homepage": "https://github.com/erma0/fapiao-print#readme",
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1"
+  }
+}
