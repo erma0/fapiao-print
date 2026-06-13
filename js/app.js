@@ -1466,7 +1466,7 @@ document.addEventListener('click', function(e) {
     if (zm) zm.classList.add('hidden');
   }
 });
-function updatePdfBtn() { document.getElementById('pdfBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
+function updatePdfBtn() { var has = S.files.some(function(f) { return f.checked; }); document.getElementById('pdfBtn').disabled = !has; document.getElementById('rasterPdfBtn').disabled = !has; }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
 
 // =====================================================

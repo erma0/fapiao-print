@@ -387,13 +387,44 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
 
     if (settings.number) {
       var numStr = String(pageIdx * settings.cols * settings.rows + i + 1);
+      // Match preview: slot-num is at top-right of slot (top:3px, right:3px)
+      var numX = slot.x + slot.w - 3 * ptPerMm - numStr.length * 8 * 0.5;
+      var numY = ph - slot.y - 3 * ptPerMm - 8;
+      page.drawRectangle({
+        x: numX - 2,
+        y: numY - 1,
+        width: numStr.length * 8 * 0.5 + 5 * ptPerMm,
+        height: 8 + 2 * ptPerMm,
+        color: pdfLib.rgb(0, 0, 0, 0.55)
+      });
       page.drawText(numStr, {
-        x: slot.x + 2,
-        y: ph - slot.y - 2 - 8,
+        x: numX,
+        y: numY,
         size: 8,
         font: settings._font,
-        color: pdfLib.rgb(0.5, 0.5, 0.5)
+        color: pdfLib.rgb(1, 1, 1)
       });
+    }
+
+    // Watermark per slot (matches preview: centered within each slot)
+    if (settings.watermark && settings.watermarkText) {
+      var wmText = _safeText(settings.watermarkText);
+      if (wmText) {
+        var wmSize = (settings.watermarkSize || 60) * ptPerMm;
+        var wmOpacity = settings.watermarkOpacity != null ? settings.watermarkOpacity : 0.15;
+        var wmAngle = settings.watermarkAngle || 30;
+        var slotCx = slot.x + slot.w / 2;
+        var slotCy = ph - (slot.y + slot.h / 2);
+        page.drawText(wmText, {
+          x: slotCx - wmText.length * wmSize * 0.15,
+          y: slotCy,
+          size: wmSize,
+          font: settings._fontBold,
+          color: pdfLib.rgb(0.6, 0.6, 0.6),
+          opacity: wmOpacity,
+          rotate: pdfLib.degrees(wmAngle)
+        });
+      }
     }
   }
 
@@ -424,38 +455,6 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
   function _safeText(s) {
     if (!s) return '';
     return String(s).replace(/\s+/g, ' ').trim();
-  }
-
-  if (settings.watermark && settings.watermarkText) {
-    var wmText = _safeText(settings.watermarkText);
-    if (wmText) {
-      var wmSize = (settings.watermarkSize || 60) * ptPerMm;
-      var wmOpacity = settings.watermarkOpacity != null ? settings.watermarkOpacity : 0.15;
-      var wmAngle = settings.watermarkAngle || 30;
-      page.drawText(wmText, {
-        x: pw / 2 - wmText.length * wmSize * 0.15,
-        y: ph / 2,
-        size: wmSize,
-        font: settings._fontBold,
-        color: pdfLib.rgb(0.6, 0.6, 0.6),
-        opacity: wmOpacity,
-        rotate: pdfLib.degrees(wmAngle)
-      });
-    }
-  }
-
-  if (settings.number) {
-    for (var si = 0; si < layout.slots.length; si++) {
-      var sn = layout.slots[si];
-      var numStr = String(pageIdx * settings.cols * settings.rows + si + 1);
-      page.drawText(numStr, {
-        x: sn.x + 4,
-        y: ph - sn.y - 4 - 8,
-        size: 8,
-        font: settings._font,
-        color: pdfLib.rgb(0.5, 0.5, 0.5)
-      });
-    }
   }
 
   if (settings.pageNum || settings.printDate || (settings.footerText || '').trim()) {
