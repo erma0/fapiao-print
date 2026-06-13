@@ -87,6 +87,77 @@ async function _saveCjkFontToCache(bytes) {
   });
 }
 
+// Extract the first individual font from a TTC (TrueType Collection) buffer.
+// pdf-lib cannot handle TTC directly — it needs a standalone OTF/TTF.
+function _extractFontFromTtc(ttcBuffer) {
+  try {
+    var src = new Uint8Array(ttcBuffer);
+    var view = new DataView(src.buffer, src.byteOffset, src.byteLength);
+    var tag = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    if (tag !== 'ttcf') return ttcBuffer; // Not a TTC, return as-is
+
+    var numFonts = view.getUint32(8);
+    if (numFonts < 1) return ttcBuffer;
+    var firstFontOffset = view.getUint32(12);
+
+    // Read the individual font's table directory
+    var fv = new DataView(src.buffer, src.byteOffset + firstFontOffset, src.byteLength - firstFontOffset);
+    var sfVersion = fv.getUint32(0);
+    var numTables = fv.getUint16(4);
+
+    // Collect table records (tag, checksum, offset, length)
+    var tables = [];
+    for (var i = 0; i < numTables; i++) {
+      var ro = 12 + i * 16;
+      var tTag = String.fromCharCode(fv.getUint8(ro), fv.getUint8(ro+1), fv.getUint8(ro+2), fv.getUint8(ro+3));
+      var tChecksum = fv.getUint32(ro + 4);
+      var tOffset = fv.getUint32(ro + 8);
+      var tLength = fv.getUint32(ro + 12);
+      tables.push({ tag: tTag, checksum: tChecksum, offset: tOffset, length: tLength });
+    }
+
+    // Calculate output size: header (12) + table records (16 * numTables) + table data (4-byte aligned)
+    var headerSize = 12 + numTables * 16;
+    var totalSize = headerSize;
+    for (var i = 0; i < tables.length; i++) {
+      totalSize += (tables[i].length + 3) & ~3;
+    }
+
+    var out = new Uint8Array(totalSize);
+    var ov = new DataView(out.buffer);
+
+    // Write font header
+    ov.setUint32(0, sfVersion);
+    ov.setUint16(4, numTables);
+    var pow2 = 1;
+    while (pow2 * 2 <= numTables) pow2 *= 2;
+    ov.setUint16(6, pow2 * 16);
+    ov.setUint16(8, Math.log2(pow2) | 0);
+    ov.setUint16(10, numTables * 16 - pow2 * 16);
+
+    // Write table records and copy table data
+    var dataOff = headerSize;
+    for (var i = 0; i < tables.length; i++) {
+      var t = tables[i];
+      var ro = 12 + i * 16;
+      // Write tag as 4 bytes
+      for (var c = 0; c < 4; c++) ov.setUint8(ro + c, t.tag.charCodeAt(c));
+      ov.setUint32(ro + 4, t.checksum);
+      ov.setUint32(ro + 8, dataOff);
+      ov.setUint32(ro + 12, t.length);
+      // Copy table data from source
+      out.set(new Uint8Array(src.buffer, src.byteOffset + t.offset, t.length), dataOff);
+      dataOff += (t.length + 3) & ~3;
+    }
+
+    console.log('[print] extracted font from TTC, tables:', numTables, 'size:', totalSize);
+    return out.buffer;
+  } catch (e) {
+    console.warn('[print] TTC extraction failed, returning raw buffer:', e);
+    return ttcBuffer;
+  }
+}
+
 // ① Try Local Font Access API — read system CJK fonts directly, zero download.
 async function _queryLocalCjkFont() {
   // Chrome 103+, needs 'local-fonts' permission
@@ -104,6 +175,8 @@ async function _queryLocalCjkFont() {
           console.log('[print] using local font:', f.fullName);
           var blob = await f.blob();
           var buf = await blob.arrayBuffer();
+          // TTC fonts must be extracted to individual OTF/TTF for pdf-lib
+          buf = _extractFontFromTtc(buf);
           _saveCjkFontToCache(buf); // cache for next time
           return buf;
         }
@@ -137,6 +210,7 @@ async function _getCjkFontBytes() {
   // 2. Check IndexedDB cache
   var cached = await _loadCjkFontFromCache();
   if (cached) {
+    cached = _extractFontFromTtc(cached); // Handle cached TTC fonts
     _cjkFontBytesCache = cached;
     return cached;
   }
@@ -440,23 +514,20 @@ async function _composePdfBlob(files, settings, onProgress) {
     }
     if (fontBytes) {
       try {
-        // Try subsetting first (works for TTF/glyf fonts)
+        // Try subsetting first (smaller PDF, works for TTF/glyf fonts)
         settings._font = await pdfDoc.embedFont(fontBytes, { subset: true });
         settings._fontBold = settings._font;
+        console.log('[print] CJK font embedded with subset');
       } catch (e) {
-        // CFF/OTF fonts don't support subsetting — retry without subset
-        if (e.message && e.message.indexOf('CFF') !== -1) {
-          try {
-            settings._font = await pdfDoc.embedFont(fontBytes);
-            settings._fontBold = settings._font;
-            console.log('[print] CJK font embedded without subset (OTF/CFF)');
-          } catch (e2) {
-            console.warn('[print] CJK embed failed, fallback to Helvetica:', e2);
-            settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
-            settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
-          }
-        } else {
-          console.warn('[print] CJK embed failed, fallback to Helvetica:', e);
+        // Subsetting can fail for many reasons (CFF/OTF, TTC, fontkit issues)
+        // Always retry without subsetting
+        console.warn('[print] CJK subset failed, retrying without subset:', e.message || e);
+        try {
+          settings._font = await pdfDoc.embedFont(fontBytes);
+          settings._fontBold = settings._font;
+          console.log('[print] CJK font embedded without subset');
+        } catch (e2) {
+          console.warn('[print] CJK embed failed, fallback to Helvetica:', e2);
           settings._font = await pdfDoc.embedFont(pdfLib.StandardFonts.Helvetica);
           settings._fontBold = await pdfDoc.embedFont(pdfLib.StandardFonts.HelveticaBold);
         }
