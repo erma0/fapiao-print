@@ -16,6 +16,19 @@ var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
 
+// Wait for async module scripts (pdf-client.js, idb-store.js) to be ready
+function waitForGlobal(name, timeout) {
+  timeout = timeout || 15000;
+  if (window[name]) return Promise.resolve(window[name]);
+  return new Promise(function(resolve, reject) {
+    var start = Date.now();
+    var timer = setInterval(function() {
+      if (window[name]) { clearInterval(timer); resolve(window[name]); }
+      else if (Date.now() - start > timeout) { clearInterval(timer); reject(new Error(name + ' not available after ' + timeout + 'ms')); }
+    }, 50);
+  });
+}
+
 // =====================================================
 // State
 // =====================================================
@@ -416,11 +429,8 @@ function readFileAsArrayBuffer(file) {
 }
 
 async function loadXmlFromFile(file, id, name, size) {
-  if (!window.__xmlClient) {
-    toast('XML 解析器未加载');
-    return null;
-  }
-  var info = await window.__xmlClient.parseXmlInvoice(file);
+  var xmlClient = await waitForGlobal('__xmlClient');
+  var info = await xmlClient.parseXmlInvoice(file);
   if (!info.invoiceNo && !info.sellerName) {
     toast('无法识别的 XML 发票: ' + name);
     return null;
@@ -452,11 +462,8 @@ async function loadXmlFromFile(file, id, name, size) {
 
 async function loadOfdFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
-  if (!window.__ofdClient) {
-    toast('OFD 解析器未加载');
-    return null;
-  }
-  var result = await window.__ofdClient.parseOfdFromArrayBuffer(buffer);
+  var ofdClient = await waitForGlobal('__ofdClient');
+  var result = await ofdClient.parseOfdFromArrayBuffer(buffer);
   var previewUrl = await svgToPngDataUrl(result.svg, result.pageWidth, result.pageHeight);
   var pxW = Math.round(result.pageWidth * PDF_RENDER_DPI / 25.4);
   var pxH = Math.round(result.pageHeight * PDF_RENDER_DPI / 25.4);
@@ -493,8 +500,10 @@ async function loadOfdFromFile(file, id, name, size) {
 async function loadPdfFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
   var srcBuffer = buffer.slice(0);
-  await window.__idb.putFile(id, name, file.type || 'application/pdf', buffer);
-  var loaded = await window.__pdfClient.loadPdfConcurrent(buffer);
+  var idb = await waitForGlobal('__idb');
+  var pdfClient = await waitForGlobal('__pdfClient');
+  await idb.putFile(id, name, file.type || 'application/pdf', buffer);
+  var loaded = await pdfClient.loadPdfConcurrent(buffer);
   var results = [];
   for (var p = 0; p < loaded.pages.length; p++) {
     var pg = loaded.pages[p];
