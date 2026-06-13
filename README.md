@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]()
 [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-3.0.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-3.1.0-blue.svg)]()
 
 **纯前端电子发票批量排版打印工具**。单页应用,零后端,零构建,浏览器即开即用。
 
@@ -15,12 +15,17 @@
 - **字段提取**: PDF 文字层 / OFD XML / XML 数电票自动提取发票信息
 - **多张拼版**: 自定义 1-10×1-10 网格,A4/A5/B5/Letter/Legal/自定义纸张
 - **完整排版控制**: 边距、间距、缩放、旋转、切割线、边框、水印、页码、页脚
-- **单票独立调整**: 拖拽移动 + 滚轮缩放 (5%/步) + 九宫格对齐
-- **汇总表**: 14 字段可勾选 / 双击编辑 / 3 种金额合计 / CSV 导出 (UTF-8 BOM)
-- **PDF 矢量嵌入**: pdf-lib embedPage 直接嵌入原始 PDF 页面,保留矢量
+- **单票独立调整**: 拖拽移动 + 滚轮缩放 (5%/步) + 九宫格对齐 + 调整记忆
+- **汇总表**: 14 字段可勾选 / 双击编辑 / 备注列 / 3 种金额合计 / CSV 导出 (UTF-8 BOM)
+- **打印状态追踪**: 全部/未打印/已打印过滤,打印后自动标记
+- **日期排序**: 按开票日期升序/降序排列
+- **排版份数**: 批量设置选中发票排版份数 (×1/×2/×3)
+- **PDF 矢量嵌入**: pdf-lib embedPage 直接嵌入原始 PDF 页面,保留矢量+印章
+- **保存 PDF**: 一键保存排版结果为 PDF 文件 (Ctrl+S)
 - **打印**: 浏览器原生 `<iframe>.print()` 打印,PDF 矢量保真
 - **离线**: 无需网络,全浏览器运行
-- **文件记忆**: 可选,启动时自动恢复文件列表
+- **设置持久化**: 排版参数/水印/页脚/汇总列等自动记忆
+- **主题切换**: 浅色/深色
 
 ![app](screenshots/app-invoice.png)
 
@@ -88,5 +93,15 @@ fapiao/
 
 ## 📝 版本
 
-- **v3.0.0** (本分支): 纯前端,零后端零依赖
-- **v2.0.7** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持静默打印/打印机选择
+- **v3.1.0** (本分支): 纯前端,零后端零依赖
+- **v2.0.8** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持静默打印/打印机选择/批量重命名
+
+## ⚠️ 与桌面版的差异
+
+纯 Web 版因浏览器安全限制，以下功能不可用：
+- **批量重命名**: 无法访问本地文件系统重命名文件
+- **打印机选择**: 浏览器无法指定打印机，只能调出打印对话框
+- **文件列表记忆**: 无法持久化本地文件路径跨会话恢复
+- **静默打印**: 必须经过浏览器打印对话框
+
+如需以上功能，请使用 [Tauri 桌面版](https://github.com/erma0/fapiao-print/tree/master)。

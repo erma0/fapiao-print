@@ -3,6 +3,20 @@
 > 本分支（`web`）独立发布，与主分支（`master`，Tauri 桌面版）并行维护。
 > 下文仅记录本分支的纯前端 Web 版变更历史。
 
+## v3.1.0 — 功能补齐 + 文档更新
+
+> 补齐 v3.0.0 遗漏的功能说明，更新文档与桌面版对齐。
+
+### 📝 文档
+
+- **README**: 补充打印状态追踪、日期排序、排版份数、调整记忆、设置持久化、主题切换等功能描述
+- **README**: 版本号更新至 v3.1.0，桌面版引用更新至 v2.0.8
+- **README**: 新增「与桌面版的差异」章节，明确纯 Web 版因浏览器限制不可用的功能
+- **README**: 移除不准确的「文件记忆」描述（纯前端无法恢复本地路径）
+- **CHANGELOG**: 补充 v3.0.0 之后的完整变更记录
+
+---
+
 ## v3.0.0 — 纯前端（零后端）
 
 > 完成从 Rust 版到纯前端版的最终迁移。所有功能在浏览器内自给自足，无需任何服务器。
@@ -47,9 +61,11 @@
 - CJK 字体按需加载：① 本地系统字体（Local Font Access API）→ ② IndexedDB 缓存 → ③ CDN 下载
 - 纯英文水印/页脚不触发字体下载
 - OTF/CFF 字体嵌入失败时自动降级为无 subset 嵌入
+- 回退 PNG 导出功能，简化为单一「保存 PDF」按钮；Ctrl+S 保存 PDF
+- 修复复盘问题：删除覆盖 doPrint 的 shim、清理 printConfirmModal 死代码、声明隐式全局变量、_escXml 空值防护
 
 ---
 
 ## 关联项目
 
-- **主分支 `master`**: 独立维护的 [Tauri 桌面版 v2.0.7](https://github.com/erma0/fapiao-print/tree/master)，使用 Rust 后端 + PDFium 引擎，支持静默打印、打印机选择、虚拟打印机等桌面级功能。需要本地安装 Windows 客户端的用户请使用该版本。
+- **主分支 `master`**: 独立维护的 [Tauri 桌面版 v2.0.8](https://github.com/erma0/fapiao-print/tree/master)，使用 Rust 后端 + PDFium 引擎，支持静默打印、打印机选择、批量重命名等桌面级功能。需要本地安装 Windows 客户端的用户请使用该版本。
