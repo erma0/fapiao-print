@@ -9,9 +9,9 @@
 // Multi-worker concurrency: spawns multiple PDF.js worker instances
 // based on navigator.hardwareConcurrency for parallel document parsing.
 
-import * as pdfjsLib from './vendor/pdf.min.mjs';
+import * as pdfjsLib from '../vendor/pdf.min.mjs';
 
-const CMAP_URL = new URL('./vendor/cmaps/', import.meta.url).toString();
+const CMAP_URL = new URL('../vendor/cmaps/', import.meta.url).toString();
 const PDF_RENDER_DPI = 300;
 const PDF_PREVIEW_DPI = 300;
 const MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
@@ -22,7 +22,7 @@ const JPEG_QUALITY = 0.82;
 const MAX_CONCURRENT = Math.min(4, Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
 
 // Pre-create worker source URLs for parallel parsing
-var _workerSrcUrl = new URL('./vendor/pdf.worker.min.mjs', import.meta.url).toString();
+var _workerSrcUrl = new URL('../vendor/pdf.worker.min.mjs', import.meta.url).toString();
 pdfjsLib.GlobalWorkerOptions.workerSrc = _workerSrcUrl;
 
 async function loadDocument(arrayBuffer, workerIdx) {
