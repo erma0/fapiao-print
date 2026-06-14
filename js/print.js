@@ -286,12 +286,36 @@ async function _getOrLoadSrcPdf(fileObj) {
 // For image sources: returns { type:'image', embedded, width(px), height(px) }
 // On failure or unsupported type: returns null.
 // When rasterOnly=true, skip vector embedding and always use raster image.
-async function _embedForFile(pdfDoc, fileObj, rasterOnly) {
+// Convert a dataURL image to grayscale or B&W via canvas
+function _convertImageDataUrl(dataUrl, colorMode) {
+  if (!colorMode || colorMode === 'color') return dataUrl;
+  return new Promise(function(resolve) {
+    var img = new Image();
+    img.onload = function() {
+      var c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      var ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      var id = ctx.getImageData(0, 0, c.width, c.height);
+      var d = id.data;
+      for (var i = 0; i < d.length; i += 4) {
+        var gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        if (colorMode === 'bw') gray = gray > 128 ? 255 : 0;
+        d[i] = d[i+1] = d[i+2] = gray;
+      }
+      ctx.putImageData(id, 0, 0);
+      resolve(c.toDataURL('image/jpeg', 0.92));
+    };
+    img.src = dataUrl;
+  });
+}
+
+async function _embedForFile(pdfDoc, fileObj, rasterOnly, colorMode) {
   if (!fileObj) return null;
   if (fileObj._xmlInvoice) return null;
 
-  // Vector path: embed original PDF page (skip if rasterOnly)
-  if (!rasterOnly && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
+  // Vector path: embed original PDF page (skip if rasterOnly or colorMode needs conversion)
+  if (!rasterOnly && colorMode === 'color' && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
     try {
       var srcDoc = await _getOrLoadSrcPdf(fileObj);
       var srcPage = srcDoc.getPage(fileObj.srcPageIndex);
@@ -308,17 +332,20 @@ async function _embedForFile(pdfDoc, fileObj, rasterOnly) {
   }
 
   // Raster path: embed as image
-  if (fileObj.previewUrl) {
-    var isJpeg = fileObj.previewUrl.indexOf('data:image/jpeg') === 0
-      || fileObj.previewUrl.indexOf('data:image/jpg') === 0;
-    var bytes = isJpeg ? _jpegBlobFromDataUrl(fileObj.previewUrl) : _pngBlobFromDataUrl(fileObj.previewUrl);
-    var img = isJpeg ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
-    return { type: 'image', embedded: img, width: img.width, height: img.height };
+  var srcUrl = fileObj.trimmedUrl || fileObj.previewUrl;
+  if (!srcUrl) return null;
+  // Apply color mode conversion
+  if (colorMode && colorMode !== 'color') {
+    srcUrl = await _convertImageDataUrl(srcUrl, colorMode);
   }
-  return null;
+  var isJpeg = srcUrl.indexOf('data:image/jpeg') === 0
+    || srcUrl.indexOf('data:image/jpg') === 0;
+  var bytes = isJpeg ? _jpegBlobFromDataUrl(srcUrl) : _pngBlobFromDataUrl(srcUrl);
+  var img = isJpeg ? await pdfDoc.embedJpg(bytes) : await pdfDoc.embedPng(bytes);
+  return { type: 'image', embedded: img, width: img.width, height: img.height };
 }
 
-async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
+async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
   var ptPerMm = 72 / 25.4;
   var layout = calculateLayout(settings, ptPerMm);
   var pw = layout.pw;
@@ -330,7 +357,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     var slot = layout.slots[i];
     var f = pageFiles ? pageFiles[i] : null;
     if (!f) continue;
-    var embedResult = await _embedForFile(pdfDoc, f, settings._rasterOnly);
+    var embedResult = await _embedForFile(pdfDoc, f, settings._rasterOnly, settings.colorMode || 'color');
     if (!embedResult) continue;
 
     var rot = getRotation(f, slot, settings);
@@ -365,8 +392,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
       y: cy - drawH / 2,
       width: drawW,
       height: drawH,
-      rotate: pdfLib.degrees(rot),
-      opacity: settings.colorMode === 'bw' ? 1 : 1
+      rotate: pdfLib.degrees(rot)
     };
 
     if (embedResult.type === 'pdfPage') {
@@ -472,32 +498,38 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
     var fm = layout.fm || 0;
     var lineHeight = 5 * ptPerMm;
     var footerFontSize = 8;
-    var footerColor = pdfLib.rgb(0.5, 0.5, 0.5);
+    var footerColor = pdfLib.rgb(0.58, 0.64, 0.72); // match preview #94a3b8
 
     var ftText = _safeText(settings.footerText);
     var pageNumStr = '';
-    if (settings.pageNum) pageNumStr = 'Page ' + (pageIdx + 1);
+    if (settings.pageNum) pageNumStr = '第 ' + (pageIdx + 1) + ' 页 / 共 ' + totalPages + ' 页';
     var dateStr = '';
-    if (settings.printDate) dateStr = new Date().toISOString().slice(0, 10);
+    if (settings.printDate) {
+      var now = new Date();
+      dateStr = '打印日期 ' + now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    }
 
-    var textY = 3 * ptPerMm;
+    // Match preview: text stacks from bottom up
+    var textBottomPx = 3 * ptPerMm;
+    var pageNumBottomPx = textBottomPx;
+    if (ftText) pageNumBottomPx += lineHeight;
+
     if (ftText) {
       page.drawText(ftText, {
         x: pw / 2 - ftText.length * footerFontSize * 0.3,
-        y: textY,
+        y: textBottomPx,
         size: footerFontSize,
         font: settings._font,
         color: footerColor
       });
-      textY += lineHeight;
     }
     if (pageNumStr && dateStr) {
-      page.drawText(pageNumStr, { x: 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
-      page.drawText(dateStr, { x: pw - dateStr.length * footerFontSize * 0.6 - 10, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+      page.drawText(pageNumStr, { x: 10, y: pageNumBottomPx, size: footerFontSize, font: settings._font, color: footerColor });
+      page.drawText(dateStr, { x: pw - dateStr.length * footerFontSize * 0.55 - 10, y: pageNumBottomPx, size: footerFontSize, font: settings._font, color: footerColor });
     } else if (pageNumStr) {
-      page.drawText(pageNumStr, { x: pw / 2 - pageNumStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+      page.drawText(pageNumStr, { x: pw / 2 - pageNumStr.length * footerFontSize * 0.3, y: pageNumBottomPx, size: footerFontSize, font: settings._font, color: footerColor });
     } else if (dateStr) {
-      page.drawText(dateStr, { x: pw / 2 - dateStr.length * footerFontSize * 0.3, y: textY, size: footerFontSize, font: settings._font, color: footerColor });
+      page.drawText(dateStr, { x: pw / 2 - dateStr.length * footerFontSize * 0.3, y: pageNumBottomPx, size: footerFontSize, font: settings._font, color: footerColor });
     }
   }
 }
@@ -551,7 +583,7 @@ async function _composePdfBlob(files, settings, onProgress) {
     var pages = buildPages(files, settings);
     for (var i = 0; i < pages.length; i++) {
       if (onProgress) onProgress(i + 1, pages.length);
-      await _buildPage(pdfDoc, pages[i], i, settings);
+      await _buildPage(pdfDoc, pages[i], i, pages.length, settings);
     }
     var bytes = await pdfDoc.save();
     var blob = new Blob([bytes], { type: 'application/pdf' });
