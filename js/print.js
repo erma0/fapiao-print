@@ -396,7 +396,8 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         y: numY - 1,
         width: numStr.length * 8 * 0.5 + 5 * ptPerMm,
         height: 8 + 2 * ptPerMm,
-        color: pdfLib.rgb(0, 0, 0, 0.55)
+        color: pdfLib.rgb(0, 0, 0),
+        opacity: 0.55
       });
       page.drawText(numStr, {
         x: numX,
@@ -416,12 +417,17 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, settings) {
         var wmAngle = settings.watermarkAngle || 30;
         var slotCx = slot.x + slot.w / 2;
         var slotCy = ph - (slot.y + slot.h / 2);
+        // Estimate text width for centering: CJK char ≈ fontSize, ASCII ≈ fontSize * 0.55
+        var wmTextWidth = 0;
+        for (var ci = 0; ci < wmText.length; ci++) {
+          wmTextWidth += wmText.charCodeAt(ci) > 0x2E80 ? wmSize : wmSize * 0.55;
+        }
         var wmColor = settings.watermarkColor || '#ff0000';
         var wmR = parseInt(wmColor.slice(1, 3), 16) / 255;
         var wmG = parseInt(wmColor.slice(3, 5), 16) / 255;
         var wmB = parseInt(wmColor.slice(5, 7), 16) / 255;
         page.drawText(wmText, {
-          x: slotCx - wmText.length * wmSize * 0.15,
+          x: slotCx - wmTextWidth / 2,
           y: slotCy,
           size: wmSize,
           font: settings._fontBold,
