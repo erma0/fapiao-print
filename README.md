@@ -7,6 +7,8 @@
 
 **纯前端电子发票批量排版打印工具**。单页应用,零后端,零构建,浏览器即开即用。
 
+> **🕸️ 在线体验**：[https://fapiao.erma0.cn](https://fapiao.erma0.cn)
+
 ![screenshot](screenshots/app.png)
 
 ## ✨ 功能
@@ -93,8 +95,8 @@ fapiao/
 
 ## 📝 版本
 
-- **v3.1.0** (本分支): 纯前端,零后端零依赖
-- **v2.0.8** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持静默打印/打印机选择/批量重命名
+- **v3.1.0** (本分支): 纯前端,零后端零依赖 — 🕸️ 在线试用 [fapiao.erma0.cn](https://fapiao.erma0.cn)
+- **v2.0.9** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持静默打印/打印机选择/批量重命名
 
 ## ⚠️ 与桌面版的差异
 
@@ -106,3 +108,5 @@ fapiao/
 - **矢量 PDF 部分 CJK 文字缺失**: Web 版用 pdf-lib 的 `embedPage` 做矢量直通，对部分嵌入的 Type0/CID 字体存在已知缺陷，可能导致少量文字（如「下载次数」）在保存的矢量 PDF 中丢失。桌面版用 PDFium 引擎无此问题。如需完整文字保真，请用「保存图片 PDF」按钮（位图模式，文字 100% 保留）。
 
 如需以上功能，请使用 [Tauri 桌面版](https://github.com/erma0/fapiao-print/tree/master)。
+
+> 🕸️ **Web 版**：[fapiao.erma0.cn](https://fapiao.erma0.cn) | 源码 [`web` 分支](https://github.com/erma0/fapiao-print/tree/web)
