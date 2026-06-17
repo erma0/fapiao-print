@@ -1509,19 +1509,14 @@ function saveSettings() {
       o.fileAdjustments = adjMap;
     }
   }
-  if (S.feat.watermark) {
-    o.wmText = document.getElementById('wmText').value;
-    o.wmOpacity = document.getElementById('wmOpacity').value;
-    o.wmColor = document.getElementById('wmColor').value;
-    o.wmAngle = document.getElementById('wmAngle').value;
-    o.wmSize = document.getElementById('wmSize').value;
-  }
-  if (S.feat.footer) {
-    o.footerText = document.getElementById('footerText').value;
-  }
-  if (S.feat.customFM || S.feat.pageNum || S.feat.printDate || S.feat.footer) {
-    o.footerMargin = document.getElementById('footerMargin').value;
-  }
+  // Always save watermark/footer values so they survive feature toggles
+  o.wmText = document.getElementById('wmText').value;
+  o.wmOpacity = document.getElementById('wmOpacity').value;
+  o.wmColor = document.getElementById('wmColor').value;
+  o.wmAngle = document.getElementById('wmAngle').value;
+  o.wmSize = document.getElementById('wmSize').value;
+  o.footerText = document.getElementById('footerText').value;
+  o.footerMargin = document.getElementById('footerMargin').value;
   if (_summaryActiveCols && _summaryActiveCols.length > 0) {
     o.summaryCols = _summaryActiveCols;
   }
@@ -1588,31 +1583,29 @@ function loadSettings() {
     });
     if (S.feat.watermark) {
       document.getElementById('wmOpts').style.display = 'block';
-      if (o.wmText != null) document.getElementById('wmText').value = o.wmText;
-      if (o.wmOpacity != null) { document.getElementById('wmOpacity').value = o.wmOpacity; document.getElementById('wmOpacityN').value = o.wmOpacity; }
-      if (o.wmColor) document.getElementById('wmColor').value = o.wmColor;
-      if (o.wmAngle != null) { document.getElementById('wmAngle').value = o.wmAngle; document.getElementById('wmAngleN').value = o.wmAngle; }
-      if (o.wmSize != null) { document.getElementById('wmSize').value = o.wmSize; document.getElementById('wmSizeN').value = o.wmSize; }
     }
     if (S.feat.footer) {
       document.getElementById('footerOpts').style.display = 'block';
-      if (o.footerText != null) document.getElementById('footerText').value = o.footerText;
     }
     var lineCount = (S.feat.pageNum || S.feat.printDate ? 1 : 0) + (S.feat.footer ? 1 : 0);
     if (S.feat.customFM && lineCount > 0) {
       document.getElementById('customFMRow').style.display = 'flex';
-      if (o.footerMargin != null) {
-        document.getElementById('footerMargin').value = o.footerMargin;
-        document.getElementById('footerMarginN').value = o.footerMargin;
-      }
       document.getElementById('footerMarginRow').style.display = 'flex';
     } else if (lineCount > 0) {
       document.getElementById('customFMRow').style.display = 'flex';
-      if (o.footerMargin != null) {
-        document.getElementById('footerMargin').value = o.footerMargin;
-        document.getElementById('footerMarginN').value = o.footerMargin;
-      }
     }
+  }
+  // Always restore watermark/footer values (even when features are off,
+  // so the values are ready when user enables them later)
+  if (o.wmText != null) document.getElementById('wmText').value = o.wmText;
+  if (o.wmOpacity != null) { document.getElementById('wmOpacity').value = o.wmOpacity; document.getElementById('wmOpacityN').value = o.wmOpacity; }
+  if (o.wmColor) document.getElementById('wmColor').value = o.wmColor;
+  if (o.wmAngle != null) { document.getElementById('wmAngle').value = o.wmAngle; document.getElementById('wmAngleN').value = o.wmAngle; }
+  if (o.wmSize != null) { document.getElementById('wmSize').value = o.wmSize; document.getElementById('wmSizeN').value = o.wmSize; }
+  if (o.footerText != null) document.getElementById('footerText').value = o.footerText;
+  if (o.footerMargin != null) {
+    document.getElementById('footerMargin').value = o.footerMargin;
+    document.getElementById('footerMarginN').value = o.footerMargin;
   }
   // Restore summary table column selection
   if (o.summaryCols && Array.isArray(o.summaryCols) && o.summaryCols.length > 0) {
@@ -1671,9 +1664,18 @@ function resetSettings() {
   document.getElementById('fitMode').value = 'fit';
   document.getElementById('globalRotation').value = '0';
   document.getElementById('copies').value = 1;
+  document.getElementById('customW').value = 210;
+  document.getElementById('customH').value = 297;
+  document.getElementById('customScale').value = 100; document.getElementById('customScaleN').value = 100;
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
+  document.getElementById('wmText').value = '已打印';
+  document.getElementById('wmOpacity').value = 20; document.getElementById('wmOpacityN').value = 20;
+  document.getElementById('wmColor').value = '#ff0000';
+  document.getElementById('wmAngle').value = -30; document.getElementById('wmAngleN').value = -30;
+  document.getElementById('wmSize').value = 15; document.getElementById('wmSizeN').value = 15;
+  document.getElementById('footerText').value = '';
   updateZoomDisplay();
   document.getElementById('toggleCutline').classList.add('on');
   document.getElementById('toggleNumber').classList.remove('on');
@@ -1696,6 +1698,9 @@ function resetSettings() {
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}
   _printedMap = {};
+  _summaryActiveCols = [];
+  S._fileAdjMap = {};
+  S._notesMap = {};
   S.printedFilter = 'all';
   document.querySelectorAll('.pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === 'all');
