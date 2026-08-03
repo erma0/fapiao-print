@@ -484,6 +484,8 @@ async function loadOfdFromFile(file, id, name, size) {
   return fileObj;
 }
 
+var _pdfMissingFontToastShown = false;  // 防止批量加载时反复弹 toast
+
 async function loadPdfFromFile(file, id, name, size) {
   var buffer = await readFileAsArrayBuffer(file);
   var srcBuffer = buffer.slice(0);
@@ -492,6 +494,7 @@ async function loadPdfFromFile(file, id, name, size) {
   await idb.putFile(id, name, file.type || 'application/pdf', buffer);
   var loaded = await pdfClient.loadPdfConcurrent(buffer);
   var results = [];
+  var hadMissingFontInBatch = false;
   for (var p = 0; p < loaded.pages.length; p++) {
     var pg = loaded.pages[p];
     var fileObj = createFileObj({
@@ -509,6 +512,18 @@ async function loadPdfFromFile(file, id, name, size) {
       srcPageWidthPt: pg.pdfWidthPt || 0,
       srcPageHeightPt: pg.pdfHeightPt || 0
     });
+
+    // ---- 字体未嵌入检测（如 12306 铁路电子客票）----
+    // pdf.js 依赖 ToUnicode CMap 做字形→Unicode 映射，字体未嵌入且无 ToUnicode 时
+    // getTextContent() 返回空串，字段识别会全失败。这里检测并提示用户。
+    var diag = pg.pdfTextResult && pg.pdfTextResult.textLayerDiagnostic;
+    if (diag && diag.suspectMissingToUnicode) {
+      fileObj._pdfTextMissingFonts = true;
+      fileObj._pdfTextDiag = diag;
+      hadMissingFontInBatch = true;
+      console.warn('[PDF加载] 文字层缺失（字体未嵌入）:', name, diag);
+    }
+
     if (pg.pdfTextResult && pg.pdfTextResult.hasTextLayer && pg.pdfTextResult.lines.length > 0) {
       if (typeof applyPdfTextResult === 'function') {
         applyPdfTextResult(fileObj, pg.pdfTextResult);
@@ -516,6 +531,15 @@ async function loadPdfFromFile(file, id, name, size) {
     }
     results.push(fileObj);
   }
+
+  // 批量加载时只弹一次 toast
+  if (hadMissingFontInBatch && !_pdfMissingFontToastShown) {
+    _pdfMissingFontToastShown = true;
+    toastHtml('<span style="font-weight:600">\u26A0 部分发票字体未嵌入</span><br>' +
+      '<span style="font-size:12px;opacity:.9">字段无法自动识别（如 12306 电子客票），请手动填写金额/销售方/发票号</span>', 5000);
+    setTimeout(function() { _pdfMissingFontToastShown = false; }, 6000);
+  }
+
   return results;
 }
 

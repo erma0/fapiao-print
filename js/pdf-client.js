@@ -25,7 +25,8 @@ const MAX_CONCURRENT = Math.min(4, Math.max(1, Math.floor((navigator.hardwareCon
 var _workerSrcUrl = new URL('../vendor/pdf.worker.min.mjs', import.meta.url).toString();
 pdfjsLib.GlobalWorkerOptions.workerSrc = _workerSrcUrl;
 
-async function loadDocument(arrayBuffer, workerIdx) {
+async function loadDocument(arrayBuffer, opts) {
+  opts = opts || {};
   var data = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
   var task = pdfjsLib.getDocument({
     data: data,
@@ -33,7 +34,9 @@ async function loadDocument(arrayBuffer, workerIdx) {
     cMapPacked: true,
     standardFontDataUrl: CMAP_URL.replace(/cmaps\/$/, ''),
     isEvalSupported: false,
-    workerSrc: _workerSrcUrl
+    workerSrc: _workerSrcUrl,
+    // 暴露 font.missingFile / toUnicode / cidEncoding，用于检测 12306 等字体未嵌入的 PDF
+    fontExtraProperties: opts.fontExtraProperties === true
   });
   return await task.promise;
 }
@@ -69,9 +72,23 @@ async function extractTextWithCoords(pdfPage) {
   var lastY = null;
   var fullTextParts = [];
 
+  // ---- 字体未嵌入检测层 1：文本信号 ----
+  // items 存在但大量空串 → ToUnicode 缺失的强信号（如 12306 铁路电子客票）
+  var totalItems = tc.items.length;
+  var emptyItems = 0;
+  var distinctFonts = {};
+  for (var ei = 0; ei < tc.items.length; ei++) {
+    var _it = tc.items[ei];
+    if (!_it.str || _it.str.length === 0) emptyItems++;
+    if (_it.fontName) distinctFonts[_it.fontName] = (distinctFonts[_it.fontName] || 0) + 1;
+  }
+  var emptyRatio = totalItems > 0 ? emptyItems / totalItems : 0;
+
   for (var idx = 0; idx < tc.items.length; idx++) {
     var item = tc.items[idx];
     if (!item.str || !item.transform) continue;
+    // 跳过纯空白/控制字符项，避免污染坐标提取
+    if (!item.str.replace(/\s/g, '').length) continue;
 
     var tx = item.transform[4];
     var ty = item.transform[5];
@@ -110,19 +127,66 @@ async function extractTextWithCoords(pdfPage) {
     fullTextParts.push(currentWords.map(function(w) { return w.text; }).join(''));
   }
 
-  var hasTextLayer = tc.items.length > 0 && tc.items.some(function(item) { return item.str && item.str.length > 0; });
+  // 阈值收紧：空串占比 >= 50% 即判定为文字层缺失
+  var hasTextLayer = totalItems > 0 && emptyRatio < 0.5;
+
+  // ---- 字体未嵌入检测层 2：字体元信息（best-effort，pdf.js 私有 API，失败时静默）----
+  var fontDiag = null;
+  if (!hasTextLayer && totalItems > 0) {
+    fontDiag = _inspectPageFonts(pdfPage, distinctFonts);
+  }
 
   return {
     text: fullTextParts.join('\n'),
     lines: lines,
     imgW: imgW,
     imgH: imgH,
-    hasTextLayer: hasTextLayer
+    hasTextLayer: hasTextLayer,
+    // 文字层缺失诊断（下游可选使用，不破坏现有调用）
+    textLayerDiagnostic: {
+      totalItems: totalItems,
+      emptyItems: emptyItems,
+      emptyRatio: emptyRatio,
+      distinctFonts: Object.keys(distinctFonts),
+      fontInspect: fontDiag,
+      suspectMissingToUnicode: !hasTextLayer && totalItems > 0
+    }
   };
 }
 
+/**
+ * 通过 pdfPage.commonObjs 检查页面字体嵌入状态。
+ * 注意：commonObjs 在 getTextContent/render 之后才被填充，调用时机必须在那些 API 之后。
+ * 字段名基于 pdf.js 4.x，未来版本可能变化，全部 try/catch 保护。
+ */
+function _inspectPageFonts(pdfPage, distinctFonts) {
+  var result = { missingFonts: [], noToUnicode: [], cidEncodings: [], sampledNames: [] };
+  try {
+    var commonObjs = pdfPage.commonObjs;
+    if (!commonObjs) return result;
+    var fontIds = Object.keys(distinctFonts);
+    for (var fi = 0; fi < fontIds.length; fi++) {
+      var fid = fontIds[fi];
+      var fontObj = null;
+      try { fontObj = commonObjs.get(fid); } catch (e) { fontObj = null; }
+      if (!fontObj) continue;
+      if (fontObj.name) result.sampledNames.push(fontObj.name);
+      // missingFile=true → 字体未嵌入（如 12306 的 SimSun）
+      if (fontObj.missingFile) result.missingFonts.push(fontObj.name || fid);
+      // toUnicode=null/undefined → 没有 ToUnicode CMap，pdf.js 无法将 CID 映射回 Unicode
+      if (!fontObj.toUnicode) result.noToUnicode.push(fontObj.name || fid);
+      // cidEncoding（如 "GBK-EUC-H" / "Identity-H"）
+      if (fontObj.cidEncoding) result.cidEncodings.push(fontObj.cidEncoding);
+    }
+  } catch (e) {
+    console.warn('[pdf-client] 字体检测异常:', e);
+  }
+  return result;
+}
+
 export async function loadPdfFromArrayBuffer(arrayBuffer) {
-  var pdf = await loadDocument(arrayBuffer);
+  // fontExtraProperties:true 让 commonObjs 暴露 font.missingFile / toUnicode / cidEncoding
+  var pdf = await loadDocument(arrayBuffer, { fontExtraProperties: true });
   var pages = [];
   for (var i = 1; i <= pdf.numPages; i++) {
     var page = await pdf.getPage(i);
