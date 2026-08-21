@@ -2,7 +2,7 @@
 
 ## 项目概览
 
-- **版本**: v2.2.1
+- **版本**: v2.2.2
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
 - **前端**: `src/{index.html, styles.css, ocr.js, layout.js, print.js, app.js}`
 - **后端**: `src-tauri/src/{main.rs, lib.rs, pdf_engine.rs, pdfium_print.rs}`
@@ -67,6 +67,22 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 - **白边裁剪联动**: 增强/还原时清 `f.trimmedUrl`，`S.feat.trimWhite` 开启时自动 `processTrim()` 重算
 - **ow/oh 不变**: 增强不改尺寸，EXIF 方向在加载与增强时一致烘焙
 - **Web 分支未移植**（web 无 `_filePath`，如需支持要另写 Canvas 版算法）
+
+### 槽位精准上传与版面留白 (v2.2.2+)
+
+版面空白格显示加号，点击上传可**精准落在点击的槽位**，支持版面中间留白（issue #10-①）。
+
+- **空白占位**: `fileObj._placeholder` — 只占版面槽位，不打印不统计、不进汇总/重命名/OCR；`getActiveFiles()` 过滤条件 `(f.checked || f._placeholder)` 使其参与排版占位，其余消费点全部排除
+- **插入准备**: `prepareSlotInsertion()` 返回 `{ insertAt, blankCount, replaceIdx, reverse }`
+  - 目标槽位空 → `blankCount` 补齐中间空白占位（`insertBlankSlots`），文件插到目标槽位
+  - 目标槽位是占位 → `replaceIdx` 模式：只升级点击的那个占位为 placeholder（其余占位保留），剩余文件紧随其后插入
+  - `reverse`（倒序打印）模式插入位置适配：显示顺序末尾 = 底层数组头部
+- **三条加载路径**（`processFileDataList` / `processFiles` / `processFilesIncremental`）同步支持插入与替换占位；`firstPlaceholder` 追踪第一个插入文件用于 `locateInsertedFile()` 定位
+- **并发锁**: `_slotUploadActive` + `_loadingBatchActive` 阻止重复上传共享插入状态；浏览器取消文件选择时经 `window` focus 监听释放锁，`handleFileInput` finally 释放
+- **选区联动**（#10-②）: `selectSlot()` 选中槽位时 `syncSidebarToSelectedSlot()` 同步左侧列表高亮 + `scrollIntoView`
+- **旋转按钮**（#10-③）: 工具栏 `rotateSelected()` 旋转版面选中发票
+- **重复发票识别**（#9）: `getDupKey()` 按发票号或 销售方+金额+日期 生成 key，`updateDuplicateMarks()` 标记 `_dup`，列表显示「⚠重复」徽章
+- **占位持久化**: 占位无 `_filePath`，saveSettings 不保存，重启不恢复（留白为临时布局）
 
 ### PDF 渲染双引擎 (v1.9.10+)
 
