@@ -531,7 +531,9 @@ async function restoreFiles(paths) {
   if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
 }
 
-async function triggerUpload() {
+var _insertSlotIdx = -1;   // 点击版面空白槽位加号上传时的目标槽位，-1 表示普通追加
+
+async function openFileDialog() {
   if (isTauri && invoke) {
     try {
       var result = await invoke('plugin:dialog|open', {
@@ -541,31 +543,60 @@ async function triggerUpload() {
           filters: [{ name: '发票文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif', 'ofd', 'xml'] }]
         }
       });
-      if (!result) return;
-      var paths = typeof result === 'string' ? [result] : (Array.isArray(result) ? result : []);
-      if (paths.length === 0) return;
-
-      // Incremental loading: read + render one file at a time for instant visual feedback
-      if (paths.length <= 3) {
-        toastLoading('读取 ' + paths.length + ' 个文件...');
-        var fileDataList = await invoke('open_invoice_files', { paths: paths });
-        if (fileDataList && fileDataList.length > 0) {
-          await processFileDataList(fileDataList);
-        } else {
-          toast('无法读取所选文件');
-        }
-      } else {
-        // Many files: incremental — read one by one so first preview appears immediately
-        await processFilesIncremental(paths);
-      }
+      if (!result) return [];
+      return typeof result === 'string' ? [result] : (Array.isArray(result) ? result : []);
     } catch (err) {
       console.error('Dialog error:', err);
       hideToast();
       toast('打开文件对话框失败: ' + String(err));
+      return [];
+    }
+  }
+  document.getElementById('fileInput').click();
+  return null;
+}
+
+async function addPaths(paths) {
+  if (paths.length <= 3) {
+    toastLoading('读取 ' + paths.length + ' 个文件...');
+    var fileDataList = await invoke('open_invoice_files', { paths: paths });
+    if (fileDataList && fileDataList.length > 0) {
+      await processFileDataList(fileDataList);
+    } else {
+      toast('无法读取所选文件');
     }
   } else {
-    document.getElementById('fileInput').click();
+    await processFilesIncremental(paths);
   }
+}
+
+async function triggerUpload() {
+  _insertSlotIdx = -1;
+  var paths = await openFileDialog();
+  if (!paths) return;
+  if (paths.length === 0) return;
+  await addPaths(paths);
+}
+
+// 点击版面空白槽位的加号：上传发票并插入到该槽位对应位置
+async function addFileToSlot(slotIdx) {
+  _insertSlotIdx = slotIdx;
+  var paths = await openFileDialog();
+  if (!paths) return;
+  if (paths.length === 0) { _insertSlotIdx = -1; return; }
+  await addPaths(paths);
+}
+
+// 计算点击槽位对应的 S.files 插入索引（不含 XML 发票的排版错位修正）
+function getSlotInsertIndex() {
+  var files = getActiveFiles();
+  var perPage = getPerPage(getSettings());
+  var pos = S.currentPage * perPage + _insertSlotIdx;
+  for (var j = pos; j < files.length; j++) {
+    var t = S.files.indexOf(files[j]);
+    if (t >= 0) return t;
+  }
+  return S.files.length;
 }
 
 async function handleFileInput(fl) {
@@ -582,7 +613,8 @@ async function processFileDataList(fileDataList) {
   _loadingBatchActive = true;
 
   // 1. Create placeholder entries immediately for instant visual feedback
-  fileDataList.forEach(function(fd) {
+  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  fileDataList.forEach(function(fd, fi) {
     var ph = createFileObj({
       name: fd.name,
       size: fd.size,
@@ -591,7 +623,7 @@ async function processFileDataList(fileDataList) {
     });
     ph._placeholderKey = ph.id;
     fd._phKey = ph._placeholderKey;
-    S.files.push(ph);
+    S.files.splice(insertAt + fi, 0, ph);
     _newFileIds[ph.id] = true;
   });
 
@@ -674,6 +706,7 @@ async function processFileDataList(fileDataList) {
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
 
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -700,7 +733,8 @@ async function processFiles(files) {
   _loadingBatchActive = true;
 
   // Create placeholder entries immediately
-  files.forEach(function(file) {
+  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  files.forEach(function(file, fi) {
     var ext = file.name.split('.').pop().toLowerCase();
     var ph = createFileObj({
       name: file.name,
@@ -710,7 +744,7 @@ async function processFiles(files) {
     });
     ph._placeholderKey = ph.id;
     file._phKey = ph._placeholderKey;
-    S.files.push(ph);
+    S.files.splice(insertAt + fi, 0, ph);
     _newFileIds[ph.id] = true;
   });
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
@@ -778,6 +812,7 @@ async function processFiles(files) {
 
   // Loading batch complete
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -799,12 +834,13 @@ async function processFilesIncremental(paths) {
 
   // 1. Create ALL skeleton placeholders immediately
   var placeholders = [];
-  paths.forEach(function(p) {
+  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  paths.forEach(function(p, pi) {
     var nameParts = p.split(/[/\\]/);
     var name = nameParts[nameParts.length - 1];
     var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
     ph._placeholderKey = ph.id;
-    S.files.push(ph);
+    S.files.splice(insertAt + pi, 0, ph);
     _newFileIds[ph.id] = true;
     placeholders.push(ph);
   });
@@ -891,6 +927,7 @@ async function processFilesIncremental(paths) {
   }
 
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
   document.getElementById('fileList').classList.remove('batch-loading');
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {

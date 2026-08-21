@@ -228,8 +228,11 @@ function renderPage(pageFiles, pi, total, s) {
       inner += '<div class="slot-handle slot-handle-bl" data-handle="bl"></div>';
       inner += '<div class="slot-handle slot-handle-br" data-handle="br"></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px;">' + inner + '</div>';
+    } else if (f && f._loading) {
+      inner = '<div class="slot-empty"><span class="plus-icon" style="font-size:14px;color:var(--text-muted)">加载中…</span></div>';
+      html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
     } else {
-      inner = '<div class="slot-empty">空</div>';
+      inner = '<div class="slot-empty" onclick="addFileToSlot(' + i + ')"><span class="plus-icon">＋</span><span>点击添加发票</span></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
     }
   }
