@@ -1509,7 +1509,30 @@ function getFilteredFiles() {
   });
 }
 
+// 生成发票去重key：优先发票号，回退到 销售方+含税金额+日期（针对重复下载被改名的文件）
+function getDupKey(f) {
+  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).trim();
+  if (f.sellerName && f.amountTax > 0) {
+    return 'sum:' + (f.sellerName || '') + '|' + (f.amountTax || 0) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
+  }
+  return null;
+}
+
+// 标记重复发票：同 key 出现多次的文件置 _dup=true（保留第一份为原迹）
+function updateDuplicateMarks() {
+  var counts = {};
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  }
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    S.files[i]._dup = !!k && counts[k] > 1;
+  }
+}
+
 function renderFileList() {
+  updateDuplicateMarks();
   var list = document.getElementById('fileList');
   var scrollTop = list.scrollTop;
   var filtered = getFilteredFiles();
@@ -1532,6 +1555,7 @@ function renderFileList() {
     var hideStyle = hidden ? ' style="display:none"' : '';
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，请核对后删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -1548,7 +1572,7 @@ function renderFileList() {
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + ab + '</div>' +
+      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab + '</div>' +
         '<div class="file-meta-sep"></div>' +
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -1618,6 +1642,13 @@ function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); re
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
+function rotateSelected() {
+  var f = getSelectedFileObj();
+  if (!f) { toast('请先选中版面中的发票'); return; }
+  var i = S.files.indexOf(f);
+  if (i < 0) return;
+  rotFile(i);
+}
 function ocrFile(i) {
   var f = S.files[i];
   if (f._loading || f._ocrPending) return;
@@ -1885,7 +1916,22 @@ function selectSlot(idx) {
   if (idx >= 0) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
+    syncSidebarToSelectedSlot();
   }
+}
+
+// 右侧选中版面槽位时，左侧文件列表同步高亮并滚动到对应发票
+function syncSidebarToSelectedSlot() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx < 0) return;
+  _activeFileIdx = idx;
+  updateActiveFileHighlight();
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var el = list.querySelector('.file-item[data-idx="' + idx + '"]');
+  if (el) el.scrollIntoView({ block: 'nearest' });
 }
 
 function getSelectedFileObj() {
