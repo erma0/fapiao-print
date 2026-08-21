@@ -108,6 +108,7 @@ struct OfdTextObject {
     ctm: Option<(f64, f64, f64, f64, f64, f64)>,
     text: String,
     delta_x: Vec<f64>,
+    delta_y: Vec<f64>, // per-character Y offsets for multi-line text (DeltaY attribute)
     text_x: f64,
     text_y: f64,
     fill_color: Option<(u8, u8, u8)>,
@@ -128,6 +129,7 @@ impl Default for OfdTextObject {
             ctm: None,
             text: String::new(),
             delta_x: Vec::new(),
+            delta_y: Vec::new(),
             text_x: 0.0,
             text_y: 0.0,
             fill_color: None,
@@ -338,7 +340,19 @@ fn normalize_font_name(raw: &str) -> String {
         raw
     };
 
-    // Step 2: Map PostScript font names to standard CSS font-family names
+    // Step 2: Strip common encoding/localized suffixes (e.g., "仿宋_GB2312" → "仿宋")
+    // 部分税务软件生成的 OFD 使用带后缀的字体名，不剥离会导致后续精确匹配失败。
+    let base = base
+        .trim_end_matches("_GB2312")
+        .trim_end_matches("_GBK")
+        .trim_end_matches("_GB18030")
+        .trim_end_matches("-GB2312")
+        .trim_end_matches("-ET")
+        .trim_end_matches("-0")
+        .trim_end_matches("-1")
+        .trim_end_matches("-2");
+
+    // Step 3: Map PostScript font names to standard CSS font-family names
     match base {
         "CourierNewPSMT" => "Courier New",
         "TimesNewRomanPSMT" => "Times New Roman",
@@ -374,14 +388,16 @@ fn build_svg_text(
 
     // Font fallback: add generic CJK/serif/sans-serif fallbacks for cross-platform rendering.
     // SVG font-family is CSS: names with spaces need single quotes (attr value is in double quotes).
+    // 用包含匹配替代精确匹配，兼容 仿宋_GB2312/楷体_GBK 等变体；未知字一律用 monospace 兜底，
+    // 避免 SVG 输出裸字体名导致 Canvas 回退到不可控的比例字体（数字/汉字挤字）。
     let font_family = match font_base.as_str() {
-        "楷体" | "KaiTi" | "STKaiti" => "楷体, KaiTi, STKaiti, serif".to_string(),
-        "宋体" | "SimSun" | "STSong" => "宋体, SimSun, STSong, serif".to_string(),
-        "黑体" | "SimHei" | "STHeiti" => "黑体, SimHei, STHeiti, sans-serif".to_string(),
-        "仿宋" | "FangSong" | "STFangsong" => "仿宋, FangSong, STFangsong, serif".to_string(),
-        "Courier New" => "'Courier New', Courier, monospace".to_string(),
-        "Times New Roman" => "'Times New Roman', Times, serif".to_string(),
-        other => other.to_string(),
+        _ if font_base.contains("楷") || font_base.contains("Kai") => "楷体, KaiTi, STKaiti, serif".to_string(),
+        _ if font_base.contains("黑") || font_base.contains("Hei") => "黑体, SimHei, STHeiti, sans-serif".to_string(),
+        _ if font_base.contains("仿宋") || font_base.contains("Fang") => "仿宋, FangSong, STFangsong, serif".to_string(),
+        _ if font_base.contains("宋") || font_base.contains("Sun") || font_base.contains("Song") => "宋体, SimSun, STSong, serif".to_string(),
+        _ if font_base.contains("Courier") => "'Courier New', Courier, monospace".to_string(),
+        _ if font_base.contains("Times") => "'Times New Roman', Times, serif".to_string(),
+        other => format!("'{}', monospace", other),
     };
 
     let font_size = text_obj.size;
@@ -409,8 +425,9 @@ fn build_svg_text(
         let base_x = text_obj.text_x * scale_x;
         let base_y = text_obj.text_y * scale_y;
         let content = if has_delta {
-            let mut s = format!("<tspan x=\"{:.4}\">{}</tspan>", base_x, esc_xml(&chars[0].to_string()));
+            let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&chars[0].to_string()));
             let mut x_pos = base_x;
+            let mut y_pos = base_y;
             for (i, ch) in chars.iter().enumerate().skip(1) {
                 let dx = if i - 1 < text_obj.delta_x.len() {
                     text_obj.delta_x[i - 1]
@@ -418,7 +435,13 @@ fn build_svg_text(
                     *text_obj.delta_x.last().unwrap_or(&font_size)
                 };
                 x_pos += dx * scale_x;
-                s.push_str(&format!("<tspan x=\"{:.4}\">{}</tspan>", x_pos, esc_xml(&ch.to_string())));
+                let dy = if i - 1 < text_obj.delta_y.len() {
+                    text_obj.delta_y[i - 1]
+                } else {
+                    0.0
+                };
+                y_pos += dy * scale_y;
+                s.push_str(&format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", x_pos, y_pos, esc_xml(&ch.to_string())));
             }
             s
         } else {
@@ -444,8 +467,9 @@ fn build_svg_text(
     let base_x = (text_obj.boundary.0 + text_obj.text_x) * scale_x;
     let base_y = (text_obj.boundary.1 + text_obj.text_y) * scale_y;
     let content = if has_delta {
-        let mut s = format!("<tspan x=\"{:.4}\">{}</tspan>", base_x, esc_xml(&chars[0].to_string()));
+        let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&chars[0].to_string()));
         let mut x_pos = base_x;
+        let mut y_pos = base_y;
         for (i, ch) in chars.iter().enumerate().skip(1) {
             let dx = if i - 1 < text_obj.delta_x.len() {
                 text_obj.delta_x[i - 1]
@@ -453,7 +477,13 @@ fn build_svg_text(
                 *text_obj.delta_x.last().unwrap_or(&font_size)
             };
             x_pos += dx * scale_x;
-            s.push_str(&format!("<tspan x=\"{:.4}\">{}</tspan>", x_pos, esc_xml(&ch.to_string())));
+            let dy = if i - 1 < text_obj.delta_y.len() {
+                text_obj.delta_y[i - 1]
+            } else {
+                0.0
+            };
+            y_pos += dy * scale_y;
+            s.push_str(&format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", x_pos, y_pos, esc_xml(&ch.to_string())));
         }
         s
     } else {
@@ -694,6 +724,9 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(v) = attr_val(&e, "Y") { t.text_y = v.parse().unwrap_or(0.0); }
                             if let Some(v) = attr_val(&e, "DeltaX") {
                                 t.delta_x = parse_delta_x(&v);
+                            }
+                            if let Some(v) = attr_val(&e, "DeltaY") {
+                                t.delta_y = parse_delta_x(&v); // 与 DeltaX 相同格式
                             }
                         }
                     }
@@ -2467,5 +2500,34 @@ mod tests {
 
         let info = parse_xml_invoice_content(xml).unwrap();
         assert_eq!(info.invoice_date.as_deref(), Some("2026-01-15"));
+    }
+}
+
+#[cfg(test)]
+mod font_normalize_tests {
+    use super::normalize_font_name;
+
+    #[test]
+    fn strips_gb_suffix() {
+        assert_eq!(normalize_font_name("仿宋_GB2312"), "仿宋");
+        assert_eq!(normalize_font_name("楷体_GBK"), "楷体");
+        assert_eq!(normalize_font_name("黑体_GB18030"), "黑体");
+    }
+
+    #[test]
+    fn strips_subset_prefix_and_suffix() {
+        assert_eq!(normalize_font_name("EBOEFC+KaiTi-EBOEFC+KaiTi-0"), "楷体");
+    }
+
+    #[test]
+    fn maps_postscript_names() {
+        assert_eq!(normalize_font_name("CourierNewPSMT"), "Courier New");
+        assert_eq!(normalize_font_name("SimSun"), "宋体");
+        assert_eq!(normalize_font_name("FangSong"), "仿宋");
+    }
+
+    #[test]
+    fn keeps_unknown_unchanged() {
+        assert_eq!(normalize_font_name("SomeUnknownFont"), "SomeUnknownFont");
     }
 }
