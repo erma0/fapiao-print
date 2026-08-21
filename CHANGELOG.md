@@ -26,6 +26,11 @@ _2026-08-21_
 - **报销单段底裁切线**：补画最后一段底部裁切线（`k=1..=seg_count`，移除 `seg_count<2` 早退），Rust / JS 排版 / HTML fallback 三处同步
 - **上传并发保护**：新增 `_slotUploadActive` 锁，防止加载未完成时重复上传共享插入状态；浏览器取消文件选择时正确释放锁
 - **倒序（reverse）打印模式**：槽位精准插入兼容倒序排列
+- **OFD 字体挤字修复**（采纳 Gitee PR #1 核心思路，针对当前代码手动移植）：
+  - `normalize_font_name` 剥离 `_GB2312`/`_GBK`/`_GB18030`/`-GB2312`/`-ET`/`-0`/`-1`/`-2` 后缀（`仿宋_GB2312`→`仿宋`），修复带后缀字体名匹配失败导致的文字挤在一起
+  - `font_family` 匹配改为包含匹配，兼容 `仿宋_XXX`/`楷体_GBK` 等变体；未知字体一律加 `monospace` 兜底，避免 SVG 输出裸字体名回退到不可控比例字体
+  - `OfdTextObject` 新增 `delta_y` 字段并解析 OFD `DeltaY` 属性，tspan 逐字符 Y 定位，修复多行文本错位
+  - 保留 DeltaX 精确字符定位语义（不采纳 PR 无条件删除 DeltaX / textLength 启发式压缩的写法，避免过度压缩回归）
 
 ---
 
