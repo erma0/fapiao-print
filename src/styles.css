@@ -341,8 +341,8 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .slot-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: #f8fafc; color: var(--text-muted); font-size: 12px; flex-direction: column; gap: 4px; border: 1px dashed var(--border); cursor: pointer; transition: background 0.15s, color 0.15s; }
 .slot-empty:hover { background: var(--surface2); color: var(--accent); }
 .slot-empty .plus-icon { font-size: 30px; line-height: 1; font-weight: 300; }
-.slot-blank { background: repeating-linear-gradient(45deg, #f8fafc, #f8fafc 6px, #eef1f5 6px, #eef1f5 12px); color: var(--text-muted); font-size: 12px; cursor: default; }
-.slot-blank:hover { background: repeating-linear-gradient(45deg, #f8fafc, #f8fafc 6px, #eef1f5 6px, #eef1f5 12px); color: var(--text-muted); }
+.slot-blank { background: repeating-linear-gradient(45deg, #f8fafc, #f8fafc 6px, #eef1f5 6px, #eef1f5 12px); color: var(--text-muted); font-size: 12px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.slot-blank:hover { background: repeating-linear-gradient(45deg, #eef1f5, #eef1f5 6px, #f8fafc 6px, #f8fafc 12px); color: var(--accent); }
 .placeholder-item { opacity: 0.85; }
 .placeholder-item .file-thumb { display: flex; align-items: center; justify-content: center; background: var(--surface2); }
 .blank-thumb { font-size: 22px; color: var(--text-muted); opacity: 0.6; }

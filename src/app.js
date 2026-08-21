@@ -599,18 +599,23 @@ async function addFileToSlot(slotIdx) {
   }
 }
 
-// 槽位上传的插入准备：返回 { insertAt, blankCount }
-// 目标槽位在当前 active 文件之后时，中间的空槽位用空白占位（_placeholder）补齐，
+// 槽位上传的插入准备：返回 { insertAt, blankCount, replaceIdx }
+// - 目标槽位已有空白占位 → replaceIdx = 占位在 S.files 中的索引（升级替换）
+// - 目标槽位在当前 active 文件之后 → 中间空槽位用占位补齐（insertAt + blankCount）
 // 实现"点击哪个格子，新文件就固定出现在哪个格子"的精准定位
 function prepareSlotInsertion() {
   var files = getActiveFiles();
   var perPage = getPerPage(getSettings());
   var pos = S.currentPage * perPage + _insertSlotIdx;
-  if (pos < 0) return { insertAt: S.files.length, blankCount: 0 };
-  if (pos < files.length) {
-    // 目标槽位已有对象（占位或文件），插到它前面
-    var t = S.files.indexOf(files[pos]);
-    return { insertAt: t >= 0 ? t : S.files.length, blankCount: 0 };
+  if (pos < 0) return { insertAt: S.files.length, blankCount: 0, replaceIdx: -1 };
+  var target = pos < files.length ? files[pos] : null;
+  if (target) {
+    if (target._placeholder) {
+      // 目标槽位是空白占位：升级替换（保留其他留白）
+      return { insertAt: -1, blankCount: 0, replaceIdx: S.files.indexOf(target) };
+    }
+    // 目标槽位已有文件（防御，正常不会点到这里）：插到它前面
+    return { insertAt: S.files.indexOf(target), blankCount: 0, replaceIdx: -1 };
   }
   // 目标槽位在当前 active 文件之后：补足中间空白
   var blankCount = pos - files.length;
@@ -619,7 +624,7 @@ function prepareSlotInsertion() {
     var last = S.files.indexOf(files[files.length - 1]);
     if (last >= 0) insertAt = last + 1;
   }
-  return { insertAt: insertAt, blankCount: blankCount };
+  return { insertAt: insertAt, blankCount: blankCount, replaceIdx: -1 };
 }
 
 // 在指定位置插入空白占位对象，返回占位数量（供加载函数同步偏移 placeholder 插入点）
@@ -675,24 +680,56 @@ async function processFileDataList(fileDataList) {
 
   // 1. Create placeholder entries immediately for instant visual feedback
   var insertAt = S.files.length;
+  var replaceIdx = -1;
   if (_insertSlotIdx >= 0) {
     var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
     insertAt = prep.insertAt;
-    insertBlankSlots(insertAt, prep.blankCount);
-    insertAt += prep.blankCount;
   }
-  fileDataList.forEach(function(fd, fi) {
-    var ph = createFileObj({
-      name: fd.name,
-      size: fd.size,
-      type: fd.ext,
-      _loading: true
+  if (replaceIdx >= 0) {
+    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
+    var upgraded = 0;
+    fileDataList.forEach(function(fd, fi) {
+      var ph = S.files[replaceIdx + fi];
+      if (ph && ph._placeholder) {
+        ph._placeholder = false;
+        ph.checked = true;
+        ph.name = fd.name;
+        ph.size = fd.size;
+        ph.type = fd.ext;
+        ph._loading = true;
+        ph._placeholderKey = ph.id;
+        fd._phKey = ph._placeholderKey;
+        _newFileIds[ph.id] = true;
+        upgraded++;
+      }
     });
-    ph._placeholderKey = ph.id;
-    fd._phKey = ph._placeholderKey;
-    S.files.splice(insertAt + fi, 0, ph);
-    _newFileIds[ph.id] = true;
-  });
+    for (var ri = upgraded; ri < fileDataList.length; ri++) {
+      var rfd = fileDataList[ri];
+      var rph = createFileObj({ name: rfd.name, size: rfd.size, type: rfd.ext, _loading: true });
+      rph._placeholderKey = rph.id;
+      rfd._phKey = rph._placeholderKey;
+      S.files.splice(replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      insertAt += prep.blankCount;
+    }
+    fileDataList.forEach(function(fd, fi) {
+      var ph = createFileObj({
+        name: fd.name,
+        size: fd.size,
+        type: fd.ext,
+        _loading: true
+      });
+      ph._placeholderKey = ph.id;
+      fd._phKey = ph._placeholderKey;
+      S.files.splice(insertAt + fi, 0, ph);
+      _newFileIds[ph.id] = true;
+    });
+  }
 
   // Render placeholders immediately — user sees skeleton items right away
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
@@ -806,25 +843,59 @@ async function processFiles(files) {
 
   // Create placeholder entries immediately
   var insertAt = S.files.length;
+  var replaceIdx = -1;
   if (_insertSlotIdx >= 0) {
     var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
     insertAt = prep.insertAt;
-    insertBlankSlots(insertAt, prep.blankCount);
-    insertAt += prep.blankCount;
   }
-  files.forEach(function(file, fi) {
-    var ext = file.name.split('.').pop().toLowerCase();
-    var ph = createFileObj({
-      name: file.name,
-      size: file.size,
-      type: ext,
-      _loading: true
+  if (replaceIdx >= 0) {
+    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
+    var upgraded = 0;
+    files.forEach(function(file, fi) {
+      var ph = S.files[replaceIdx + fi];
+      if (ph && ph._placeholder) {
+        var ext = file.name.split('.').pop().toLowerCase();
+        ph._placeholder = false;
+        ph.checked = true;
+        ph.name = file.name;
+        ph.size = file.size;
+        ph.type = ext;
+        ph._loading = true;
+        ph._placeholderKey = ph.id;
+        file._phKey = ph._placeholderKey;
+        _newFileIds[ph.id] = true;
+        upgraded++;
+      }
     });
-    ph._placeholderKey = ph.id;
-    file._phKey = ph._placeholderKey;
-    S.files.splice(insertAt + fi, 0, ph);
-    _newFileIds[ph.id] = true;
-  });
+    for (var ri = upgraded; ri < files.length; ri++) {
+      var rfile = files[ri];
+      var rext = rfile.name.split('.').pop().toLowerCase();
+      var rph = createFileObj({ name: rfile.name, size: rfile.size, type: rext, _loading: true });
+      rph._placeholderKey = rph.id;
+      rfile._phKey = rph._placeholderKey;
+      S.files.splice(replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      insertAt += prep.blankCount;
+    }
+    files.forEach(function(file, fi) {
+      var ext = file.name.split('.').pop().toLowerCase();
+      var ph = createFileObj({
+        name: file.name,
+        size: file.size,
+        type: ext,
+        _loading: true
+      });
+      ph._placeholderKey = ph.id;
+      file._phKey = ph._placeholderKey;
+      S.files.splice(insertAt + fi, 0, ph);
+      _newFileIds[ph.id] = true;
+    });
+  }
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
 
   // Show "加载中" toast immediately with spinner
@@ -920,21 +991,54 @@ async function processFilesIncremental(paths) {
   // 1. Create ALL skeleton placeholders immediately
   var placeholders = [];
   var insertAt = S.files.length;
+  var replaceIdx = -1;
   if (_insertSlotIdx >= 0) {
     var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
     insertAt = prep.insertAt;
-    insertBlankSlots(insertAt, prep.blankCount);
-    insertAt += prep.blankCount;
   }
-  paths.forEach(function(p, pi) {
-    var nameParts = p.split(/[/\\]/);
-    var name = nameParts[nameParts.length - 1];
-    var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
-    ph._placeholderKey = ph.id;
-    S.files.splice(insertAt + pi, 0, ph);
-    _newFileIds[ph.id] = true;
-    placeholders.push(ph);
-  });
+  if (replaceIdx >= 0) {
+    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
+    var upgraded = 0;
+    paths.forEach(function(p, pi) {
+      var ph = S.files[replaceIdx + pi];
+      if (ph && ph._placeholder) {
+        var nameParts = p.split(/[/\\]/);
+        ph._placeholder = false;
+        ph.checked = true;
+        ph.name = nameParts[nameParts.length - 1];
+        ph.size = 0;
+        ph.type = '';
+        ph._loading = true;
+        ph._placeholderKey = ph.id;
+        _newFileIds[ph.id] = true;
+        placeholders.push(ph);
+        upgraded++;
+      }
+    });
+    for (var ri = upgraded; ri < paths.length; ri++) {
+      var nameParts = paths[ri].split(/[/\\]/);
+      var rph = createFileObj({ name: nameParts[nameParts.length - 1], size: 0, type: '', _loading: true });
+      rph._placeholderKey = rph.id;
+      S.files.splice(replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+      placeholders.push(rph);
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      insertAt += prep.blankCount;
+    }
+    paths.forEach(function(p, pi) {
+      var nameParts = p.split(/[/\\]/);
+      var name = nameParts[nameParts.length - 1];
+      var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
+      ph._placeholderKey = ph.id;
+      S.files.splice(insertAt + pi, 0, ph);
+      _newFileIds[ph.id] = true;
+      placeholders.push(ph);
+    });
+  }
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
 
   document.getElementById('fileList').classList.add('batch-loading');
