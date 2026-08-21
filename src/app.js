@@ -83,6 +83,7 @@ function createFileObj(opts) {
     _ocrText: opts._ocrText || '',
     _isTicket: opts._isTicket || false,
     _loading: opts._loading || false,
+    _placeholder: opts._placeholder || false,   // 版面空白占位（只占槽位，不打印不统计）
     _ocrPending: false,
     _xmlInvoice: opts._xmlInvoice || false,
     // Disk path for the original file (when available).
@@ -531,7 +532,10 @@ async function restoreFiles(paths) {
   if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
 }
 
-async function triggerUpload() {
+var _insertSlotIdx = -1;   // 点击版面空白槽位加号上传时的目标槽位，-1 表示普通追加
+var _slotUploadActive = false; // Prevent concurrent uploads from sharing insertion state
+
+async function openFileDialog() {
   if (isTauri && invoke) {
     try {
       var result = await invoke('plugin:dialog|open', {
@@ -541,37 +545,192 @@ async function triggerUpload() {
           filters: [{ name: '发票文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif', 'ofd', 'xml'] }]
         }
       });
-      if (!result) return;
-      var paths = typeof result === 'string' ? [result] : (Array.isArray(result) ? result : []);
-      if (paths.length === 0) return;
-
-      // Incremental loading: read + render one file at a time for instant visual feedback
-      if (paths.length <= 3) {
-        toastLoading('读取 ' + paths.length + ' 个文件...');
-        var fileDataList = await invoke('open_invoice_files', { paths: paths });
-        if (fileDataList && fileDataList.length > 0) {
-          await processFileDataList(fileDataList);
-        } else {
-          toast('无法读取所选文件');
-        }
-      } else {
-        // Many files: incremental — read one by one so first preview appears immediately
-        await processFilesIncremental(paths);
-      }
+      if (!result) return [];
+      return typeof result === 'string' ? [result] : (Array.isArray(result) ? result : []);
     } catch (err) {
       console.error('Dialog error:', err);
       hideToast();
       toast('打开文件对话框失败: ' + String(err));
+      return [];
+    }
+  }
+  document.getElementById('fileInput').click();
+  return null;
+}
+
+async function addPaths(paths) {
+  if (paths.length <= 3) {
+    toastLoading('读取 ' + paths.length + ' 个文件...');
+    var fileDataList = await invoke('open_invoice_files', { paths: paths });
+    if (fileDataList && fileDataList.length > 0) {
+      await processFileDataList(fileDataList);
+    } else {
+      toast('无法读取所选文件');
     }
   } else {
-    document.getElementById('fileInput').click();
+    await processFilesIncremental(paths);
   }
 }
 
+async function triggerUpload() {
+  if (_slotUploadActive || _loadingBatchActive) {
+    toast('当前仍在加载发票，请稍候再添加');
+    return;
+  }
+  _slotUploadActive = true;
+  _insertSlotIdx = -1;
+  var browserPending = false;
+  try {
+    var paths = await openFileDialog();
+    if (paths === null) {
+      browserPending = true;
+      var inputEl = document.getElementById('fileInput');
+      var onPickerFocus = function() {
+        window.removeEventListener('focus', onPickerFocus);
+        setTimeout(function() {
+          if (!inputEl.files || inputEl.files.length === 0) {
+            _insertSlotIdx = -1;
+            _slotUploadActive = false;
+          }
+        }, 100);
+      };
+      window.addEventListener('focus', onPickerFocus);
+      return;
+    }
+    if (paths.length === 0) return;
+    await addPaths(paths);
+  } catch (err) {
+    console.error('Add files error:', err);
+    toast('文件加载失败: ' + String(err));
+  } finally {
+    if (!browserPending) {
+      _insertSlotIdx = -1;
+      _slotUploadActive = false;
+    }
+  }
+}
+
+// 点击版面空白槽位的加号：上传发票并插入到该槽位对应位置
+async function addFileToSlot(slotIdx) {
+  if (_slotUploadActive || _loadingBatchActive) {
+    toast('当前仍在加载发票，请稍候再补传');
+    return;
+  }
+  _slotUploadActive = true;
+  _insertSlotIdx = slotIdx;
+  var browserPending = false;
+  try {
+    var paths = await openFileDialog();
+    // Browser fallback completes through handleFileInput(), which consumes the
+    // insertion state after the native file picker fires its change event.
+    if (paths === null) {
+      browserPending = true;
+      // A native input does not fire `change` when the picker is cancelled.
+      // Release the slot lock on the focus return path in that case.
+      var inputEl = document.getElementById('fileInput');
+      var onPickerFocus = function() {
+        window.removeEventListener('focus', onPickerFocus);
+        setTimeout(function() {
+          if (!inputEl.files || inputEl.files.length === 0) {
+            _insertSlotIdx = -1;
+            _slotUploadActive = false;
+          }
+        }, 100);
+      };
+      window.addEventListener('focus', onPickerFocus);
+      return;
+    }
+    if (paths.length === 0) return;
+    await addPaths(paths);
+  } catch (err) {
+    console.error('Add files error:', err);
+    toast('文件加载失败: ' + String(err));
+  } finally {
+    if (!browserPending) {
+      _insertSlotIdx = -1;
+      _slotUploadActive = false;
+    }
+  }
+}
+
+// 槽位上传的插入准备：返回 { insertAt, blankCount, replaceIdx }
+// - 目标槽位已有空白占位 → replaceIdx = 占位在 S.files 中的索引（升级替换）
+// - 目标槽位在当前 active 文件之后 → 中间空槽位用占位补齐（insertAt + blankCount）
+// 实现"点击哪个格子，新文件就固定出现在哪个格子"的精准定位
+function prepareSlotInsertion() {
+  var files = getActiveFiles();
+  var perPage = getPerPage(getSettings());
+  var pos = S.currentPage * perPage + _insertSlotIdx;
+  var reverse = document.getElementById('pageOrder').value === 'reverse';
+  if (pos < 0) return { insertAt: S.files.length, blankCount: 0, replaceIdx: -1 };
+  var target = pos < files.length ? files[pos] : null;
+  if (target) {
+    if (target._placeholder) {
+      // 目标槽位是空白占位：升级替换（保留其他留白）
+      return { insertAt: -1, blankCount: 0, replaceIdx: S.files.indexOf(target), reverse: reverse };
+    }
+    // 目标槽位已有文件（防御，正常不会点到这里）：按显示顺序插入
+    var targetIdx = S.files.indexOf(target);
+    return { insertAt: reverse ? targetIdx : targetIdx + 1, blankCount: 0, replaceIdx: -1, reverse: reverse };
+  }
+  // 目标槽位在当前 active 文件之后：补足中间空白
+  var blankCount = pos - files.length;
+  // Reverse mode renders the tail of S.files first, so append-to-display means
+  // inserting at the head of the underlying array.
+  var insertAt = reverse ? 0 : S.files.length;
+  if (files.length > 0) {
+    var last = S.files.indexOf(files[files.length - 1]);
+    if (last >= 0 && !reverse) insertAt = last + 1;
+  }
+  return { insertAt: insertAt, blankCount: blankCount, replaceIdx: -1, reverse: reverse };
+}
+
+// 在指定位置插入空白占位对象，返回占位数量（供加载函数同步偏移 placeholder 插入点）
+function insertBlankSlots(insertAt, count) {
+  for (var b = 0; b < count; b++) {
+    var blank = createFileObj({ name: '空白占位', _placeholder: true });
+    blank.checked = false;
+    S.files.splice(insertAt + b, 0, blank);
+  }
+}
+
+var _lastInsertedId = null;   // 槽位上传后用于定位新文件的 id
+
+// 槽位上传完成后定位到新插入的文件：跳页 + 高亮列表 + 选中槽位
+function locateInsertedFile(id) {
+  if (!id) return;
+  var f = null;
+  for (var i = 0; i < S.files.length; i++) {
+    if (S.files[i].id === id) { f = S.files[i]; break; }
+  }
+  if (!f) return;
+  var files = getActiveFiles();
+  var activeIdx = files.indexOf(f);
+  if (activeIdx < 0) return;
+  var perPage = getPerPage(getSettings());
+  S.currentPage = Math.floor(activeIdx / perPage);
+  _activeFileIdx = S.files.indexOf(f);
+  S.selectedSlot = activeIdx % perPage;
+}
+
+// 左侧文件列表滚动到当前激活项（renderFileList 之后调用）
+function scrollActiveFileIntoView() {
+  if (_activeFileIdx < 0) return;
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var el = list.querySelector('.file-item[data-idx="' + _activeFileIdx + '"]');
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
 async function handleFileInput(fl) {
-  if (!fl || !fl.length) return;
-  await processFiles(Array.from(fl));
-  document.getElementById('fileInput').value = '';
+  try {
+    if (!fl || !fl.length) return;
+    await processFiles(Array.from(fl));
+  } finally {
+    _insertSlotIdx = -1;
+    _slotUploadActive = false;
+    document.getElementById('fileInput').value = '';
+  }
 }
 
 // Process FileData array from Rust backend — instant placeholders, then load in parallel + render sequentially
@@ -579,21 +738,60 @@ async function processFileDataList(fileDataList) {
   var total = fileDataList.length;
   var completed = 0;
   var added = 0;
+  var slotInsert = _insertSlotIdx >= 0;
+  var firstPlaceholder = null;
   _loadingBatchActive = true;
 
   // 1. Create placeholder entries immediately for instant visual feedback
-  fileDataList.forEach(function(fd) {
-    var ph = createFileObj({
-      name: fd.name,
-      size: fd.size,
-      type: fd.ext,
-      _loading: true
+  var insertAt = S.files.length;
+  var replaceIdx = -1;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
+    insertAt = prep.insertAt;
+  }
+  if (replaceIdx >= 0) {
+    // Replace exactly the clicked placeholder. Additional files are inserted
+    // in display order, independent of whether placeholders are contiguous.
+    var targetPh = S.files[replaceIdx];
+    var firstFd = fileDataList[0];
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstFd.name;
+    targetPh.size = firstFd.size;
+    targetPh.type = firstFd.ext;
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    firstFd._phKey = targetPh._placeholderKey;
+    firstPlaceholder = targetPh;
+    _newFileIds[targetPh.id] = true;
+    for (var ri = 1; ri < fileDataList.length; ri++) {
+      var rfd = fileDataList[ri];
+      var rph = createFileObj({ name: rfd.name, size: rfd.size, type: rfd.ext, _loading: true });
+      rph._placeholderKey = rph.id;
+      rfd._phKey = rph._placeholderKey;
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      if (!prep.reverse) insertAt += prep.blankCount;
+    }
+    fileDataList.forEach(function(fd, fi) {
+      var ph = createFileObj({
+        name: fd.name,
+        size: fd.size,
+        type: fd.ext,
+        _loading: true
+      });
+      ph._placeholderKey = ph.id;
+      fd._phKey = ph._placeholderKey;
+      if (fi === 0) firstPlaceholder = ph;
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + fi, 0, ph);
+      _newFileIds[ph.id] = true;
     });
-    ph._placeholderKey = ph.id;
-    fd._phKey = ph._placeholderKey;
-    S.files.push(ph);
-    _newFileIds[ph.id] = true;
-  });
+  }
 
   // Render placeholders immediately — user sees skeleton items right away
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
@@ -640,6 +838,7 @@ async function processFileDataList(fileDataList) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -671,9 +870,13 @@ async function processFileDataList(fileDataList) {
   }
 
   clearInterval(updateInterval);
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
 
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
+  _lastInsertedId = null;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -697,22 +900,61 @@ async function processFiles(files) {
   var total = files.length;
   var completed = 0;
   var added = 0;
+  var slotInsert = _insertSlotIdx >= 0;
+  var firstPlaceholder = null;
   _loadingBatchActive = true;
 
   // Create placeholder entries immediately
-  files.forEach(function(file) {
-    var ext = file.name.split('.').pop().toLowerCase();
-    var ph = createFileObj({
-      name: file.name,
-      size: file.size,
-      type: ext,
-      _loading: true
+  var insertAt = S.files.length;
+  var replaceIdx = -1;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
+    insertAt = prep.insertAt;
+  }
+  if (replaceIdx >= 0) {
+    var targetPh = S.files[replaceIdx];
+    var firstFile = files[0];
+    var firstExt = firstFile.name.split('.').pop().toLowerCase();
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstFile.name;
+    targetPh.size = firstFile.size;
+    targetPh.type = firstExt;
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    firstFile._phKey = targetPh._placeholderKey;
+    firstPlaceholder = targetPh;
+    _newFileIds[targetPh.id] = true;
+    for (var ri = 1; ri < files.length; ri++) {
+      var rfile = files[ri];
+      var rext = rfile.name.split('.').pop().toLowerCase();
+      var rph = createFileObj({ name: rfile.name, size: rfile.size, type: rext, _loading: true });
+      rph._placeholderKey = rph.id;
+      rfile._phKey = rph._placeholderKey;
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      if (!prep.reverse) insertAt += prep.blankCount;
+    }
+    files.forEach(function(file, fi) {
+      var ext = file.name.split('.').pop().toLowerCase();
+      var ph = createFileObj({
+        name: file.name,
+        size: file.size,
+        type: ext,
+        _loading: true
+      });
+      ph._placeholderKey = ph.id;
+      file._phKey = ph._placeholderKey;
+      if (fi === 0) firstPlaceholder = ph;
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + fi, 0, ph);
+      _newFileIds[ph.id] = true;
     });
-    ph._placeholderKey = ph.id;
-    file._phKey = ph._placeholderKey;
-    S.files.push(ph);
-    _newFileIds[ph.id] = true;
-  });
+  }
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
 
   // Show "加载中" toast immediately with spinner
@@ -745,6 +987,7 @@ async function processFiles(files) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId && firstPlaceholder && file._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -777,7 +1020,13 @@ async function processFiles(files) {
   }
 
   // Loading batch complete
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
+
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
+  _lastInsertedId = null;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -795,19 +1044,54 @@ async function processFilesIncremental(paths) {
   var total = paths.length;
   var added = 0;
   var startTime = Date.now();
+  var slotInsert = _insertSlotIdx >= 0;
   _loadingBatchActive = true;
 
   // 1. Create ALL skeleton placeholders immediately
   var placeholders = [];
-  paths.forEach(function(p) {
-    var nameParts = p.split(/[/\\]/);
-    var name = nameParts[nameParts.length - 1];
-    var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
-    ph._placeholderKey = ph.id;
-    S.files.push(ph);
-    _newFileIds[ph.id] = true;
-    placeholders.push(ph);
-  });
+  var insertAt = S.files.length;
+  var replaceIdx = -1;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    replaceIdx = prep.replaceIdx;
+    insertAt = prep.insertAt;
+  }
+  if (replaceIdx >= 0) {
+    var targetPh = S.files[replaceIdx];
+    var firstPath = paths[0];
+    var firstParts = firstPath.split(/[\\/]/);
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstParts[firstParts.length - 1];
+    targetPh.size = 0;
+    targetPh.type = '';
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    _newFileIds[targetPh.id] = true;
+    placeholders.push(targetPh);
+    for (var ri = 1; ri < paths.length; ri++) {
+      var nameParts = paths[ri].split(/[/\\]/);
+      var rph = createFileObj({ name: nameParts[nameParts.length - 1], size: 0, type: '', _loading: true });
+      rph._placeholderKey = rph.id;
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
+      _newFileIds[rph.id] = true;
+      placeholders.push(rph);
+    }
+  } else {
+    if (_insertSlotIdx >= 0) {
+      insertBlankSlots(insertAt, prep.blankCount);
+      if (!prep.reverse) insertAt += prep.blankCount;
+    }
+    paths.forEach(function(p, pi) {
+      var nameParts = p.split(/[/\\]/);
+      var name = nameParts[nameParts.length - 1];
+      var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
+      ph._placeholderKey = ph.id;
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + pi, 0, ph);
+      _newFileIds[ph.id] = true;
+      placeholders.push(ph);
+    });
+  }
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
 
   document.getElementById('fileList').classList.add('batch-loading');
@@ -864,6 +1148,7 @@ async function processFilesIncremental(paths) {
     if (phIdx >= 0 && winner.success && winner.result) {
       var items = Array.isArray(winner.result) ? winner.result : [winner.result];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId && ph === placeholders[0]) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -890,7 +1175,13 @@ async function processFilesIncremental(paths) {
     await nextFrame();
   }
 
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
+
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
+  _lastInsertedId = null;
   document.getElementById('fileList').classList.remove('batch-loading');
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
@@ -1509,12 +1800,36 @@ function getFilteredFiles() {
   });
 }
 
+// 生成发票去重key：优先发票号，回退到 销售方+含税金额+日期（针对重复下载被改名的文件）
+function getDupKey(f) {
+  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).trim();
+  if (f.sellerName && f.amountTax > 0) {
+    return 'sum:' + (f.sellerName || '') + '|' + (f.amountTax || 0) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
+  }
+  return null;
+}
+
+// 标记重复发票：同 key 出现多次的文件置 _dup=true（保留第一份为原迹）
+function updateDuplicateMarks() {
+  var counts = {};
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  }
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    S.files[i]._dup = !!k && counts[k] > 1;
+  }
+}
+
 function renderFileList() {
+  updateDuplicateMarks();
   var list = document.getElementById('fileList');
   var scrollTop = list.scrollTop;
   var filtered = getFilteredFiles();
+  var realCount = filtered.filter(function(f) { return !f._placeholder; }).length;
   var sel = filtered.filter(function(f) { return f.checked; }).length;
-  document.getElementById('fileCount').textContent = filtered.length + ' 张，已选 ' + sel;
+  document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -1530,8 +1845,21 @@ function renderFileList() {
     if (i === _activeFileIdx) cls += ' active-item';
     var hidden = (S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed);
     var hideStyle = hidden ? ' style="display:none"' : '';
+    if (f._placeholder) {
+      var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
+        '<div class="file-meta-sep"></div>' +
+        '<div class="file-meta-right">' +
+        '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
+        '<button class="ib sort-btn' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
+        '<button class="ib danger" onclick="rmFile(' + i + ')" title="删除空白占位">\u2715</button></div>';
+      return '<div class="file-item placeholder-item" data-idx="' + i + '"' + hideStyle + '>' +
+        '<div class="file-check disabled"></div>' +
+        '<div class="file-thumb"><div class="blank-thumb">\u25A6</div></div>' +
+        '<div class="file-info"><div class="file-name">空白占位</div><div class="file-meta">' + pMeta + '</div></div></div>';
+    }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，请核对后删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -1548,7 +1876,7 @@ function renderFileList() {
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + ab + '</div>' +
+      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab + '</div>' +
         '<div class="file-meta-sep"></div>' +
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -1612,12 +1940,19 @@ function setAllCopies(e, n) {
   renderFileList();
   updatePreview();
 }
-function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
-function selectAll() { S.files.forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
+function rotateSelected() {
+  var f = getSelectedFileObj();
+  if (!f) { toast('请先选中版面中的发票'); return; }
+  var i = S.files.indexOf(f);
+  if (i < 0) return;
+  rotFile(i);
+}
 function ocrFile(i) {
   var f = S.files[i];
   if (f._loading || f._ocrPending) return;
@@ -1635,7 +1970,7 @@ function ocrAll() {
   var running = _ocrQueue.length + _ocrRunning;
   if (running > 0) { toast('正在识别中，请稍候'); return; }
   var targets = S.files.filter(function(f) {
-    return !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
+    return !f._placeholder && !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
   });
   if (targets.length === 0) { toast('没有需要识别的发票'); return; }
   _ocrBatchTotal = targets.length;
@@ -1661,7 +1996,7 @@ function clickFileItem(idx, event) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
   if (event && (event.target.closest('.file-check') || event.target.closest('.sort-btn') || event.target.closest('button'))) return;
   var f = S.files[idx];
-  if (f._loading) return;
+  if (f._loading || f._placeholder) return;
 
   _activeFileIdx = idx;
 
@@ -1885,7 +2220,22 @@ function selectSlot(idx) {
   if (idx >= 0) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
+    syncSidebarToSelectedSlot();
   }
+}
+
+// 右侧选中版面槽位时，左侧文件列表同步高亮并滚动到对应发票
+function syncSidebarToSelectedSlot() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx < 0) return;
+  _activeFileIdx = idx;
+  updateActiveFileHighlight();
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var el = list.querySelector('.file-item[data-idx="' + idx + '"]');
+  if (el) el.scrollIntoView({ block: 'nearest' });
 }
 
 function getSelectedFileObj() {
@@ -2349,6 +2699,7 @@ function getCheckedFiles() {
 
 function markFilesAsPrinted(files) {
   files.forEach(function(f) {
+    if (f._placeholder) return;
     f._printed = true;
     var key = f._filePath || f._pdfPath;
     if (key) _printedMap[key] = true;
@@ -2358,7 +2709,8 @@ function markFilesAsPrinted(files) {
 }
 
 function getActiveFiles() {
-  var files = S.files.filter(function(f) { return f.checked && !f._loading && !f._xmlInvoice; });
+  // 占位对象（_placeholder）虽未勾选，也参与排版占槽位（版面留白）
+  var files = S.files.filter(function(f) { return (f.checked || f._placeholder) && !f._loading && !f._xmlInvoice; });
   if (document.getElementById('pageOrder').value === 'reverse') files = files.slice().reverse();
   var exp = [];
   files.forEach(function(f) { for (var c = 0; c < Math.max(1, f.copies); c++) exp.push(f); });
@@ -2936,7 +3288,11 @@ document.getElementById('previewWrap').addEventListener('dblclick', function(e) 
 
 // Global drag & drop (browser fallback)
 document.body.addEventListener('dragover', function(e) { e.preventDefault(); });
-document.body.addEventListener('drop', function(e) { e.preventDefault(); if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files)); });
+document.body.addEventListener('drop', function(e) {
+  e.preventDefault();
+  if (_slotUploadActive || _loadingBatchActive) { toast('当前仍在加载发票，请稍候再添加'); return; }
+  if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files));
+});
 window.addEventListener('resize', function() { if (S.files.length) updatePreview(); });
 
 // beforeunload safety net — stop all work if the window is being destroyed

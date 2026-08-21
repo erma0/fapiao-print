@@ -208,6 +208,7 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .amt-warn-badge { background: var(--danger-light); color: var(--danger); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: help; }
 .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
+.dup-badge { background: var(--danger-light); color: var(--danger); padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; cursor: help; }
 .seller-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 .ticket-badge { font-size: 10px; color: #1976d2; padding: 1px 4px; border-radius: 3px; background: #e3f2fd; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 .nontax-badge { font-size: 10px; color: #dd6b20; padding: 1px 4px; border-radius: 3px; background: #fffaf0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; border: 1px solid #fbd38d; }
@@ -337,7 +338,16 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .preview-container { background: var(--surface); box-shadow: var(--shadow-lg); position: relative; flex-shrink: 0; }
 .invoice-slot { overflow: hidden; position: absolute; display: flex; align-items: center; justify-content: center; background: white; }
 .invoice-slot img { display: block; }
-.slot-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: #f8fafc; color: var(--text-muted); font-size: 13px; flex-direction: column; gap: 3px; border: 1px dashed var(--border); }
+.slot-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: #f8fafc; color: var(--text-muted); font-size: 12px; flex-direction: column; gap: 4px; border: 1px dashed var(--border); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.slot-empty:hover { background: var(--surface2); color: var(--accent); }
+.slot-empty .plus-icon { font-size: 30px; line-height: 1; font-weight: 300; }
+.slot-blank { background: repeating-linear-gradient(45deg, #f8fafc, #f8fafc 6px, #eef1f5 6px, #eef1f5 12px); color: var(--text-muted); font-size: 12px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.slot-blank:hover { background: repeating-linear-gradient(45deg, #eef1f5, #eef1f5 6px, #f8fafc 6px, #f8fafc 12px); color: var(--accent); }
+.placeholder-item { opacity: 0.85; }
+.placeholder-item .file-thumb { display: flex; align-items: center; justify-content: center; background: var(--surface2); }
+.blank-thumb { font-size: 22px; color: var(--text-muted); opacity: 0.6; }
+.blank-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); }
+.file-check.disabled { opacity: 0.4; pointer-events: none; }
 .slot-num { position: absolute; top: 3px; right: 3px; background: rgba(0,0,0,0.55); color: white; font-size: 9px; padding: 2px 5px; border-radius: 3px; }
 .cut-line { position: absolute; left: 0; right: 0; border-top: 1px dashed #94a3b8; pointer-events: none; }
 .cut-line-v { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #94a3b8; pointer-events: none; }

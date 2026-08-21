@@ -63,6 +63,8 @@ function buildLayoutRequest(files, settings) {
     if (!fileObj) return null;
     // XML 数电票 has no visual layout — skip from print layout
     if (fileObj._xmlInvoice) return null;
+    // 空白占位：不打印任何内容，该槽位留白
+    if (fileObj._placeholder) return null;
     // Use _filePath as dedup key when available (more stable than previewUrl).
     // For OFD, fall back to previewUrl since _filePath is shared across pages.
     // Enhanced files also key by previewUrl: same path may exist as both
@@ -231,7 +233,7 @@ function showPrintConfirm(files, s) {
   var copies = s.copies || 1;
   var colorMode = document.getElementById('colorMode').value;
   var colorLabel = colorMode === 'color' ? '彩色' : colorMode === 'grayscale' ? '灰度' : '黑白';
-  var activeCount = files.length;
+  var activeCount = files.filter(function(f) { return !f._placeholder; }).length;
 
   var pages = buildPages(files, s);
   var totalPages = pages.length;
@@ -702,7 +704,8 @@ function fallbackPrint(files, s) {
     }
     // Draw cut lines (vertical + horizontal) between slots
     if (isReimb) {
-      for (var k = 1; k < segCount; k++) {
+      // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段）
+      for (var k = 1; k <= segCount; k++) {
         html += '<div class="cutline-h" style="top:' + (k * segMm) + 'mm"></div>';
       }
     } else if (s.cutline && (s.cols > 1 || s.rows > 1)) {

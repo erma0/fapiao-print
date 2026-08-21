@@ -51,7 +51,8 @@ function calculateLayout(settings, pxPerMm) {
       });
     }
     var rCutLines = [];
-    for (var k = 1; k < segCount; k++) {
+    // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段），位置 = k × 段高（绝对位置）
+    for (var k = 1; k <= segCount; k++) {
       rCutLines.push({ type: 'horizontal', pos: k * segMm * pxPerMm });
     }
     return { pw: pw, ph: ph, mt: mt, mb: mb, fm: fm, ml: ml, mr: mr, gh: gh, gv: gv, sw: rsw, sh: rsh, slots: rSlots, cutLines: rCutLines, reimburse: true };
@@ -227,8 +228,15 @@ function renderPage(pageFiles, pi, total, s) {
       inner += '<div class="slot-handle slot-handle-bl" data-handle="bl"></div>';
       inner += '<div class="slot-handle slot-handle-br" data-handle="br"></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px;">' + inner + '</div>';
+    } else if (f && f._loading) {
+      inner = '<div class="slot-empty"><span class="plus-icon" style="font-size:14px;color:var(--text-muted)">加载中…</span></div>';
+      html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
+    } else if (f && f._placeholder) {
+      // 空白占位：点击上传可替换该占位（保留其他留白）
+      inner = '<div class="slot-empty slot-blank" onclick="addFileToSlot(' + i + ')"><span class="plus-icon">＋</span><span>空白</span></div>';
+      html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
     } else {
-      inner = '<div class="slot-empty">空</div>';
+      inner = '<div class="slot-empty" onclick="addFileToSlot(' + i + ')"><span class="plus-icon">＋</span><span>点击添加发票</span></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
     }
   }
