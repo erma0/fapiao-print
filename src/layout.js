@@ -51,7 +51,8 @@ function calculateLayout(settings, pxPerMm) {
       });
     }
     var rCutLines = [];
-    for (var k = 1; k < segCount; k++) {
+    // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段），位置 = k × 段高（绝对位置）
+    for (var k = 1; k <= segCount; k++) {
       rCutLines.push({ type: 'horizontal', pos: k * segMm * pxPerMm });
     }
     return { pw: pw, ph: ph, mt: mt, mb: mb, fm: fm, ml: ml, mr: mr, gh: gh, gv: gv, sw: rsw, sh: rsh, slots: rSlots, cutLines: rCutLines, reimburse: true };

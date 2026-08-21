@@ -6189,9 +6189,6 @@ fn build_reimburse_cutline_ops_lopdf(
     let seg = seg_height_mm.max(10.0);
     let ph_mm = page_h_pt / MM_TO_PT;
     let seg_count = ((ph_mm / seg).floor() as usize).max(1);
-    if seg_count < 2 {
-        return None;
-    }
 
     let mut ops = Vec::new();
     ops.push(Operation { operator: "q".into(), operands: vec![] });
@@ -6205,7 +6202,8 @@ fn build_reimburse_cutline_ops_lopdf(
     ]});
     ops.push(Operation { operator: "G".into(), operands: vec![lopdf::Object::Real(0.0)] });
 
-    for k in 1..seg_count {
+    // 段底裁切线：k = 1..=seg_count，每段底部一条（含最后一段），top-down k*seg → bottom-up ph - k*seg
+    for k in 1..=seg_count {
         // top-down k*seg → bottom-up ph - k*seg
         let y = page_h_pt - k as f32 * seg * MM_TO_PT;
         ops.push(Operation { operator: "m".into(), operands: vec![

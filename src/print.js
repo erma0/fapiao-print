@@ -702,7 +702,8 @@ function fallbackPrint(files, s) {
     }
     // Draw cut lines (vertical + horizontal) between slots
     if (isReimb) {
-      for (var k = 1; k < segCount; k++) {
+      // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段）
+      for (var k = 1; k <= segCount; k++) {
         html += '<div class="cutline-h" style="top:' + (k * segMm) + 'mm"></div>';
       }
     } else if (s.cutline && (s.cols > 1 || s.rows > 1)) {
