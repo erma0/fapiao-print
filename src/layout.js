@@ -231,6 +231,10 @@ function renderPage(pageFiles, pi, total, s) {
     } else if (f && f._loading) {
       inner = '<div class="slot-empty"><span class="plus-icon" style="font-size:14px;color:var(--text-muted)">加载中…</span></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
+    } else if (f && f._placeholder) {
+      // 空白占位：只占槽位，不显示加号
+      inner = '<div class="slot-empty slot-blank">空白</div>';
+      html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';
     } else {
       inner = '<div class="slot-empty" onclick="addFileToSlot(' + i + ')"><span class="plus-icon">＋</span><span>点击添加发票</span></div>';
       html += '<div class="invoice-slot' + selClass + '" data-slot-idx="' + i + '" style="position:absolute;left:' + imgX + 'px;top:' + imgY + 'px;width:' + imgW + 'px;height:' + imgH + 'px">' + inner + '</div>';

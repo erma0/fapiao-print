@@ -83,6 +83,7 @@ function createFileObj(opts) {
     _ocrText: opts._ocrText || '',
     _isTicket: opts._isTicket || false,
     _loading: opts._loading || false,
+    _placeholder: opts._placeholder || false,   // 版面空白占位（只占槽位，不打印不统计）
     _ocrPending: false,
     _xmlInvoice: opts._xmlInvoice || false,
     // Disk path for the original file (when available).
@@ -598,16 +599,36 @@ async function addFileToSlot(slotIdx) {
   }
 }
 
-// 计算点击槽位对应的 S.files 插入索引（不含 XML 发票的排版错位修正）
-function getSlotInsertIndex() {
+// 槽位上传的插入准备：返回 { insertAt, blankCount }
+// 目标槽位在当前 active 文件之后时，中间的空槽位用空白占位（_placeholder）补齐，
+// 实现"点击哪个格子，新文件就固定出现在哪个格子"的精准定位
+function prepareSlotInsertion() {
   var files = getActiveFiles();
   var perPage = getPerPage(getSettings());
   var pos = S.currentPage * perPage + _insertSlotIdx;
-  for (var j = pos; j < files.length; j++) {
-    var t = S.files.indexOf(files[j]);
-    if (t >= 0) return t;
+  if (pos < 0) return { insertAt: S.files.length, blankCount: 0 };
+  if (pos < files.length) {
+    // 目标槽位已有对象（占位或文件），插到它前面
+    var t = S.files.indexOf(files[pos]);
+    return { insertAt: t >= 0 ? t : S.files.length, blankCount: 0 };
   }
-  return S.files.length;
+  // 目标槽位在当前 active 文件之后：补足中间空白
+  var blankCount = pos - files.length;
+  var insertAt = S.files.length;
+  if (files.length > 0) {
+    var last = S.files.indexOf(files[files.length - 1]);
+    if (last >= 0) insertAt = last + 1;
+  }
+  return { insertAt: insertAt, blankCount: blankCount };
+}
+
+// 在指定位置插入空白占位对象，返回占位数量（供加载函数同步偏移 placeholder 插入点）
+function insertBlankSlots(insertAt, count) {
+  for (var b = 0; b < count; b++) {
+    var blank = createFileObj({ name: '空白占位', _placeholder: true });
+    blank.checked = false;
+    S.files.splice(insertAt + b, 0, blank);
+  }
 }
 
 var _lastInsertedId = null;   // 槽位上传后用于定位新文件的 id
@@ -653,7 +674,13 @@ async function processFileDataList(fileDataList) {
   _loadingBatchActive = true;
 
   // 1. Create placeholder entries immediately for instant visual feedback
-  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  var insertAt = S.files.length;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    insertAt = prep.insertAt;
+    insertBlankSlots(insertAt, prep.blankCount);
+    insertAt += prep.blankCount;
+  }
   fileDataList.forEach(function(fd, fi) {
     var ph = createFileObj({
       name: fd.name,
@@ -778,7 +805,13 @@ async function processFiles(files) {
   _loadingBatchActive = true;
 
   // Create placeholder entries immediately
-  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  var insertAt = S.files.length;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    insertAt = prep.insertAt;
+    insertBlankSlots(insertAt, prep.blankCount);
+    insertAt += prep.blankCount;
+  }
   files.forEach(function(file, fi) {
     var ext = file.name.split('.').pop().toLowerCase();
     var ph = createFileObj({
@@ -886,7 +919,13 @@ async function processFilesIncremental(paths) {
 
   // 1. Create ALL skeleton placeholders immediately
   var placeholders = [];
-  var insertAt = (_insertSlotIdx >= 0) ? getSlotInsertIndex() : S.files.length;
+  var insertAt = S.files.length;
+  if (_insertSlotIdx >= 0) {
+    var prep = prepareSlotInsertion();
+    insertAt = prep.insertAt;
+    insertBlankSlots(insertAt, prep.blankCount);
+    insertAt += prep.blankCount;
+  }
   paths.forEach(function(p, pi) {
     var nameParts = p.split(/[/\\]/);
     var name = nameParts[nameParts.length - 1];
@@ -1631,8 +1670,9 @@ function renderFileList() {
   var list = document.getElementById('fileList');
   var scrollTop = list.scrollTop;
   var filtered = getFilteredFiles();
+  var realCount = filtered.filter(function(f) { return !f._placeholder; }).length;
   var sel = filtered.filter(function(f) { return f.checked; }).length;
-  document.getElementById('fileCount').textContent = filtered.length + ' 张，已选 ' + sel;
+  document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -1648,6 +1688,18 @@ function renderFileList() {
     if (i === _activeFileIdx) cls += ' active-item';
     var hidden = (S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed);
     var hideStyle = hidden ? ' style="display:none"' : '';
+    if (f._placeholder) {
+      var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
+        '<div class="file-meta-sep"></div>' +
+        '<div class="file-meta-right">' +
+        '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
+        '<button class="ib sort-btn' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
+        '<button class="ib danger" onclick="rmFile(' + i + ')" title="删除空白占位">\u2715</button></div>';
+      return '<div class="file-item placeholder-item" data-idx="' + i + '"' + hideStyle + '>' +
+        '<div class="file-check disabled"></div>' +
+        '<div class="file-thumb"><div class="blank-thumb">\u25A6</div></div>' +
+        '<div class="file-info"><div class="file-name">空白占位</div><div class="file-meta">' + pMeta + '</div></div></div>';
+    }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，请核对后删除">⚠重复</span>' : '';
@@ -1731,8 +1783,8 @@ function setAllCopies(e, n) {
   renderFileList();
   updatePreview();
 }
-function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
-function selectAll() { S.files.forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
@@ -1761,7 +1813,7 @@ function ocrAll() {
   var running = _ocrQueue.length + _ocrRunning;
   if (running > 0) { toast('正在识别中，请稍候'); return; }
   var targets = S.files.filter(function(f) {
-    return !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
+    return !f._placeholder && !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
   });
   if (targets.length === 0) { toast('没有需要识别的发票'); return; }
   _ocrBatchTotal = targets.length;
@@ -1787,7 +1839,7 @@ function clickFileItem(idx, event) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
   if (event && (event.target.closest('.file-check') || event.target.closest('.sort-btn') || event.target.closest('button'))) return;
   var f = S.files[idx];
-  if (f._loading) return;
+  if (f._loading || f._placeholder) return;
 
   _activeFileIdx = idx;
 
@@ -2490,6 +2542,7 @@ function getCheckedFiles() {
 
 function markFilesAsPrinted(files) {
   files.forEach(function(f) {
+    if (f._placeholder) return;
     f._printed = true;
     var key = f._filePath || f._pdfPath;
     if (key) _printedMap[key] = true;
@@ -2499,7 +2552,8 @@ function markFilesAsPrinted(files) {
 }
 
 function getActiveFiles() {
-  var files = S.files.filter(function(f) { return f.checked && !f._loading && !f._xmlInvoice; });
+  // 占位对象（_placeholder）虽未勾选，也参与排版占槽位（版面留白）
+  var files = S.files.filter(function(f) { return (f.checked || f._placeholder) && !f._loading && !f._xmlInvoice; });
   if (document.getElementById('pageOrder').value === 'reverse') files = files.slice().reverse();
   var exp = [];
   files.forEach(function(f) { for (var c = 0; c < Math.max(1, f.copies); c++) exp.push(f); });
