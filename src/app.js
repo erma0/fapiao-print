@@ -533,6 +533,7 @@ async function restoreFiles(paths) {
 }
 
 var _insertSlotIdx = -1;   // 点击版面空白槽位加号上传时的目标槽位，-1 表示普通追加
+var _slotUploadActive = false; // Prevent concurrent uploads from sharing insertion state
 
 async function openFileDialog() {
   if (isTauri && invoke) {
@@ -572,30 +573,83 @@ async function addPaths(paths) {
 }
 
 async function triggerUpload() {
+  if (_slotUploadActive || _loadingBatchActive) {
+    toast('当前仍在加载发票，请稍候再添加');
+    return;
+  }
+  _slotUploadActive = true;
   _insertSlotIdx = -1;
-  var paths = await openFileDialog();
-  if (!paths) return;
-  if (paths.length === 0) return;
+  var browserPending = false;
   try {
+    var paths = await openFileDialog();
+    if (paths === null) {
+      browserPending = true;
+      var inputEl = document.getElementById('fileInput');
+      var onPickerFocus = function() {
+        window.removeEventListener('focus', onPickerFocus);
+        setTimeout(function() {
+          if (!inputEl.files || inputEl.files.length === 0) {
+            _insertSlotIdx = -1;
+            _slotUploadActive = false;
+          }
+        }, 100);
+      };
+      window.addEventListener('focus', onPickerFocus);
+      return;
+    }
+    if (paths.length === 0) return;
     await addPaths(paths);
   } catch (err) {
     console.error('Add files error:', err);
     toast('文件加载失败: ' + String(err));
+  } finally {
+    if (!browserPending) {
+      _insertSlotIdx = -1;
+      _slotUploadActive = false;
+    }
   }
 }
 
 // 点击版面空白槽位的加号：上传发票并插入到该槽位对应位置
 async function addFileToSlot(slotIdx) {
+  if (_slotUploadActive || _loadingBatchActive) {
+    toast('当前仍在加载发票，请稍候再补传');
+    return;
+  }
+  _slotUploadActive = true;
   _insertSlotIdx = slotIdx;
-  var paths = await openFileDialog();
-  if (!paths) return;
-  if (paths.length === 0) { _insertSlotIdx = -1; return; }
+  var browserPending = false;
   try {
+    var paths = await openFileDialog();
+    // Browser fallback completes through handleFileInput(), which consumes the
+    // insertion state after the native file picker fires its change event.
+    if (paths === null) {
+      browserPending = true;
+      // A native input does not fire `change` when the picker is cancelled.
+      // Release the slot lock on the focus return path in that case.
+      var inputEl = document.getElementById('fileInput');
+      var onPickerFocus = function() {
+        window.removeEventListener('focus', onPickerFocus);
+        setTimeout(function() {
+          if (!inputEl.files || inputEl.files.length === 0) {
+            _insertSlotIdx = -1;
+            _slotUploadActive = false;
+          }
+        }, 100);
+      };
+      window.addEventListener('focus', onPickerFocus);
+      return;
+    }
+    if (paths.length === 0) return;
     await addPaths(paths);
   } catch (err) {
     console.error('Add files error:', err);
-    _insertSlotIdx = -1;
     toast('文件加载失败: ' + String(err));
+  } finally {
+    if (!browserPending) {
+      _insertSlotIdx = -1;
+      _slotUploadActive = false;
+    }
   }
 }
 
@@ -607,24 +661,28 @@ function prepareSlotInsertion() {
   var files = getActiveFiles();
   var perPage = getPerPage(getSettings());
   var pos = S.currentPage * perPage + _insertSlotIdx;
+  var reverse = document.getElementById('pageOrder').value === 'reverse';
   if (pos < 0) return { insertAt: S.files.length, blankCount: 0, replaceIdx: -1 };
   var target = pos < files.length ? files[pos] : null;
   if (target) {
     if (target._placeholder) {
       // 目标槽位是空白占位：升级替换（保留其他留白）
-      return { insertAt: -1, blankCount: 0, replaceIdx: S.files.indexOf(target) };
+      return { insertAt: -1, blankCount: 0, replaceIdx: S.files.indexOf(target), reverse: reverse };
     }
-    // 目标槽位已有文件（防御，正常不会点到这里）：插到它前面
-    return { insertAt: S.files.indexOf(target), blankCount: 0, replaceIdx: -1 };
+    // 目标槽位已有文件（防御，正常不会点到这里）：按显示顺序插入
+    var targetIdx = S.files.indexOf(target);
+    return { insertAt: reverse ? targetIdx : targetIdx + 1, blankCount: 0, replaceIdx: -1, reverse: reverse };
   }
   // 目标槽位在当前 active 文件之后：补足中间空白
   var blankCount = pos - files.length;
-  var insertAt = S.files.length;
+  // Reverse mode renders the tail of S.files first, so append-to-display means
+  // inserting at the head of the underlying array.
+  var insertAt = reverse ? 0 : S.files.length;
   if (files.length > 0) {
     var last = S.files.indexOf(files[files.length - 1]);
-    if (last >= 0) insertAt = last + 1;
+    if (last >= 0 && !reverse) insertAt = last + 1;
   }
-  return { insertAt: insertAt, blankCount: blankCount, replaceIdx: -1 };
+  return { insertAt: insertAt, blankCount: blankCount, replaceIdx: -1, reverse: reverse };
 }
 
 // 在指定位置插入空白占位对象，返回占位数量（供加载函数同步偏移 placeholder 插入点）
@@ -665,9 +723,14 @@ function scrollActiveFileIntoView() {
 }
 
 async function handleFileInput(fl) {
-  if (!fl || !fl.length) return;
-  await processFiles(Array.from(fl));
-  document.getElementById('fileInput').value = '';
+  try {
+    if (!fl || !fl.length) return;
+    await processFiles(Array.from(fl));
+  } finally {
+    _insertSlotIdx = -1;
+    _slotUploadActive = false;
+    document.getElementById('fileInput').value = '';
+  }
 }
 
 // Process FileData array from Rust backend — instant placeholders, then load in parallel + render sequentially
@@ -676,6 +739,7 @@ async function processFileDataList(fileDataList) {
   var completed = 0;
   var added = 0;
   var slotInsert = _insertSlotIdx >= 0;
+  var firstPlaceholder = null;
   _loadingBatchActive = true;
 
   // 1. Create placeholder entries immediately for instant visual feedback
@@ -687,35 +751,32 @@ async function processFileDataList(fileDataList) {
     insertAt = prep.insertAt;
   }
   if (replaceIdx >= 0) {
-    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
-    var upgraded = 0;
-    fileDataList.forEach(function(fd, fi) {
-      var ph = S.files[replaceIdx + fi];
-      if (ph && ph._placeholder) {
-        ph._placeholder = false;
-        ph.checked = true;
-        ph.name = fd.name;
-        ph.size = fd.size;
-        ph.type = fd.ext;
-        ph._loading = true;
-        ph._placeholderKey = ph.id;
-        fd._phKey = ph._placeholderKey;
-        _newFileIds[ph.id] = true;
-        upgraded++;
-      }
-    });
-    for (var ri = upgraded; ri < fileDataList.length; ri++) {
+    // Replace exactly the clicked placeholder. Additional files are inserted
+    // in display order, independent of whether placeholders are contiguous.
+    var targetPh = S.files[replaceIdx];
+    var firstFd = fileDataList[0];
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstFd.name;
+    targetPh.size = firstFd.size;
+    targetPh.type = firstFd.ext;
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    firstFd._phKey = targetPh._placeholderKey;
+    firstPlaceholder = targetPh;
+    _newFileIds[targetPh.id] = true;
+    for (var ri = 1; ri < fileDataList.length; ri++) {
       var rfd = fileDataList[ri];
       var rph = createFileObj({ name: rfd.name, size: rfd.size, type: rfd.ext, _loading: true });
       rph._placeholderKey = rph.id;
       rfd._phKey = rph._placeholderKey;
-      S.files.splice(replaceIdx + ri, 0, rph);
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
       _newFileIds[rph.id] = true;
     }
   } else {
     if (_insertSlotIdx >= 0) {
       insertBlankSlots(insertAt, prep.blankCount);
-      insertAt += prep.blankCount;
+      if (!prep.reverse) insertAt += prep.blankCount;
     }
     fileDataList.forEach(function(fd, fi) {
       var ph = createFileObj({
@@ -726,7 +787,8 @@ async function processFileDataList(fileDataList) {
       });
       ph._placeholderKey = ph.id;
       fd._phKey = ph._placeholderKey;
-      S.files.splice(insertAt + fi, 0, ph);
+      if (fi === 0) firstPlaceholder = ph;
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + fi, 0, ph);
       _newFileIds[ph.id] = true;
     });
   }
@@ -776,7 +838,7 @@ async function processFileDataList(fileDataList) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
-      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
+      if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -839,6 +901,7 @@ async function processFiles(files) {
   var completed = 0;
   var added = 0;
   var slotInsert = _insertSlotIdx >= 0;
+  var firstPlaceholder = null;
   _loadingBatchActive = true;
 
   // Create placeholder entries immediately
@@ -850,37 +913,32 @@ async function processFiles(files) {
     insertAt = prep.insertAt;
   }
   if (replaceIdx >= 0) {
-    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
-    var upgraded = 0;
-    files.forEach(function(file, fi) {
-      var ph = S.files[replaceIdx + fi];
-      if (ph && ph._placeholder) {
-        var ext = file.name.split('.').pop().toLowerCase();
-        ph._placeholder = false;
-        ph.checked = true;
-        ph.name = file.name;
-        ph.size = file.size;
-        ph.type = ext;
-        ph._loading = true;
-        ph._placeholderKey = ph.id;
-        file._phKey = ph._placeholderKey;
-        _newFileIds[ph.id] = true;
-        upgraded++;
-      }
-    });
-    for (var ri = upgraded; ri < files.length; ri++) {
+    var targetPh = S.files[replaceIdx];
+    var firstFile = files[0];
+    var firstExt = firstFile.name.split('.').pop().toLowerCase();
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstFile.name;
+    targetPh.size = firstFile.size;
+    targetPh.type = firstExt;
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    firstFile._phKey = targetPh._placeholderKey;
+    firstPlaceholder = targetPh;
+    _newFileIds[targetPh.id] = true;
+    for (var ri = 1; ri < files.length; ri++) {
       var rfile = files[ri];
       var rext = rfile.name.split('.').pop().toLowerCase();
       var rph = createFileObj({ name: rfile.name, size: rfile.size, type: rext, _loading: true });
       rph._placeholderKey = rph.id;
       rfile._phKey = rph._placeholderKey;
-      S.files.splice(replaceIdx + ri, 0, rph);
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
       _newFileIds[rph.id] = true;
     }
   } else {
     if (_insertSlotIdx >= 0) {
       insertBlankSlots(insertAt, prep.blankCount);
-      insertAt += prep.blankCount;
+      if (!prep.reverse) insertAt += prep.blankCount;
     }
     files.forEach(function(file, fi) {
       var ext = file.name.split('.').pop().toLowerCase();
@@ -892,7 +950,8 @@ async function processFiles(files) {
       });
       ph._placeholderKey = ph.id;
       file._phKey = ph._placeholderKey;
-      S.files.splice(insertAt + fi, 0, ph);
+      if (fi === 0) firstPlaceholder = ph;
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + fi, 0, ph);
       _newFileIds[ph.id] = true;
     });
   }
@@ -928,7 +987,7 @@ async function processFiles(files) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
-      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
+      if (slotInsert && !_lastInsertedId && firstPlaceholder && file._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -998,43 +1057,37 @@ async function processFilesIncremental(paths) {
     insertAt = prep.insertAt;
   }
   if (replaceIdx >= 0) {
-    // 替换占位模式：升级目标占位为 placeholder，剩余文件紧随其后插入
-    var upgraded = 0;
-    paths.forEach(function(p, pi) {
-      var ph = S.files[replaceIdx + pi];
-      if (ph && ph._placeholder) {
-        var nameParts = p.split(/[/\\]/);
-        ph._placeholder = false;
-        ph.checked = true;
-        ph.name = nameParts[nameParts.length - 1];
-        ph.size = 0;
-        ph.type = '';
-        ph._loading = true;
-        ph._placeholderKey = ph.id;
-        _newFileIds[ph.id] = true;
-        placeholders.push(ph);
-        upgraded++;
-      }
-    });
-    for (var ri = upgraded; ri < paths.length; ri++) {
+    var targetPh = S.files[replaceIdx];
+    var firstPath = paths[0];
+    var firstParts = firstPath.split(/[\\/]/);
+    targetPh._placeholder = false;
+    targetPh.checked = true;
+    targetPh.name = firstParts[firstParts.length - 1];
+    targetPh.size = 0;
+    targetPh.type = '';
+    targetPh._loading = true;
+    targetPh._placeholderKey = targetPh.id;
+    _newFileIds[targetPh.id] = true;
+    placeholders.push(targetPh);
+    for (var ri = 1; ri < paths.length; ri++) {
       var nameParts = paths[ri].split(/[/\\]/);
       var rph = createFileObj({ name: nameParts[nameParts.length - 1], size: 0, type: '', _loading: true });
       rph._placeholderKey = rph.id;
-      S.files.splice(replaceIdx + ri, 0, rph);
+      S.files.splice(prep.reverse ? replaceIdx : replaceIdx + ri, 0, rph);
       _newFileIds[rph.id] = true;
       placeholders.push(rph);
     }
   } else {
     if (_insertSlotIdx >= 0) {
       insertBlankSlots(insertAt, prep.blankCount);
-      insertAt += prep.blankCount;
+      if (!prep.reverse) insertAt += prep.blankCount;
     }
     paths.forEach(function(p, pi) {
       var nameParts = p.split(/[/\\]/);
       var name = nameParts[nameParts.length - 1];
       var ph = createFileObj({ name: name, size: 0, type: '', _loading: true });
       ph._placeholderKey = ph.id;
-      S.files.splice(insertAt + pi, 0, ph);
+      S.files.splice(prep && prep.reverse ? insertAt : insertAt + pi, 0, ph);
       _newFileIds[ph.id] = true;
       placeholders.push(ph);
     });
@@ -1095,7 +1148,7 @@ async function processFilesIncremental(paths) {
     if (phIdx >= 0 && winner.success && winner.result) {
       var items = Array.isArray(winner.result) ? winner.result : [winner.result];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
-      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
+      if (slotInsert && !_lastInsertedId && ph === placeholders[0]) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -3235,7 +3288,11 @@ document.getElementById('previewWrap').addEventListener('dblclick', function(e) 
 
 // Global drag & drop (browser fallback)
 document.body.addEventListener('dragover', function(e) { e.preventDefault(); });
-document.body.addEventListener('drop', function(e) { e.preventDefault(); if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files)); });
+document.body.addEventListener('drop', function(e) {
+  e.preventDefault();
+  if (_slotUploadActive || _loadingBatchActive) { toast('当前仍在加载发票，请稍候再添加'); return; }
+  if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files));
+});
 window.addEventListener('resize', function() { if (S.files.length) updatePreview(); });
 
 // beforeunload safety net — stop all work if the window is being destroyed
