@@ -575,7 +575,12 @@ async function triggerUpload() {
   var paths = await openFileDialog();
   if (!paths) return;
   if (paths.length === 0) return;
-  await addPaths(paths);
+  try {
+    await addPaths(paths);
+  } catch (err) {
+    console.error('Add files error:', err);
+    toast('文件加载失败: ' + String(err));
+  }
 }
 
 // 点击版面空白槽位的加号：上传发票并插入到该槽位对应位置
@@ -584,7 +589,13 @@ async function addFileToSlot(slotIdx) {
   var paths = await openFileDialog();
   if (!paths) return;
   if (paths.length === 0) { _insertSlotIdx = -1; return; }
-  await addPaths(paths);
+  try {
+    await addPaths(paths);
+  } catch (err) {
+    console.error('Add files error:', err);
+    _insertSlotIdx = -1;
+    toast('文件加载失败: ' + String(err));
+  }
 }
 
 // 计算点击槽位对应的 S.files 插入索引（不含 XML 发票的排版错位修正）
@@ -599,6 +610,34 @@ function getSlotInsertIndex() {
   return S.files.length;
 }
 
+var _lastInsertedId = null;   // 槽位上传后用于定位新文件的 id
+
+// 槽位上传完成后定位到新插入的文件：跳页 + 高亮列表 + 选中槽位
+function locateInsertedFile(id) {
+  if (!id) return;
+  var f = null;
+  for (var i = 0; i < S.files.length; i++) {
+    if (S.files[i].id === id) { f = S.files[i]; break; }
+  }
+  if (!f) return;
+  var files = getActiveFiles();
+  var activeIdx = files.indexOf(f);
+  if (activeIdx < 0) return;
+  var perPage = getPerPage(getSettings());
+  S.currentPage = Math.floor(activeIdx / perPage);
+  _activeFileIdx = S.files.indexOf(f);
+  S.selectedSlot = activeIdx % perPage;
+}
+
+// 左侧文件列表滚动到当前激活项（renderFileList 之后调用）
+function scrollActiveFileIntoView() {
+  if (_activeFileIdx < 0) return;
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var el = list.querySelector('.file-item[data-idx="' + _activeFileIdx + '"]');
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
 async function handleFileInput(fl) {
   if (!fl || !fl.length) return;
   await processFiles(Array.from(fl));
@@ -610,6 +649,7 @@ async function processFileDataList(fileDataList) {
   var total = fileDataList.length;
   var completed = 0;
   var added = 0;
+  var slotInsert = _insertSlotIdx >= 0;
   _loadingBatchActive = true;
 
   // 1. Create placeholder entries immediately for instant visual feedback
@@ -672,6 +712,7 @@ async function processFileDataList(fileDataList) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -703,10 +744,13 @@ async function processFileDataList(fileDataList) {
   }
 
   clearInterval(updateInterval);
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
 
   _loadingBatchActive = false;
   _insertSlotIdx = -1;
+  _lastInsertedId = null;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -730,6 +774,7 @@ async function processFiles(files) {
   var total = files.length;
   var completed = 0;
   var added = 0;
+  var slotInsert = _insertSlotIdx >= 0;
   _loadingBatchActive = true;
 
   // Create placeholder entries immediately
@@ -779,6 +824,7 @@ async function processFiles(files) {
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -811,8 +857,13 @@ async function processFiles(files) {
   }
 
   // Loading batch complete
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
+
   _loadingBatchActive = false;
   _insertSlotIdx = -1;
+  _lastInsertedId = null;
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
     _ocrToastActive = false;
@@ -830,6 +881,7 @@ async function processFilesIncremental(paths) {
   var total = paths.length;
   var added = 0;
   var startTime = Date.now();
+  var slotInsert = _insertSlotIdx >= 0;
   _loadingBatchActive = true;
 
   // 1. Create ALL skeleton placeholders immediately
@@ -900,6 +952,7 @@ async function processFilesIncremental(paths) {
     if (phIdx >= 0 && winner.success && winner.result) {
       var items = Array.isArray(winner.result) ? winner.result : [winner.result];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
+      if (slotInsert && !_lastInsertedId) _lastInsertedId = items[0].id;
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       added += items.length;
     } else if (phIdx >= 0) {
@@ -926,8 +979,13 @@ async function processFilesIncremental(paths) {
     await nextFrame();
   }
 
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  scrollActiveFileIntoView();
+
   _loadingBatchActive = false;
   _insertSlotIdx = -1;
+  _lastInsertedId = null;
   document.getElementById('fileList').classList.remove('batch-loading');
 
   if (_ocrQueue.length === 0 && _ocrRunning === 0) {
