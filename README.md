@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.3.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.3.1-blue.svg)]()
 
 轻量桌面应用，专为批量打印电子发票设计。支持 PDF、OFD、图片等多格式导入，智能排版，一键打印或导出。
 
@@ -35,7 +35,7 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 - **日期排序**（v2.0.8）：📅 按钮弹出菜单，可选旧→新 / 新→旧，空日期自动排末尾
 - **↑↓ 排序**：↑↓ 按钮排序（替换 Tauri webview 拖拽卡顿），hover 浮动显示不占空间
 - **批量重命名**（v2.0.5）：汇总表内嵌面板，预设模板（金额+销售方+号码等）或自定义字段勾选，一键批量重命名发票磁盘文件，重名自动序号
-- **重复发票识别**（v2.2.2）：按发票号（或 销售方+金额+日期）自动检测重复，文件列表显示「⚠重复」标记，便于核对删除
+- **重复发票识别与去重**（v2.2.2 / v2.3.1）：按发票号自动检测可靠重复并支持「添加时自动去重」与「重复」筛选一键勾选删除；无发票号时按 销售方+金额+日期 仅作 ⚠ 疑似标记，不自动删除，避免误删同日同额的真发票
 - **空白槽位加号上传**（v2.2.2）：版面空白格子显示加号，点击上传并按需精准落位（支持版面中间留白，占位可替换/删除）
 - **设置自动记忆**：关闭后自动记住布局、纸张、打印模式等全部设置，打开即恢复
 
