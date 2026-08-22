@@ -33,7 +33,6 @@ var DEFAULT_QUICK_LAYOUTS = [
   { cols: 3, rows: 3 },   // 3×3
   { cols: 5, rows: 4 }    // 4×5
 ];
-var QUICK_LAYOUTS_VERSION = 2;
 function normalizeQuickLayoutValue(value) {
   return Math.max(1, Math.min(10, parseInt(value) || 1));
 }
@@ -1827,42 +1826,47 @@ async function handleDrop(e) {
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
   S.fileFilter = 'all';
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
-    b.classList.toggle('pf-active', b.dataset.filter === filter);
-  });
+  syncFilterButtons();
   renderFileList();
 }
 
 function setFileFilter(filter) {
-  S.fileFilter = filter;
-  if (filter === 'duplicates') S.printedFilter = 'all';
-  if (filter === 'duplicates') selectDuplicateExtras(true);
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
-    b.classList.toggle('pf-active', b.dataset.filter === filter || (filter === 'all' && b.dataset.filter === 'all'));
-  });
+  if (filter === 'duplicates') { selectDuplicateExtras(); return; }
+  S.fileFilter = 'all';
+  syncFilterButtons();
   renderFileList();
 }
 
-// Select only the later members of each duplicate group. The first item in
-// each group remains unchecked so the normal Delete button becomes a safe,
-// one-click deduplication action.
-function selectDuplicateExtras(silent) {
+// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮
+function syncFilterButtons() {
+  var active = S.fileFilter === 'duplicates' ? 'duplicates' : S.printedFilter;
+  document.querySelectorAll('.pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.filter === active);
+  });
+}
+
+// 一键勾选每组第一份之后的重复项，配合删除按钮安全去重。
+// 仅勾选按发票号判定的可靠重复（no: key）；sum:（同销售方+金额+日期）疑似重复
+// 只保留 ⚠ 标记供人工核对——同日同销售方同金额的两张真发票会被误判，不能自动勾选删除。
+// 注意：此操作会覆盖用户原有勾选，toast 中明确提示。
+function selectDuplicateExtras() {
   updateDuplicateMarks();
+  if (!S.files.some(function(f) { return f._dup; })) {
+    toast('未发现重复项');
+    return 0;
+  }
   var seen = {};
   var selected = 0;
+  var suspected = 0;
   S.files.forEach(function(f) {
-    if (f._placeholder || f._loading) {
+    if (f._placeholder || f._loading || !f._dup) {
       f.checked = false;
       return;
     }
     var key = getDupKey(f);
-    if (!key || !f._dup) {
-      f.checked = false;
-      return;
-    }
     if (seen[key]) {
-      f.checked = true;
-      selected++;
+      if (key.indexOf('no:') === 0) { f.checked = true; selected++; }
+      else { f.checked = false; suspected++; }
     } else {
       seen[key] = true;
       f.checked = false;
@@ -1870,13 +1874,13 @@ function selectDuplicateExtras(silent) {
   });
   S.fileFilter = 'duplicates';
   S.printedFilter = 'all';
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
-    b.classList.toggle('pf-active', b.dataset.filter === 'duplicates');
-  });
+  syncFilterButtons();
   renderFileList();
-  if (!silent) {
-    if (selected) toast('已选中 ' + selected + ' 个重复项，第一份已保留；点击删除按钮即可去重');
-    else toast('未发现可删除的重复项');
+  if (selected) {
+    toast('已覆盖原有勾选：选中 ' + selected + ' 个重复项（每组保留第一份），点击删除按钮即可去重' +
+      (suspected ? '；另有 ' + suspected + ' 个疑似重复仅标记 ⚠，请人工核对' : ''));
+  } else {
+    toast('未发现可靠重复' + (suspected ? '；' + suspected + ' 个疑似重复（同销售方+金额+日期）仅标记 ⚠，请人工核对' : ''));
   }
   return selected;
 }
@@ -1917,8 +1921,10 @@ function updateDuplicateMarks() {
   if (dupEl) dupEl.textContent = dupCount ? '(' + dupCount + ')' : '';
 }
 
-// Remove only later members of each duplicate group. Files without a reliable
-// key, loading skeletons, and layout placeholders are left untouched.
+// 删除每组第一份之后的重复项。仅处理按发票号判定的可靠重复（no: key）；
+// sum:（同销售方+金额+日期）疑似重复可能是同日同额的两张真发票，只标记不删除，
+// 交由人工勾选处理。无 key、加载骨架、排版占位一律不动。
+// silent=true 为自动去重路径（加载完成/OCR 识别后），删除后仍会 toast 告知用户。
 function removeDuplicates(silent) {
   var seen = {};
   var removed = 0;
@@ -1926,7 +1932,7 @@ function removeDuplicates(silent) {
   S.files = S.files.filter(function(f) {
     if (f._placeholder || f._loading) return true;
     var key = getDupKey(f);
-    if (!key) return true;
+    if (!key || key.indexOf('no:') !== 0) return true;
     if (seen[key]) { removed++; return false; }
     seen[key] = true;
     return true;
@@ -1936,9 +1942,11 @@ function removeDuplicates(silent) {
   if (!silent) {
     S.fileFilter = 'all';
     S.printedFilter = 'all';
-    document.querySelectorAll('.pf-btn').forEach(function(b) { b.classList.toggle('pf-active', b.dataset.filter === 'all'); });
+    syncFilterButtons();
     renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
     toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
+  } else if (removed) {
+    toast('已自动去重：删除 ' + removed + ' 个重复项（每组保留第一份）');
   }
   return removed;
 }
@@ -1981,7 +1989,7 @@ function renderFileList() {
     }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
-    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，可在发票管理菜单中删除">⚠重复</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -2705,11 +2713,11 @@ function renderQuickLayoutBar() {
   items.forEach(function(q, i) {
     if (max > 0 && i >= max) return;
     var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
-    var active = S.layout.cols === c && S.layout.rows === r ? ' active' : '';
-    html += '<button class="btn btn-sm ql-btn' + active + '" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
+    html += '<button class="btn btn-sm ql-btn" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
   });
   html += '<button class="btn btn-sm ql-btn ql-custom" onclick="openQuickLayoutManager()" title="管理快捷布局" style="font-size:12px">⚙</button>';
   bar.innerHTML = html;
+  syncToolbarHighlight(S.layout.cols, S.layout.rows);
 }
 
 // 打开快捷布局管理（切换到排版 tab 并滚动到管理区块）
@@ -3080,7 +3088,6 @@ function saveSettings() {
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
-  o.quickLayoutsVersion = QUICK_LAYOUTS_VERSION;
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
@@ -3346,7 +3353,6 @@ function exportSettings() {
     printMode: document.getElementById('printMode').value,
     saveDir: getSaveDir(),
     quickLayouts: cloneQuickLayouts(S.quickLayouts),
-    quickLayoutsVersion: QUICK_LAYOUTS_VERSION,
     quickLayoutMax: normalizeQuickLayoutMax(S.quickLayoutMax)
   };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3436,9 +3442,7 @@ function resetSettings() {
   S._notesMap = {};
   S.printedFilter = 'all';
   S.fileFilter = 'all';
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
-    b.classList.toggle('pf-active', b.dataset.filter === 'all');
-  });
+  syncFilterButtons();
   renderFileList();
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
