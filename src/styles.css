@@ -153,6 +153,9 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .pf-btn.pf-active {
   background: var(--accent); color: white; border-color: var(--accent);
 }
+.pf-btn.pf-dup { color: var(--danger); }
+.pf-btn.pf-dup.pf-active { background: var(--danger); color: white; border-color: var(--danger); }
+#duplicateCount { font-size: 10px; opacity: 0.85; }
 /* === 打印状态标识 === */
 .printed-dot {
   display: inline-flex; align-items: center; justify-content: center;
@@ -255,6 +258,7 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   padding: 6px 12px; font-size: 10px; color: var(--text-muted); line-height: 1.4; white-space: normal;
 }
 .copy-ctrl { position: relative; }
+.manage-menu { right: 0; left: auto; min-width: 190px; }
 
 /* ===== Settings ===== */
 .sec { padding: 12px; border-bottom: 1px solid var(--border); }
@@ -283,6 +287,13 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .go.active { border-color: var(--accent); background: var(--accent); color: white; }
 .ql-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
 .ql-custom { font-size: 13px !important; padding: 5px 8px !important; }
+.ql-item { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.ql-in {
+  width: 44px; text-align: center; padding: 4px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); color: var(--text-primary); font-size: 12px;
+}
+.ql-x { color: var(--text-muted); font-size: 12px; }
 .custom-layout-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
 
 .trow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }

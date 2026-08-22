@@ -29,6 +29,9 @@ var S = {
   totalPages: 0,
   viewZoom: 0,
   layout: { cols: 1, rows: 1, orient: 'landscape' },
+  // 顶部工具栏快捷排版按钮（可插拔）：内置 3 个，可增删改、排序
+  quickLayouts: [ {cols: 1, rows: 1}, {cols: 3, rows: 2}, {cols: 5, rows: 4} ],
+  quickLayoutMax: 0,  // 顶部显示数量，0=全部
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
@@ -2567,12 +2570,102 @@ function applyCustomLayout() {
   saveSettings();
   updatePreview();
 }
-function showCustomLayoutModal() {
-  var r = S.layout.rows, c = S.layout.cols;
-  document.getElementById('customRows').value = r;
-  document.getElementById('customCols').value = c;
+// 渲染顶部工具栏快捷排版按钮（可插拔，数量受 quickLayoutMax 限制）
+function renderQuickLayoutBar() {
+  var bar = document.getElementById('quickLayoutBar');
+  if (!bar) return;
+  var items = S.quickLayouts || [];
+  var max = parseInt(S.quickLayoutMax) || 0;
+  var html = '';
+  items.forEach(function(q, i) {
+    if (max > 0 && i >= max) return;
+    var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+    var active = S.layout.cols === c && S.layout.rows === r ? ' active' : '';
+    html += '<button class="btn btn-sm ql-btn' + active + '" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
+  });
+  html += '<button class="btn btn-sm ql-btn ql-custom" onclick="openQuickLayoutManager()" title="管理快捷布局" style="font-size:12px">⚙</button>';
+  bar.innerHTML = html;
+}
+
+// 打开快捷布局管理（切换到排版 tab 并滚动到管理区块）
+function openQuickLayoutManager() {
   switchTab('settings', document.querySelectorAll('.sidebar-tab')[1]);
-  setTimeout(function() { document.getElementById('customRows').focus(); document.getElementById('customRows').select(); }, 100);
+  renderQuickLayoutList();
+  var sec = document.getElementById('quickLayoutSec');
+  if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// 渲染管理区块的布局列表
+function renderQuickLayoutList() {
+  var list = document.getElementById('quickLayoutList');
+  if (!list) return;
+  var items = S.quickLayouts || [];
+  var html = '';
+  items.forEach(function(q, i) {
+    var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+    html += '<div class="ql-item">' +
+      '<input type="number" min="1" max="10" value="' + r + '" class="ql-in" onchange="updateQuickLayout(' + i + ',\'rows\',this.value)" title="行数">' +
+      '<span class="ql-x">×</span>' +
+      '<input type="number" min="1" max="10" value="' + c + '" class="ql-in" onchange="updateQuickLayout(' + i + ',\'cols\',this.value)" title="列数">' +
+      '<button class="ib" onclick="moveQuickLayout(' + i + ',-1)" title="上移"' + (i === 0 ? ' disabled' : '') + '>⬆</button>' +
+      '<button class="ib" onclick="moveQuickLayout(' + i + ',1)" title="下移"' + (i === items.length - 1 ? ' disabled' : '') + '>⬇</button>' +
+      '<button class="ib danger" onclick="removeQuickLayout(' + i + ')" title="删除">✕</button>' +
+      '</div>';
+  });
+  if (!html) html = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">暂无快捷布局，点击下方添加</div>';
+  list.innerHTML = html;
+}
+
+function addQuickLayout() {
+  if (!S.quickLayouts) S.quickLayouts = [];
+  S.quickLayouts.push({ cols: 1, rows: 1 });
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function updateQuickLayout(i, field, val) {
+  if (!S.quickLayouts || !S.quickLayouts[i]) return;
+  var q = S.quickLayouts[i];
+  var oldC = parseInt(q.cols) || 1, oldR = parseInt(q.rows) || 1;
+  var v = Math.max(1, Math.min(10, parseInt(val) || 1));
+  q[field] = v;
+  var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+  // 若当前版面恰好是被编辑的布局，同步应用新值
+  if (S.layout.cols === oldC && S.layout.rows === oldR) {
+    document.getElementById('orientation').value = r > c ? 'portrait' : 'landscape';
+    S.layout = { cols: c, rows: r };
+    updatePreview();
+  }
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function removeQuickLayout(i) {
+  if (!S.quickLayouts || !S.quickLayouts[i]) return;
+  S.quickLayouts.splice(i, 1);
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function moveQuickLayout(i, dir) {
+  var arr = S.quickLayouts;
+  if (!arr || !arr[i]) return;
+  var j = i + dir;
+  if (j < 0 || j >= arr.length) return;
+  var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function setQuickLayoutMax(v) {
+  S.quickLayoutMax = Math.max(0, Math.min(20, parseInt(v) || 0));
+  document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
+  renderQuickLayoutBar();
+  saveSettings();
 }
 function syncToolbarHighlight(c, r) {
   document.querySelectorAll('.ql-btn').forEach(function(e) {
@@ -2861,6 +2954,8 @@ function saveSettings() {
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','reimburse'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
+  o.quickLayouts = S.quickLayouts || [];
+  o.quickLayoutMax = S.quickLayoutMax || 0;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -2932,6 +3027,14 @@ function loadSettings() {
     });
     syncToolbarHighlight(S.layout.cols, S.layout.rows);
   }
+  if (Array.isArray(o.quickLayouts) && o.quickLayouts.length > 0) {
+    S.quickLayouts = o.quickLayouts.map(function(q) {
+      return { cols: parseInt(q.cols) || 1, rows: parseInt(q.rows) || 1 };
+    });
+  }
+  if (o.quickLayoutMax != null) S.quickLayoutMax = o.quickLayoutMax;
+  document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
+  renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
   if (o.customW) document.getElementById('customW').value = o.customW;
@@ -3119,6 +3222,11 @@ function resetSettings() {
   S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, reimburse: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
+  S.quickLayouts = [ {cols: 1, rows: 1}, {cols: 3, rows: 2}, {cols: 5, rows: 4} ];
+  S.quickLayoutMax = 0;
+  document.getElementById('quickLayoutMax').value = 0;
+  renderQuickLayoutBar();
+  renderQuickLayoutList();
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
   document.getElementById('customRows').value = 1;
@@ -3439,6 +3547,10 @@ var _renameSeparator = '_';
 
 // Restore all layout & feature settings
 loadSettings();
+
+// Render quick layout buttons — also covers first run (loadSettings returns early with no saved data)
+renderQuickLayoutBar();
+renderQuickLayoutList();
 
 // =====================================================
 // Show main window after DOM is ready (window starts hidden via visible:false)
