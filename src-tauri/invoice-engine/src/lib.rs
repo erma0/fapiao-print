@@ -283,12 +283,12 @@ fn read_element_text(reader: &mut quick_xml::Reader<&[u8]>) -> String {
     text
 }
 
-/// Parse DeltaX attribute string into individual character offsets.
-/// DeltaX formats:
+/// Parse DeltaX/DeltaY attribute string into individual character offsets.
+/// Format:
 ///   - "3.175 3.175 3.175" — simple space-separated values
 ///   - "g 19 1.5875" — group: repeat next spacing 19 times at 1.5875
 ///   - "g 4 1.5875 3.175 g 2 1.5875 3.175" — mixed
-fn parse_delta_x(s: &str) -> Vec<f64> {
+fn parse_delta_values(s: &str) -> Vec<f64> {
     let mut result = Vec::new();
     let tokens: Vec<&str> = s.split_whitespace().collect();
     let mut i = 0;
@@ -415,7 +415,9 @@ fn build_svg_text(
     // base_x = the x position of the first character (set on <text> element).
     // Subsequent chars: tspan x = base_x + accumulated DeltaX.
     let chars: Vec<char> = text_obj.text.chars().collect();
-    let has_delta = !text_obj.delta_x.is_empty() && chars.len() > 1;
+    // DeltaX or DeltaY alone is enough to require per-char positioning; a DeltaY-only
+    // object (multi-line without horizontal increments) must not fall back to plain text.
+    let has_delta = (!text_obj.delta_x.is_empty() || !text_obj.delta_y.is_empty()) && chars.len() > 1;
     // We'll build the tspans later, after we know the base_x coordinate.
     // For now, just store the char data.
 
@@ -723,10 +725,10 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(v) = attr_val(&e, "X") { t.text_x = v.parse().unwrap_or(0.0); }
                             if let Some(v) = attr_val(&e, "Y") { t.text_y = v.parse().unwrap_or(0.0); }
                             if let Some(v) = attr_val(&e, "DeltaX") {
-                                t.delta_x = parse_delta_x(&v);
+                                t.delta_x = parse_delta_values(&v);
                             }
                             if let Some(v) = attr_val(&e, "DeltaY") {
-                                t.delta_y = parse_delta_x(&v); // 与 DeltaX 相同格式
+                                t.delta_y = parse_delta_values(&v); // 与 DeltaX 相同格式
                             }
                         }
                     }

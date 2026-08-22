@@ -2,7 +2,7 @@
 
 ## 项目概览
 
-- **版本**: v2.3.0
+- **版本**: v2.3.1
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
 - **前端**: `src/{index.html, styles.css, ocr.js, layout.js, print.js, app.js}`
 - **后端**: `src-tauri/src/{main.rs, lib.rs, pdf_engine.rs, pdfium_print.rs}`
@@ -44,7 +44,7 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 - **规范化**: `normalizeQuickLayoutValue()` 将行列限制为 1-10，`cloneQuickLayouts()` 同时承担深拷贝与持久化数据清洗
 - **允许空列表**: 用户可删除全部快捷布局；`loadSettings()` 必须按 `Array.isArray(o.quickLayouts)` 恢复空数组，禁止用 `length > 0` 判断
 - **旧配置保护**: 无可靠标记可区分旧默认三项和用户自定义三项，不得按数组内容强制迁移；新安装和恢复默认使用当前 7 项默认值
-- **持久化/导出**: `saveSettings()` 与 `exportSettings()` 均保存 `quickLayouts`、`quickLayoutsVersion`、`quickLayoutMax`
+- **持久化/导出**: `saveSettings()` 与 `exportSettings()` 均保存 `quickLayouts`、`quickLayoutMax`
 
 ### PDF 生成双管道
 
@@ -91,7 +91,8 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 - **并发锁**: `_slotUploadActive` + `_loadingBatchActive` 阻止重复上传共享插入状态；浏览器取消文件选择时经 `window` focus 监听释放锁，`handleFileInput` finally 释放
 - **选区联动**（#10-②）: `selectSlot()` 选中槽位时 `syncSidebarToSelectedSlot()` 同步左侧列表高亮 + `scrollIntoView`
 - **旋转按钮**（#10-③）: 工具栏 `rotateSelected()` 旋转版面选中发票
-- **重复发票识别**（#9）: `getDupKey()` 按发票号或 销售方+金额+日期 生成 key，`updateDuplicateMarks()` 标记 `_dup`，列表显示「⚠重复」徽章
+- **重复发票识别**（#9）: `getDupKey()` 按发票号（`no:`）或 销售方+金额+日期（`sum:` 疑似）生成 key，`updateDuplicateMarks()` 标记 `_dup`，列表显示「⚠重复」徽章
+- **去重安全边界**: 自动删除只信任 `no:` key——`removeDuplicates()` 与 `selectDuplicateExtras()` 一律跳过 `sum:` key（同日同销售方同金额的两张真发票会被误判，仅标记交人工核对）；`removeDuplicates(silent=true)` 自动路径删除后仍 toast 告知；「重复」筛选会覆盖原有勾选（toast 明示），无重复时不动勾选直接提示
 - **占位持久化**: 占位无 `_filePath`，saveSettings 不保存，重启不恢复（留白为临时布局）
 
 ### PDF 渲染双引擎 (v1.9.10+)

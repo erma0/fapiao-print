@@ -62,7 +62,7 @@
           <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
           <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
           <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
-          <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项，并自动选中每组第一份之后的项目">重复 <span id="duplicateCount"></span></button>
+          <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项并勾选可安全删除的重复（按发票号判定，会覆盖原有勾选）；同销售方+金额+日期的疑似重复仅标记不勾选">重复 <span id="duplicateCount"></span></button>
         </div>
         <div id="fileList"></div>
       </div>
@@ -291,7 +291,7 @@
             <button class="tgl" id="toggleAutoDedup" onclick="togglePref('autoDedup',this)"></button>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
-            记忆列表会在下次启动时恢复；自动去重会在识别出发票号码或关键字段后，每组仅保留最先加入的一份。
+            记忆列表会在下次启动时恢复；自动去重仅在识别出发票号码后每组保留最先加入的一份，同销售方+金额+日期的疑似重复仅标记不自动删。
           </div>
         </div>
         <div class="sec">
