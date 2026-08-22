@@ -2,7 +2,7 @@
 
 ## 项目概览
 
-- **版本**: v2.2.2
+- **版本**: v2.3.0
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
 - **前端**: `src/{index.html, styles.css, ocr.js, layout.js, print.js, app.js}`
 - **后端**: `src-tauri/src/{main.rs, lib.rs, pdf_engine.rs, pdfium_print.rs}`
@@ -35,6 +35,16 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 ---
 
 ## 架构要点
+
+### 可自定义快捷布局
+
+顶部工具栏快捷排版按钮由 `S.quickLayouts` 动态生成，管理区位于排版面板 `#quickLayoutSec`。
+
+- **默认值**: `DEFAULT_QUICK_LAYOUTS` 包含原 6 个常用布局 + 4×5（一页 20 格）；必须通过 `defaultQuickLayouts()` 获取深拷贝，禁止直接 `slice()` 共享内部对象
+- **规范化**: `normalizeQuickLayoutValue()` 将行列限制为 1-10，`cloneQuickLayouts()` 同时承担深拷贝与持久化数据清洗
+- **允许空列表**: 用户可删除全部快捷布局；`loadSettings()` 必须按 `Array.isArray(o.quickLayouts)` 恢复空数组，禁止用 `length > 0` 判断
+- **旧配置保护**: 无可靠标记可区分旧默认三项和用户自定义三项，不得按数组内容强制迁移；新安装和恢复默认使用当前 7 项默认值
+- **持久化/导出**: `saveSettings()` 与 `exportSettings()` 均保存 `quickLayouts`、`quickLayoutsVersion`、`quickLayoutMax`
 
 ### PDF 生成双管道
 

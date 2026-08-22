@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.1.2-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.3.0-blue.svg)]()
 
 轻量桌面应用，专为批量打印电子发票设计。支持 PDF、OFD、图片等多格式导入，智能排版，一键打印或导出。
 
@@ -42,7 +42,8 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 ### 📐 排版设置
 
 - **纸张**：A4 / A5 / B5 / Letter / Legal / 自定义
-- **布局**：6 预设（1×1 / 2×1 / 3×2 / 1×2 / 2×2 / 3×3）+ 自定义行列（1-10 × 1-10），自动横纵方向
+- **布局**：6 个固定预设 + 自定义行列（1-10 × 1-10），自动横纵方向
+- **快捷布局**：顶部快捷按钮默认提供 1×1 / 1×2 / 2×3 / 2×1 / 2×2 / 3×3 / 4×5，可增删、编辑、排序并限制显示数量；配置自动记忆，允许全部删除
 - **边距 / 间距**：独立可调，预设快捷按钮
 - **缩放**：自适应 / 拉伸填充 / 原始大小 / 自定义百分比
 - **旋转**：全局 0° / 90° / 180° / 270° / 自动 + 单张旋转

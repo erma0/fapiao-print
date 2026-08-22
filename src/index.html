@@ -62,6 +62,7 @@
           <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
           <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
           <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
+          <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项，并自动选中每组第一份之后的项目">重复 <span id="duplicateCount"></span></button>
         </div>
         <div id="fileList"></div>
       </div>
@@ -104,6 +105,19 @@
           <div id="reimburseOpts" style="display:none">
             <div class="row"><label class="lbl">分段高度</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="number" id="reimburseHeight" value="120" min="50" max="297" step="1" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm，发票左上对齐，段底打印裁切线</span></div></div>
           </div>
+        </div>
+        <div class="sec" id="quickLayoutSec">
+          <div class="sec-title">⚡ 快捷布局</div>
+          <div class="row">
+            <label class="lbl">显示数量</label>
+            <div class="ctrl" style="display:flex;gap:4px;align-items:center">
+              <input type="number" id="quickLayoutMax" value="0" min="0" max="20" style="width:56px;text-align:center" onchange="setQuickLayoutMax(this.value)">
+              <span style="color:var(--text-muted);font-size:11px">0=全部</span>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin:2px 0 6px 70px">顶部工具栏快捷排版按钮，可增删改、排序、限制显示数量</div>
+          <div id="quickLayoutList"></div>
+          <button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="addQuickLayout()">＋ 添加布局</button>
         </div>
         <div class="sec">
           <div class="sec-title">📐 边距 (mm)</div>
@@ -273,8 +287,11 @@
           <div class="trow"><label class="tlbl">记忆发票列表</label>
             <button class="tgl" id="toggleFileListMemory" onclick="toggleFileListMemory(this)"></button>
           </div>
+          <div class="trow"><label class="tlbl">添加时自动去重</label>
+            <button class="tgl" id="toggleAutoDedup" onclick="togglePref('autoDedup',this)"></button>
+          </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
-            开启后关闭软件重新打开时自动恢复上次的发票列表和打印状态。关闭则每次打开均为空白。
+            记忆列表会在下次启动时恢复；自动去重会在识别出发票号码或关键字段后，每组仅保留最先加入的一份。
           </div>
         </div>
         <div class="sec">
@@ -305,15 +322,7 @@
         <button class="btn btn-sm btn-primary" onclick="triggerUpload()" title="添加发票">➕ 添加</button>
       </div>
       <div class="toolbar-sep"></div>
-      <div class="toolbar-group">
-        <button class="btn btn-sm ql-btn active" data-cols="1" data-rows="1" onclick="quickLayout(1,1)" title="1行1列">1×1</button>
-        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="1" onclick="quickLayout(2,1)" title="1行2列">1×2</button>
-        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="2" onclick="quickLayout(3,2)" title="2行3列">2×3</button>
-        <button class="btn btn-sm ql-btn" data-cols="1" data-rows="2" onclick="quickLayout(1,2)" title="2行1列">2×1</button>
-        <button class="btn btn-sm ql-btn" data-cols="2" data-rows="2" onclick="quickLayout(2,2)" title="2行2列">2×2</button>
-        <button class="btn btn-sm ql-btn" data-cols="3" data-rows="3" onclick="quickLayout(3,3)" title="3行3列">3×3</button>
-        <button class="btn btn-sm ql-btn ql-custom" onclick="showCustomLayoutModal()" title="自定义布局" style="font-size:12px">⚙</button>
-      </div>
+      <div class="toolbar-group" id="quickLayoutBar"></div>
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
         <button class="btn btn-sm" onclick="prevPage()" id="prevBtn" disabled>◀</button>

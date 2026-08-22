@@ -23,16 +23,49 @@ var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
 // =====================================================
 // State
 // =====================================================
+// 默认快捷布局（顶部工具栏按钮，可插拔）：原 6 个常用 + 4×5 一页 20 格总览（#11）
+var DEFAULT_QUICK_LAYOUTS = [
+  { cols: 1, rows: 1 },   // 1×1
+  { cols: 2, rows: 1 },   // 1×2
+  { cols: 3, rows: 2 },   // 2×3
+  { cols: 1, rows: 2 },   // 2×1
+  { cols: 2, rows: 2 },   // 2×2
+  { cols: 3, rows: 3 },   // 3×3
+  { cols: 5, rows: 4 }    // 4×5
+];
+var QUICK_LAYOUTS_VERSION = 2;
+function normalizeQuickLayoutValue(value) {
+  return Math.max(1, Math.min(10, parseInt(value) || 1));
+}
+function normalizeQuickLayoutMax(value) {
+  return Math.max(0, Math.min(20, parseInt(value) || 0));
+}
+function cloneQuickLayouts(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map(function(q) {
+    return {
+      cols: normalizeQuickLayoutValue(q && q.cols),
+      rows: normalizeQuickLayoutValue(q && q.rows)
+    };
+  });
+}
+function defaultQuickLayouts() {
+  return cloneQuickLayouts(DEFAULT_QUICK_LAYOUTS);
+}
 var S = {
   files: [],
   currentPage: 0,
   totalPages: 0,
   viewZoom: 0,
   layout: { cols: 1, rows: 1, orient: 'landscape' },
+  // 顶部工具栏快捷排版按钮（可插拔）：内置 7 个，可增删改、排序
+  quickLayouts: defaultQuickLayouts(),
+  quickLayoutMax: 0,  // 顶部显示数量，0=全部
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
   printedFilter: 'all',
+  fileFilter: 'all',
   ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
@@ -42,7 +75,8 @@ var S = {
     ocrEnabled: false,
     pdfTextEnabled: true,
     customFM: false,
-    fileListMemory: false
+    fileListMemory: false,
+    autoDedup: false
   }
 };
 
@@ -871,6 +905,7 @@ async function processFileDataList(fileDataList) {
 
   clearInterval(updateInterval);
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1021,6 +1056,7 @@ async function processFiles(files) {
 
   // Loading batch complete
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1176,6 +1212,7 @@ async function processFilesIncremental(paths) {
   }
 
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1328,6 +1365,10 @@ function applyOcrAsync(fileObj, dataUrl) {
     }
     return ocrPromise.then(function() {
       fileObj._ocrPending = false;
+      if (S.feat.autoDedup) {
+        var autoRemoved = removeDuplicates(true);
+        if (autoRemoved) { updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+      }
       updateFileItem(fileObj);
       updateAmountSummary();
       // Show result toast only for single-file OCR triggered by button click
@@ -1785,15 +1826,66 @@ async function handleDrop(e) {
 // =====================================================
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
+  S.fileFilter = 'all';
   document.querySelectorAll('.pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === filter);
   });
   renderFileList();
 }
 
+function setFileFilter(filter) {
+  S.fileFilter = filter;
+  if (filter === 'duplicates') S.printedFilter = 'all';
+  if (filter === 'duplicates') selectDuplicateExtras(true);
+  document.querySelectorAll('.pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.filter === filter || (filter === 'all' && b.dataset.filter === 'all'));
+  });
+  renderFileList();
+}
+
+// Select only the later members of each duplicate group. The first item in
+// each group remains unchecked so the normal Delete button becomes a safe,
+// one-click deduplication action.
+function selectDuplicateExtras(silent) {
+  updateDuplicateMarks();
+  var seen = {};
+  var selected = 0;
+  S.files.forEach(function(f) {
+    if (f._placeholder || f._loading) {
+      f.checked = false;
+      return;
+    }
+    var key = getDupKey(f);
+    if (!key || !f._dup) {
+      f.checked = false;
+      return;
+    }
+    if (seen[key]) {
+      f.checked = true;
+      selected++;
+    } else {
+      seen[key] = true;
+      f.checked = false;
+    }
+  });
+  S.fileFilter = 'duplicates';
+  S.printedFilter = 'all';
+  document.querySelectorAll('.pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.filter === 'duplicates');
+  });
+  renderFileList();
+  if (!silent) {
+    if (selected) toast('已选中 ' + selected + ' 个重复项，第一份已保留；点击删除按钮即可去重');
+    else toast('未发现可删除的重复项');
+  }
+  return selected;
+}
+
 function getFilteredFiles() {
-  if (S.printedFilter === 'all') return S.files;
-  return S.files.filter(function(f) {
+  var files = S.files;
+  if (S.fileFilter === 'duplicates') return files.filter(function(f) { return f._dup; });
+  if (S.printedFilter === 'all') return files;
+  return files.filter(function(f) {
     if (S.printedFilter === 'printed') return f._printed;
     if (S.printedFilter === 'unprinted') return !f._printed;
     return true;
@@ -1802,9 +1894,9 @@ function getFilteredFiles() {
 
 // 生成发票去重key：优先发票号，回退到 销售方+含税金额+日期（针对重复下载被改名的文件）
 function getDupKey(f) {
-  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).trim();
+  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).replace(/\s+/g, '').trim().toUpperCase();
   if (f.sellerName && f.amountTax > 0) {
-    return 'sum:' + (f.sellerName || '') + '|' + (f.amountTax || 0) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
+    return 'sum:' + String(f.sellerName).replace(/\s+/g, '').toUpperCase() + '|' + Number(f.amountTax).toFixed(2) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
   }
   return null;
 }
@@ -1820,6 +1912,35 @@ function updateDuplicateMarks() {
     var k = getDupKey(S.files[i]);
     S.files[i]._dup = !!k && counts[k] > 1;
   }
+  var dupCount = S.files.filter(function(f) { return f._dup && !f._placeholder; }).length;
+  var dupEl = document.getElementById('duplicateCount');
+  if (dupEl) dupEl.textContent = dupCount ? '(' + dupCount + ')' : '';
+}
+
+// Remove only later members of each duplicate group. Files without a reliable
+// key, loading skeletons, and layout placeholders are left untouched.
+function removeDuplicates(silent) {
+  var seen = {};
+  var removed = 0;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) {
+    if (f._placeholder || f._loading) return true;
+    var key = getDupKey(f);
+    if (!key) return true;
+    if (seen[key]) { removed++; return false; }
+    seen[key] = true;
+    return true;
+  });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  updateDuplicateMarks();
+  if (!silent) {
+    S.fileFilter = 'all';
+    S.printedFilter = 'all';
+    document.querySelectorAll('.pf-btn').forEach(function(b) { b.classList.toggle('pf-active', b.dataset.filter === 'all'); });
+    renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+    toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
+  }
+  return removed;
 }
 
 function renderFileList() {
@@ -1843,7 +1964,8 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = (S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed);
+    var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
+      (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
     if (f._placeholder) {
       var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
@@ -1859,7 +1981,7 @@ function renderFileList() {
     }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
-    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，请核对后删除">⚠重复</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，可在发票管理菜单中删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -1943,7 +2065,13 @@ function setAllCopies(e, n) {
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+function deleteSelected() {
+  if (!S.files.some(function(f) { return f.checked; })) return;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) { return !f.checked; });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+}
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 function rotateSelected() {
@@ -2567,12 +2695,102 @@ function applyCustomLayout() {
   saveSettings();
   updatePreview();
 }
-function showCustomLayoutModal() {
-  var r = S.layout.rows, c = S.layout.cols;
-  document.getElementById('customRows').value = r;
-  document.getElementById('customCols').value = c;
+// 渲染顶部工具栏快捷排版按钮（可插拔，数量受 quickLayoutMax 限制）
+function renderQuickLayoutBar() {
+  var bar = document.getElementById('quickLayoutBar');
+  if (!bar) return;
+  var items = S.quickLayouts || [];
+  var max = parseInt(S.quickLayoutMax) || 0;
+  var html = '';
+  items.forEach(function(q, i) {
+    if (max > 0 && i >= max) return;
+    var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+    var active = S.layout.cols === c && S.layout.rows === r ? ' active' : '';
+    html += '<button class="btn btn-sm ql-btn' + active + '" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
+  });
+  html += '<button class="btn btn-sm ql-btn ql-custom" onclick="openQuickLayoutManager()" title="管理快捷布局" style="font-size:12px">⚙</button>';
+  bar.innerHTML = html;
+}
+
+// 打开快捷布局管理（切换到排版 tab 并滚动到管理区块）
+function openQuickLayoutManager() {
   switchTab('settings', document.querySelectorAll('.sidebar-tab')[1]);
-  setTimeout(function() { document.getElementById('customRows').focus(); document.getElementById('customRows').select(); }, 100);
+  renderQuickLayoutList();
+  var sec = document.getElementById('quickLayoutSec');
+  if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// 渲染管理区块的布局列表
+function renderQuickLayoutList() {
+  var list = document.getElementById('quickLayoutList');
+  if (!list) return;
+  var items = S.quickLayouts || [];
+  var html = '';
+  items.forEach(function(q, i) {
+    var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+    html += '<div class="ql-item">' +
+      '<input type="number" min="1" max="10" value="' + r + '" class="ql-in" onchange="updateQuickLayout(' + i + ',\'rows\',this.value)" title="行数">' +
+      '<span class="ql-x">×</span>' +
+      '<input type="number" min="1" max="10" value="' + c + '" class="ql-in" onchange="updateQuickLayout(' + i + ',\'cols\',this.value)" title="列数">' +
+      '<button class="ib" onclick="moveQuickLayout(' + i + ',-1)" title="上移"' + (i === 0 ? ' disabled' : '') + '>⬆</button>' +
+      '<button class="ib" onclick="moveQuickLayout(' + i + ',1)" title="下移"' + (i === items.length - 1 ? ' disabled' : '') + '>⬇</button>' +
+      '<button class="ib danger" onclick="removeQuickLayout(' + i + ')" title="删除">✕</button>' +
+      '</div>';
+  });
+  if (!html) html = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">暂无快捷布局，点击下方添加</div>';
+  list.innerHTML = html;
+}
+
+function addQuickLayout() {
+  if (!S.quickLayouts) S.quickLayouts = [];
+  S.quickLayouts.push({ cols: 1, rows: 1 });
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function updateQuickLayout(i, field, val) {
+  if (!S.quickLayouts || !S.quickLayouts[i]) return;
+  var q = S.quickLayouts[i];
+  var oldC = parseInt(q.cols) || 1, oldR = parseInt(q.rows) || 1;
+  var v = normalizeQuickLayoutValue(val);
+  q[field] = v;
+  var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+  // 若当前版面恰好是被编辑的布局，同步应用新值
+  if (S.layout.cols === oldC && S.layout.rows === oldR) {
+    document.getElementById('orientation').value = r > c ? 'portrait' : 'landscape';
+    S.layout = { cols: c, rows: r };
+    updatePreview();
+  }
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function removeQuickLayout(i) {
+  if (!S.quickLayouts || !S.quickLayouts[i]) return;
+  S.quickLayouts.splice(i, 1);
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function moveQuickLayout(i, dir) {
+  var arr = S.quickLayouts;
+  if (!arr || !arr[i]) return;
+  var j = i + dir;
+  if (j < 0 || j >= arr.length) return;
+  var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  saveSettings();
+}
+
+function setQuickLayoutMax(v) {
+  S.quickLayoutMax = normalizeQuickLayoutMax(v);
+  document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
+  renderQuickLayoutBar();
+  saveSettings();
 }
 function syncToolbarHighlight(c, r) {
   document.querySelectorAll('.ql-btn').forEach(function(e) {
@@ -2858,9 +3076,12 @@ function saveSettings() {
     printerName: document.getElementById('printerSel').value || null,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','reimburse'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
+  o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
+  o.quickLayoutsVersion = QUICK_LAYOUTS_VERSION;
+  o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -2932,6 +3153,13 @@ function loadSettings() {
     });
     syncToolbarHighlight(S.layout.cols, S.layout.rows);
   }
+  // Restore the exact saved list, including an intentionally empty list.
+  // Older configs have no reliable marker distinguishing the old defaults
+  // from a user-customized three-item list, so do not overwrite them.
+  if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
+  if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
+  document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
+  renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
   if (o.customW) document.getElementById('customW').value = o.customW;
@@ -2960,6 +3188,7 @@ function loadSettings() {
       footer: 'toggleFooter', autoOpenPdf: 'toggleAutoOpenPdf', customFM: 'toggleCustomFM',
       slotAdjMemory: 'toggleSlotAdjMemory',
       fileListMemory: 'toggleFileListMemory',
+      autoDedup: 'toggleAutoDedup',
       reimburse: 'toggleReimburse'
     };
     Object.keys(featMap).forEach(function(k) {
@@ -3106,7 +3335,20 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, colorMode: document.getElementById('colorMode').value, printMode: document.getElementById('printMode').value, saveDir: getSaveDir() };
+  var data = {
+    layout: S.layout,
+    feat: S.feat,
+    ocrPrecision: S.ocrPrecision,
+    paperSize: document.getElementById('paperSize').value,
+    orientation: document.getElementById('orientation').value,
+    copies: document.getElementById('copies').value,
+    colorMode: document.getElementById('colorMode').value,
+    printMode: document.getElementById('printMode').value,
+    saveDir: getSaveDir(),
+    quickLayouts: cloneQuickLayouts(S.quickLayouts),
+    quickLayoutsVersion: QUICK_LAYOUTS_VERSION,
+    quickLayoutMax: normalizeQuickLayoutMax(S.quickLayoutMax)
+  };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -3116,9 +3358,14 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, reimburse: false };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
+  S.quickLayouts = defaultQuickLayouts();
+  S.quickLayoutMax = 0;
+  document.getElementById('quickLayoutMax').value = 0;
+  renderQuickLayoutBar();
+  renderQuickLayoutList();
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
   document.getElementById('customRows').value = 1;
@@ -3188,6 +3435,7 @@ function resetSettings() {
   S._fileAdjMap = {};
   S._notesMap = {};
   S.printedFilter = 'all';
+  S.fileFilter = 'all';
   document.querySelectorAll('.pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === 'all');
   });
@@ -3439,6 +3687,10 @@ var _renameSeparator = '_';
 
 // Restore all layout & feature settings
 loadSettings();
+
+// Render quick layout buttons — also covers first run (loadSettings returns early with no saved data)
+renderQuickLayoutBar();
+renderQuickLayoutList();
 
 // =====================================================
 // Show main window after DOM is ready (window starts hidden via visible:false)
