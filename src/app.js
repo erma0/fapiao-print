@@ -46,6 +46,7 @@ var S = {
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
   printedFilter: 'all',
+  fileFilter: 'all',
   ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
@@ -55,7 +56,8 @@ var S = {
     ocrEnabled: false,
     pdfTextEnabled: true,
     customFM: false,
-    fileListMemory: false
+    fileListMemory: false,
+    autoDedup: false
   }
 };
 
@@ -884,6 +886,7 @@ async function processFileDataList(fileDataList) {
 
   clearInterval(updateInterval);
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1034,6 +1037,7 @@ async function processFiles(files) {
 
   // Loading batch complete
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1189,6 +1193,7 @@ async function processFilesIncremental(paths) {
   }
 
   if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
@@ -1341,6 +1346,10 @@ function applyOcrAsync(fileObj, dataUrl) {
     }
     return ocrPromise.then(function() {
       fileObj._ocrPending = false;
+      if (S.feat.autoDedup) {
+        var autoRemoved = removeDuplicates(true);
+        if (autoRemoved) { updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+      }
       updateFileItem(fileObj);
       updateAmountSummary();
       // Show result toast only for single-file OCR triggered by button click
@@ -1798,15 +1807,66 @@ async function handleDrop(e) {
 // =====================================================
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
+  S.fileFilter = 'all';
   document.querySelectorAll('.pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === filter);
   });
   renderFileList();
 }
 
+function setFileFilter(filter) {
+  S.fileFilter = filter;
+  if (filter === 'duplicates') S.printedFilter = 'all';
+  if (filter === 'duplicates') selectDuplicateExtras(true);
+  document.querySelectorAll('.pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.filter === filter || (filter === 'all' && b.dataset.filter === 'all'));
+  });
+  renderFileList();
+}
+
+// Select only the later members of each duplicate group. The first item in
+// each group remains unchecked so the normal Delete button becomes a safe,
+// one-click deduplication action.
+function selectDuplicateExtras(silent) {
+  updateDuplicateMarks();
+  var seen = {};
+  var selected = 0;
+  S.files.forEach(function(f) {
+    if (f._placeholder || f._loading) {
+      f.checked = false;
+      return;
+    }
+    var key = getDupKey(f);
+    if (!key || !f._dup) {
+      f.checked = false;
+      return;
+    }
+    if (seen[key]) {
+      f.checked = true;
+      selected++;
+    } else {
+      seen[key] = true;
+      f.checked = false;
+    }
+  });
+  S.fileFilter = 'duplicates';
+  S.printedFilter = 'all';
+  document.querySelectorAll('.pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.filter === 'duplicates');
+  });
+  renderFileList();
+  if (!silent) {
+    if (selected) toast('已选中 ' + selected + ' 个重复项，第一份已保留；点击删除按钮即可去重');
+    else toast('未发现可删除的重复项');
+  }
+  return selected;
+}
+
 function getFilteredFiles() {
-  if (S.printedFilter === 'all') return S.files;
-  return S.files.filter(function(f) {
+  var files = S.files;
+  if (S.fileFilter === 'duplicates') return files.filter(function(f) { return f._dup; });
+  if (S.printedFilter === 'all') return files;
+  return files.filter(function(f) {
     if (S.printedFilter === 'printed') return f._printed;
     if (S.printedFilter === 'unprinted') return !f._printed;
     return true;
@@ -1815,9 +1875,9 @@ function getFilteredFiles() {
 
 // 生成发票去重key：优先发票号，回退到 销售方+含税金额+日期（针对重复下载被改名的文件）
 function getDupKey(f) {
-  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).trim();
+  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).replace(/\s+/g, '').trim().toUpperCase();
   if (f.sellerName && f.amountTax > 0) {
-    return 'sum:' + (f.sellerName || '') + '|' + (f.amountTax || 0) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
+    return 'sum:' + String(f.sellerName).replace(/\s+/g, '').toUpperCase() + '|' + Number(f.amountTax).toFixed(2) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
   }
   return null;
 }
@@ -1833,6 +1893,35 @@ function updateDuplicateMarks() {
     var k = getDupKey(S.files[i]);
     S.files[i]._dup = !!k && counts[k] > 1;
   }
+  var dupCount = S.files.filter(function(f) { return f._dup && !f._placeholder; }).length;
+  var dupEl = document.getElementById('duplicateCount');
+  if (dupEl) dupEl.textContent = dupCount ? '(' + dupCount + ')' : '';
+}
+
+// Remove only later members of each duplicate group. Files without a reliable
+// key, loading skeletons, and layout placeholders are left untouched.
+function removeDuplicates(silent) {
+  var seen = {};
+  var removed = 0;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) {
+    if (f._placeholder || f._loading) return true;
+    var key = getDupKey(f);
+    if (!key) return true;
+    if (seen[key]) { removed++; return false; }
+    seen[key] = true;
+    return true;
+  });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  updateDuplicateMarks();
+  if (!silent) {
+    S.fileFilter = 'all';
+    S.printedFilter = 'all';
+    document.querySelectorAll('.pf-btn').forEach(function(b) { b.classList.toggle('pf-active', b.dataset.filter === 'all'); });
+    renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+    toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
+  }
+  return removed;
 }
 
 function renderFileList() {
@@ -1856,7 +1945,8 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = (S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed);
+    var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
+      (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
     if (f._placeholder) {
       var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
@@ -1872,7 +1962,7 @@ function renderFileList() {
     }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
-    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，请核对后删除">⚠重复</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票，可在发票管理菜单中删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -1956,7 +2046,13 @@ function setAllCopies(e, n) {
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+function deleteSelected() {
+  if (!S.files.some(function(f) { return f.checked; })) return;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) { return !f.checked; });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+}
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 function rotateSelected() {
@@ -2961,7 +3057,7 @@ function saveSettings() {
     printerName: document.getElementById('printerSel').value || null,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','reimburse'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = S.quickLayouts || [];
@@ -3080,6 +3176,7 @@ function loadSettings() {
       footer: 'toggleFooter', autoOpenPdf: 'toggleAutoOpenPdf', customFM: 'toggleCustomFM',
       slotAdjMemory: 'toggleSlotAdjMemory',
       fileListMemory: 'toggleFileListMemory',
+      autoDedup: 'toggleAutoDedup',
       reimburse: 'toggleReimburse'
     };
     Object.keys(featMap).forEach(function(k) {
@@ -3236,7 +3333,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, reimburse: false };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
   S.quickLayouts = DEFAULT_QUICK_LAYOUTS.slice();
@@ -3313,6 +3410,7 @@ function resetSettings() {
   S._fileAdjMap = {};
   S._notesMap = {};
   S.printedFilter = 'all';
+  S.fileFilter = 'all';
   document.querySelectorAll('.pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === 'all');
   });

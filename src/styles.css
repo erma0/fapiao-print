@@ -258,7 +258,6 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   padding: 6px 12px; font-size: 10px; color: var(--text-muted); line-height: 1.4; white-space: normal;
 }
 .copy-ctrl { position: relative; }
-.manage-menu { right: 0; left: auto; min-width: 190px; }
 
 /* ===== Settings ===== */
 .sec { padding: 12px; border-bottom: 1px solid var(--border); }
