@@ -23,14 +23,24 @@ var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
 // =====================================================
 // State
 // =====================================================
+// 默认快捷布局（顶部工具栏按钮，可插拔）：原 6 个常用 + 4×5 一页 20 格总览（#11）
+var DEFAULT_QUICK_LAYOUTS = [
+  { cols: 1, rows: 1 },   // 1×1
+  { cols: 2, rows: 1 },   // 1×2
+  { cols: 3, rows: 2 },   // 2×3
+  { cols: 1, rows: 2 },   // 2×1
+  { cols: 2, rows: 2 },   // 2×2
+  { cols: 3, rows: 3 },   // 3×3
+  { cols: 5, rows: 4 }    // 4×5
+];
 var S = {
   files: [],
   currentPage: 0,
   totalPages: 0,
   viewZoom: 0,
   layout: { cols: 1, rows: 1, orient: 'landscape' },
-  // 顶部工具栏快捷排版按钮（可插拔）：内置 3 个，可增删改、排序
-  quickLayouts: [ {cols: 1, rows: 1}, {cols: 3, rows: 2}, {cols: 5, rows: 4} ],
+  // 顶部工具栏快捷排版按钮（可插拔）：内置 7 个，可增删改、排序
+  quickLayouts: DEFAULT_QUICK_LAYOUTS.slice(),
   quickLayoutMax: 0,  // 顶部显示数量，0=全部
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
@@ -3031,6 +3041,13 @@ function loadSettings() {
     S.quickLayouts = o.quickLayouts.map(function(q) {
       return { cols: parseInt(q.cols) || 1, rows: parseInt(q.rows) || 1 };
     });
+    // 迁移：旧版默认 3 个（1×1/2×3/4×5）→ 新版默认 7 个（补回 1×2/2×1/2×2/3×3）
+    var legacy = [{ cols: 1, rows: 1 }, { cols: 3, rows: 2 }, { cols: 5, rows: 4 }];
+    var isLegacy = S.quickLayouts.length === legacy.length;
+    for (var li = 0; isLegacy && li < legacy.length; li++) {
+      if (S.quickLayouts[li].cols !== legacy[li].cols || S.quickLayouts[li].rows !== legacy[li].rows) isLegacy = false;
+    }
+    if (isLegacy) S.quickLayouts = DEFAULT_QUICK_LAYOUTS.slice();
   }
   if (o.quickLayoutMax != null) S.quickLayoutMax = o.quickLayoutMax;
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
@@ -3222,7 +3239,7 @@ function resetSettings() {
   S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, reimburse: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
-  S.quickLayouts = [ {cols: 1, rows: 1}, {cols: 3, rows: 2}, {cols: 5, rows: 4} ];
+  S.quickLayouts = DEFAULT_QUICK_LAYOUTS.slice();
   S.quickLayoutMax = 0;
   document.getElementById('quickLayoutMax').value = 0;
   renderQuickLayoutBar();
