@@ -33,6 +33,25 @@ var DEFAULT_QUICK_LAYOUTS = [
   { cols: 3, rows: 3 },   // 3×3
   { cols: 5, rows: 4 }    // 4×5
 ];
+var QUICK_LAYOUTS_VERSION = 2;
+function normalizeQuickLayoutValue(value) {
+  return Math.max(1, Math.min(10, parseInt(value) || 1));
+}
+function normalizeQuickLayoutMax(value) {
+  return Math.max(0, Math.min(20, parseInt(value) || 0));
+}
+function cloneQuickLayouts(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map(function(q) {
+    return {
+      cols: normalizeQuickLayoutValue(q && q.cols),
+      rows: normalizeQuickLayoutValue(q && q.rows)
+    };
+  });
+}
+function defaultQuickLayouts() {
+  return cloneQuickLayouts(DEFAULT_QUICK_LAYOUTS);
+}
 var S = {
   files: [],
   currentPage: 0,
@@ -40,7 +59,7 @@ var S = {
   viewZoom: 0,
   layout: { cols: 1, rows: 1, orient: 'landscape' },
   // 顶部工具栏快捷排版按钮（可插拔）：内置 7 个，可增删改、排序
-  quickLayouts: DEFAULT_QUICK_LAYOUTS.slice(),
+  quickLayouts: defaultQuickLayouts(),
   quickLayoutMax: 0,  // 顶部显示数量，0=全部
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
@@ -2734,7 +2753,7 @@ function updateQuickLayout(i, field, val) {
   if (!S.quickLayouts || !S.quickLayouts[i]) return;
   var q = S.quickLayouts[i];
   var oldC = parseInt(q.cols) || 1, oldR = parseInt(q.rows) || 1;
-  var v = Math.max(1, Math.min(10, parseInt(val) || 1));
+  var v = normalizeQuickLayoutValue(val);
   q[field] = v;
   var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
   // 若当前版面恰好是被编辑的布局，同步应用新值
@@ -2768,7 +2787,7 @@ function moveQuickLayout(i, dir) {
 }
 
 function setQuickLayoutMax(v) {
-  S.quickLayoutMax = Math.max(0, Math.min(20, parseInt(v) || 0));
+  S.quickLayoutMax = normalizeQuickLayoutMax(v);
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   saveSettings();
@@ -3060,8 +3079,9 @@ function saveSettings() {
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
-  o.quickLayouts = S.quickLayouts || [];
-  o.quickLayoutMax = S.quickLayoutMax || 0;
+  o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
+  o.quickLayoutsVersion = QUICK_LAYOUTS_VERSION;
+  o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3133,19 +3153,11 @@ function loadSettings() {
     });
     syncToolbarHighlight(S.layout.cols, S.layout.rows);
   }
-  if (Array.isArray(o.quickLayouts) && o.quickLayouts.length > 0) {
-    S.quickLayouts = o.quickLayouts.map(function(q) {
-      return { cols: parseInt(q.cols) || 1, rows: parseInt(q.rows) || 1 };
-    });
-    // 迁移：旧版默认 3 个（1×1/2×3/4×5）→ 新版默认 7 个（补回 1×2/2×1/2×2/3×3）
-    var legacy = [{ cols: 1, rows: 1 }, { cols: 3, rows: 2 }, { cols: 5, rows: 4 }];
-    var isLegacy = S.quickLayouts.length === legacy.length;
-    for (var li = 0; isLegacy && li < legacy.length; li++) {
-      if (S.quickLayouts[li].cols !== legacy[li].cols || S.quickLayouts[li].rows !== legacy[li].rows) isLegacy = false;
-    }
-    if (isLegacy) S.quickLayouts = DEFAULT_QUICK_LAYOUTS.slice();
-  }
-  if (o.quickLayoutMax != null) S.quickLayoutMax = o.quickLayoutMax;
+  // Restore the exact saved list, including an intentionally empty list.
+  // Older configs have no reliable marker distinguishing the old defaults
+  // from a user-customized three-item list, so do not overwrite them.
+  if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
+  if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
@@ -3323,7 +3335,20 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, ocrPrecision: S.ocrPrecision, paperSize: document.getElementById('paperSize').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, colorMode: document.getElementById('colorMode').value, printMode: document.getElementById('printMode').value, saveDir: getSaveDir() };
+  var data = {
+    layout: S.layout,
+    feat: S.feat,
+    ocrPrecision: S.ocrPrecision,
+    paperSize: document.getElementById('paperSize').value,
+    orientation: document.getElementById('orientation').value,
+    copies: document.getElementById('copies').value,
+    colorMode: document.getElementById('colorMode').value,
+    printMode: document.getElementById('printMode').value,
+    saveDir: getSaveDir(),
+    quickLayouts: cloneQuickLayouts(S.quickLayouts),
+    quickLayoutsVersion: QUICK_LAYOUTS_VERSION,
+    quickLayoutMax: normalizeQuickLayoutMax(S.quickLayoutMax)
+  };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -3336,7 +3361,7 @@ function resetSettings() {
   S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
-  S.quickLayouts = DEFAULT_QUICK_LAYOUTS.slice();
+  S.quickLayouts = defaultQuickLayouts();
   S.quickLayoutMax = 0;
   document.getElementById('quickLayoutMax').value = 0;
   renderQuickLayoutBar();
