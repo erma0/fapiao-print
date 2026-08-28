@@ -36,7 +36,7 @@
           <div class="file-count" id="fileCount">0 张，已选 0</div>
           <div class="file-actions">
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">②</button>
+              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数"><img src="icons/copy_layout_32.png" alt="份数" class="ib-icon"></button>
               <div class="copy-menu hidden" id="copyMenu">
                 <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
                 <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2 ⭐</div>
@@ -45,17 +45,16 @@
                 <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
               </div>
             </div>
-            <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别">🔍</button>
+            <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别"><img src="icons/ocr_32.png" alt="识别" class="ib-icon"></button>
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleSortMenu()" title="按日期排序">📅</button>
+              <button class="ib" onclick="toggleSortMenu()" title="按日期排序"><img src="icons/date_order_32.png" alt="排序" class="ib-icon"></button>
               <div class="copy-menu hidden" id="sortMenu">
                 <div class="copy-menu-item" onclick="sortByDate(1)">📅↑ 旧→新</div>
                 <div class="copy-menu-item" onclick="sortByDate(-1)">📅↓ 新→旧</div>
               </div>
             </div>
-            <button class="ib" onclick="selectAll()" title="全选">☑</button>
-            <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
-            <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
+            <button class="ib" id="selectToggleBtn" onclick="toggleSelectAll()" title="全选 / 取消全选">☑ 全选</button>
+            <button class="ib danger" onclick="deleteSelected()" title="删除"><img src="icons/delete_32.png" alt="删除" class="ib-icon"></button>
           </div>
         </div>
         <div class="print-filter-bar" id="printFilterBar">
@@ -350,8 +349,9 @@
       </div>
       <div style="flex:1"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票">🗑</button>
-        <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置">⚙</button>
+        <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票"><img src="icons/empty_files_32.png" alt="清空" class="ib-icon"></button>
+        <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置"><img src="icons/layout_settings_32.png" alt="排版设置" class="ib-icon"></button>
+        <button class="btn btn-sm btn-icon" onclick="resetLayout()" title="恢复默认排版布局"><img src="icons/reset_layout_32.png" alt="复原布局" class="ib-icon"></button>
         <button class="btn btn-sm" onclick="savePdf()" title="保存为PDF">📥 PDF</button>
         <button class="btn btn-sm btn-success" id="printBtn" onclick="doPrint()" disabled title="开始打印">🖨 打印</button>
       </div>

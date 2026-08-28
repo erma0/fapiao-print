@@ -236,12 +236,15 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   font-size: 13px; color: var(--text-muted); transition: all 0.15s;
 }
 .ib:hover { background: var(--border); color: var(--text-primary); }
+.ib.active { background: var(--primary-light, #e8f0fe); color: var(--primary, #2563eb); font-weight: 600; }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
 .file-meta .ib {
   width: 22px; height: 22px; font-size: 11px; padding: 0;
 }
 #ocrAllBtn { min-width: 32px; font-size: 12px; transition: min-width 0.2s; }
+.ib-icon { width: 16px; height: 16px; display: block; object-fit: contain; pointer-events: none; }
+#selectToggleBtn { width: auto; min-width: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
 #ocrAllBtn:disabled { background: var(--accent-light); color: var(--accent); }
 .copy-menu {
   position: absolute; top: 100%; left: 0; z-index: 100;

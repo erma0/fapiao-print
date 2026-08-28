@@ -1331,7 +1331,7 @@ function updateOcrAllBtn() {
     btn.disabled = true;
     btn.title = '识别中 ' + (_ocrBatchTotal > 0 ? done + '/' + _ocrBatchTotal : '剩余' + remaining);
   } else {
-    btn.textContent = '\uD83D\uDD0D';
+    btn.innerHTML = '<img src="icons/ocr_32.png" alt="识别" class="ib-icon">';
     btn.disabled = false;
     btn.title = '一键识别';
   }
@@ -1959,6 +1959,7 @@ function renderFileList() {
   var realCount = filtered.filter(function(f) { return !f._placeholder; }).length;
   var sel = filtered.filter(function(f) { return f.checked; }).length;
   document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
+  updateSelectToggle();
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -2073,6 +2074,21 @@ function setAllCopies(e, n) {
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+// 合并的全选/取消全选切换按钮：已全选则取消，否则全选
+function toggleSelectAll() {
+  var realFiles = S.files.filter(function(f) { return !f._placeholder; });
+  var allChecked = realFiles.length > 0 && realFiles.every(function(f) { return f.checked; });
+  if (allChecked) deselectAll(); else selectAll();
+}
+// 根据当前勾选状态同步切换按钮的文案与外观
+function updateSelectToggle() {
+  var btn = document.getElementById('selectToggleBtn');
+  if (!btn) return;
+  var realFiles = S.files.filter(function(f) { return !f._placeholder; });
+  var allChecked = realFiles.length > 0 && realFiles.every(function(f) { return f.checked; });
+  if (allChecked) { btn.textContent = '◻ 取消全选'; btn.title = '取消全选'; btn.classList.add('active'); }
+  else { btn.textContent = '☑ 全选'; btn.title = '全选'; btn.classList.remove('active'); }
+}
 function deleteSelected() {
   if (!S.files.some(function(f) { return f.checked; })) return;
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
@@ -2125,6 +2141,22 @@ function clearAll() {
   updatePreview();
   updatePrintBtn();
   updateSummaryBtn();
+}
+
+function resetLayout() {
+  // 复原到「刚添加完文件」的显示状态：
+  // 保持当前选中的 M×N 网格、纸张规格/方向与边距/间距不变，
+  // 仅清除所有发票的手动槽位调整（缩放 / X/Y 偏移），回到干净对齐状态。
+  S.files.forEach(function(f) {
+    f.slotScale = 1;
+    f.slotOffsetX = 0;
+    f.slotOffsetY = 0;
+  });
+  if (S._fileAdjMap) S._fileAdjMap = {};
+  updateAdjPanel();
+  updatePreview();
+  saveSettings();
+  toast('已恢复默认排版布局');
 }
 
 // Click file item → navigate preview to the page containing this invoice
