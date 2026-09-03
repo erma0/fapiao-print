@@ -5,11 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.3.1-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.4.0-blue.svg)]()
 
 轻量桌面应用，专为批量打印电子发票设计。支持 PDF、OFD、图片等多格式导入，智能排版，一键打印或导出。
 
-提供 **轻量版** 和 **OCR 版**（含 PP-OCRv5 智能识别），单文件 exe 即开即用。
+提供 **轻量版** 和 **OCR 版**（含 PP-OCRv6 智能识别），单文件 exe 即开即用。
 
 ## ✨ 功能特性
 
@@ -27,7 +27,7 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 - **打印状态追踪**（v2.0.7）：三种过滤（全部/未打印/已打印），打印后自动标记绿色 ✓，状态持久化
 - **PDF 渲染双引擎**（v1.10.0+）：首选 WinRT 原生渲染（`Windows.Data.Pdf`），自动 fallback PDFium（Chromium 内核），兼容企业精简版/LTSC 系统
 - **PDF 文字层提取**（轻量版也可用）：解析 PDF 内容流 Tm+Tj/TJ 指令直接提取文字坐标，~5ms/页，无需 OCR 即可识别发票信息
-- **PP-OCRv5 智能识别**（OCR 版，适用于图片型 PDF 和图片）：文本优先 + 坐标回退双重架构，含税价 / 不含税价 / 税额数学验证配对，发票号码 / 日期 / 买卖方信息自动提取
+- **PP-OCRv6 智能识别**（OCR 版，适用于图片型 PDF 和图片）：文本优先 + 坐标回退双重架构，含税价 / 不含税价 / 税额数学验证配对，发票号码 / 日期 / 买卖方信息自动提取
 - **金额校验可视化**：OCR / PDF 提取金额求和校验失败时，发票卡片金额徽章 ⚠ 警告标识，hover 可查看含税/不含税/税额验证详情
 - **EXIF 方向自动修正**：导入图片/车票时自动读取 EXIF Orientation 旋转像素，PDF /Rotate 属性 + CropBox 坐标归一化保障页面方向正确
 - **发票查验**：一键跳转国家税务总局查验平台
@@ -98,7 +98,7 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 |------|------|
 | `发票酱_x64-setup.exe` | 轻量版安装包 |
 | `发票酱_x64_绿色版.exe` | 轻量版便携（单文件 exe，无需安装） |
-| `发票酱_x64_OCR版-setup.exe` | OCR 版安装包（含 PP-OCRv5） |
+| `发票酱_x64_OCR版-setup.exe` | OCR 版安装包（含 PP-OCRv6） |
 | `发票酱_x64_OCR绿色版.zip` | OCR 版便携（exe + models/） |
 
 > 💡 文字型 PDF / OFD 发票选轻量版即可自动提取金额和销售方信息；图片型 PDF 和图片需 OCR 版。
@@ -127,7 +127,7 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 | 批量重命名文件 | ✅ 访问文件系统 | ❌ 浏览器安全限制 |
 | 文件列表记忆 | ✅ 跨会话恢复 | ❌ 不支持 |
 | 矢量 PDF CJK 文字 | ✅ PDFium 引擎完整保真 | ⚠️ 部分嵌入字体可能缺失（可用「保存图片 PDF」兜底）|
-| OCR | ✅ PP-OCRv5 智能识别（OCR 版） | ❌ 无 OCR |
+| OCR | ✅ PP-OCRv6 智能识别（OCR 版） | ❌ 无 OCR |
 | 离线部署 | ✅ 单文件 exe | ✅ 纯离线，零网络 |
 
 ## 📋 使用说明
@@ -147,7 +147,7 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 | PDF 渲染 | WinRT + PDFium 双引擎 | WinRT 原生渲染优先，自动 fallback PDFium（Chromium 内核） |
 | PDF 生成 | printpdf 0.9 + lopdf 0.39 | JPEG 直通零质量损失、PDF 页面 Form XObject 全布局直通 |
 | OFD/XML 解析 | Rust 独立 crate (`invoice-engine/`) | 矢量 SVG 渲染 + 发票 XML/数电票字段直提 + 红章 Appearance 偏移叠加 + DrawParam 继承链 + ImageMask 遮罩合成 |
-| OCR | ocr-rs 2.2 (PP-OCRv5 + MNN) | 文本优先 + 坐标回退，对比度增强，Lanczos3 锐化（OCR 版可选） |
+| OCR | ocr-rs 2.4 (PP-OCRv6 + MNN) | 文本优先 + 坐标回退，对比度增强，Lanczos3 锐化（OCR 版可选） |
 | 图像处理 | image 0.25 (Rust) | 原生 WebP/TIFF 支持，kamadak-exif 方向自动修正 |
 | 打印 | Print Spooler API + PDFium + SumatraPDF + ShellExecuteW (Win32) | 静默打印（PDFium 直打 DC / SumatraPDF CLI）/ 弹窗确认 / PDF 阅读器 |
 
@@ -170,7 +170,7 @@ ticketchan/
 │   ├── invoice-engine/              # 发票引擎独立 crate（OFD SVG 渲染 + XML 数电票解析）
 │   │   ├── Cargo.toml              # 通过 path 依赖引入主项目
 │   │   └── src/lib.rs              # parse_ofd → OfdResult { svg, invoice_info } / parse_xml_invoice
-│   ├── models/                     # PP-OCRv5 MNN 模型（OCR 版打包用）
+│   ├── models/                     # PP-OCRv6 MNN 模型（OCR 版打包用）
 │   ├── Cargo.toml                  # ocr feature flag + lopdf 0.39
 │   ├── tauri.conf.json             # 轻量版配置
 │   └── tauri.ocr.conf.json         # OCR 版配置（含 models）

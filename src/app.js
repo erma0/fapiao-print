@@ -1239,7 +1239,7 @@ async function processFilesIncremental(paths) {
 }
 
 // NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl(), loadPdfFromDataUrlFast() removed.
-// PDF.js removed in v1.7.1 — all PDF rendering via WinRT native, all text extraction via PP-OCRv5.
+// PDF.js removed in v1.7.1 — all PDF rendering via WinRT native, all text extraction via PP-OCRv6.
 
 // =====================================================
 // Fast loading functions — show preview first, OCR in background

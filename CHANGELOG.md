@@ -1,5 +1,17 @@
 # 📋 更新日志
 
+## v2.4.0 — OCR 引擎升级 PP-OCRv6
+
+_2026-09-03_
+
+### ✨ 升级
+
+- **OCR 模型换代 PP-OCRv5 → PP-OCRv6**（OCR 版）：换用 PaddleOCR v3.7 发布的 PP-OCRv6 small 档模型（PPLCNetV4 统一骨干 + RepLKFPN 检测颈部 + EncoderWithLightSVTR 识别颈部），官方基准检测 Hmean 84.1%、识别准确率 81.3%，明显优于 v5 mobile 档；模型总体积反而缩小约 5MB（~20.4MB → ~15.1MB），OCR 版安装包更小
+- **ocr-rs 2.2 → 2.4.1**：上游库官方适配 v6 三档模型（tiny/small/medium），API 完全兼容，业务代码零改动；字符集换用 `ppocr_keys_v6_small.txt`（简中/繁中/英/日 + 46 种拉丁语系统一单模型）
+- **Rust 依赖批量更新**：`cargo update` 全量更新至 semver 兼容最新版
+
+---
+
 ## v2.3.1 — 去重安全加固与 OFD 渲染修复
 
 _2026-08-22_

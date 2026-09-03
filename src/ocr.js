@@ -639,7 +639,7 @@ async function applyOcrPdfPage(fileObj) {
 // =====================================================
 // v1.7.0 — Coordinate-first invoice extraction
 // =====================================================
-// Designed for PP-OCRv5's high-accuracy bbox output.
+// Designed for PP-OCR's high-accuracy bbox output (v5+).
 // Strategy: Use real OCR coordinates to locate fields directly,
 // then fall back to simple regex only when coordinates can't resolve.
 //
@@ -2902,7 +2902,7 @@ function _extractSeller(words, imgW, imgH) {
 
 /**
  * v1.7.0 — Coordinate-first invoice info extraction.
- * Uses PP-OCRv5's accurate bbox to locate fields directly by position,
+ * Uses PP-OCR's accurate bbox to locate fields directly by position,
  * with simple regex fallback for edge cases.
  *
  * Input: { text, lines, imgW, imgH } — OCR result with coordinates

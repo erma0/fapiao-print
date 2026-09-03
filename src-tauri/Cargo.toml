@@ -1,6 +1,6 @@
 [package]
 name = "ticketchan"
-version = "2.3.1"
+version = "2.4.0"
 description = "发票酱"
 authors = ["ticketchan"]
 license = "MIT"
@@ -37,7 +37,7 @@ lopdf = "0.39"
 encoding_rs = "0.8"
 rayon = "1.10"
 kamadak-exif = "0.5"
-ocr-rs = { version = "2.2", optional = true }
+ocr-rs = { version = "2.4", optional = true }
 invoice-engine = { path = "invoice-engine" }
 flate2 = "1.1.9"
 tar = "0.4"

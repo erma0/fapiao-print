@@ -2,7 +2,7 @@
 
 ## 项目概览
 
-- **版本**: v2.3.1
+- **版本**: v2.4.0
 
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
 
@@ -12,7 +12,7 @@
 
 - **OFD/XML 解析**: `src-tauri/invoice-engine/` — 独立 crate（v2.0.6 从 ofd-engine 更名，v2.0.7 整合 XML 数电票）
 
-- **双版本**: 轻量版 / OCR版（含 PP-OCRv5）
+- **双版本**: 轻量版 / OCR版（含 PP-OCRv6）
 
 ## 常用命令
 

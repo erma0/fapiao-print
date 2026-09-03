@@ -104,9 +104,9 @@ function findNsisInstaller(label) {
  */
 function verifyModels() {
   const requiredModels = [
-    'PP-OCRv5_mobile_det.mnn',
-    'PP-OCRv5_mobile_rec.mnn',
-    'ppocr_keys_v5.txt',
+    'PP-OCRv6_small_det.mnn',
+    'PP-OCRv6_small_rec.mnn',
+    'ppocr_keys_v6_small.txt',
   ];
   if (!fs.existsSync(MODELS_SRC)) {
     throw new Error(`OCR 模型目录不存在: ${MODELS_SRC}`);
@@ -207,7 +207,7 @@ async function main() {
 
   // ─── Step 2: OCR 版编译 ─────────────────────────
   console.log(`\n${'─'.repeat(60)}`);
-  console.log('  [2/4] 编译 OCR 版 (含 PP-OCRv5)...');
+  console.log('  [2/4] 编译 OCR 版 (含 PP-OCRv6)...');
   console.log(`${'─'.repeat(60)}`);
   cleanNsisBundle();
   run('npx tauri build --features ocr --config src-tauri/tauri.ocr.conf.json');
