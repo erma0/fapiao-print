@@ -2192,7 +2192,9 @@ function clickFileItem(idx, event) {
     S.selectedSlot = activeIdx % perPage;
     updatePreview();
   } else {
+    // 不参与排版的文件（如 XML 数电票）勾选后仍需刷新打印按钮
     S.selectedSlot = -1;
+    updatePrintBtn();
   }
 
   updateActiveFileHighlight();
