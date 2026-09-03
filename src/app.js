@@ -2247,8 +2247,11 @@ function clickFileItem(idx, event) {
     S.selectedSlot = activeIdx % perPage;
     updatePreview();
   } else {
-    // 不参与排版的文件（如 XML 数电票）勾选后仍需刷新打印按钮
+    // 不参与排版的文件（如 XML 数电票）：清除预览槽位选中态并刷新面板
     S.selectedSlot = -1;
+    var selEl = document.querySelector('.invoice-slot.selected');
+    if (selEl) selEl.classList.remove('selected');
+    updateAdjPanel();
     updatePrintBtn();
   }
 
