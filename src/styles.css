@@ -225,6 +225,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 #fileList.grid .file-thumb { width: 100%; height: auto; aspect-ratio: 3 / 2; }
 #fileList.grid .file-thumb img { object-fit: contain; background: white; }
 #fileList.grid .file-check { position: absolute; top: 4px; left: 4px; z-index: 3; width: 16px; height: 16px; background: rgba(255,255,255,0.85); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+#fileList.grid .file-check.checked { background: var(--accent); border-color: var(--accent); }
+#fileList.grid .file-check.checked::after { font-size: 12px; }
 #fileList.grid .card-actions {
   position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; justify-content: flex-end; gap: 1px;
   padding: 2px 2px 14px; background: linear-gradient(rgba(0,0,0,0.5), transparent);
