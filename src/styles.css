@@ -36,7 +36,6 @@ html.dark select, html.dark input[type="number"], html.dark input[type="text"] {
   background: #1a1a2e; color: #e2e8f0; border-color: #2a2a4a;
 }
 html.dark select option { background: #16213e; color: #e2e8f0; }
-html.dark .upload-zone { background: #1a1a2e; }
 html.dark .file-item { border-bottom-color: #2a2a4a; }
 html.dark .file-item:hover { background: #1e2a4a; }
 html.dark .file-item.active-item { background: #1e2a4a; box-shadow: inset 3px 0 0 #5b8def; }
@@ -121,16 +120,6 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .sidebar-panel.hidden { display: none; }
 .sidebar-panel-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
 .sidebar-panel-footer { flex-shrink: 0; }
-
-/* ===== Upload ===== */
-.upload-zone {
-  margin: 12px; border: 2.5px dashed var(--border); border-radius: var(--radius);
-  padding: 24px 14px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--surface2);
-}
-.upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); background: var(--accent-light); }
-.upload-icon { font-size: 32px; margin-bottom: 6px; }
-.upload-text { font-size: 14px; color: var(--text-secondary); font-weight: 500; }
-.upload-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
 /* ===== File list ===== */
 .file-header {

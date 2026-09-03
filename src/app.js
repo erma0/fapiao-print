@@ -1809,17 +1809,6 @@ function loadFileFast(file) {
   });
 }
 
-// Drag & Drop (browser fallback)
-function handleDragOver(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.add('drag-over'); }
-function handleDragLeave(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.remove('drag-over'); }
-async function handleDrop(e) {
-  e.preventDefault(); e.stopPropagation();
-  document.getElementById('dropZone').classList.remove('drag-over');
-  if (e.dataTransfer.files && e.dataTransfer.files.length) {
-    await processFiles(Array.from(e.dataTransfer.files));
-  }
-}
-
 // =====================================================
 // File list management
 // =====================================================
