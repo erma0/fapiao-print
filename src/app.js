@@ -1426,26 +1426,40 @@ function updateFileItem(fileObj) {
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
   var ab = buildAmtBadge(f);
-  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
-  var metaEl = items[idx].querySelector('.file-meta');
-  var sellerEl = items[idx].querySelector('.file-seller');
-  if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
-  if (sellerEl) {
-    sellerEl.innerHTML = sb;
-    sellerEl.title = f.sellerName || '';
-    sellerEl.style.display = sb ? '' : 'none';
-  } else if (sb) {
-    // .file-seller didn't exist at render time (no sellerName yet), insert it now
-    var nameEl = items[idx].querySelector('.file-name');
-    if (nameEl && nameEl.parentElement) {
-      var newSeller = document.createElement('div');
-      newSeller.className = 'file-seller';
-      newSeller.title = f.sellerName || '';
-      newSeller.innerHTML = sb;
-      nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+  var pd = f._printed ? '<span class="printed-dot" title="已打印">\u2713</span>' : '';
+  if (S.fileView === 'grid') {
+    // grid 卡片：更新 card-meta（与 renderFileList grid 分支字段顺序一致）
+    var cardMetaEl = items[idx].querySelector('.card-meta');
+    if (cardMetaEl) {
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">\u26A0</span>' : '';
+      cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb;
+    }
+  } else {
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    // 只更新 .file-meta-left，保留 file-meta-right 操作按钮与布局结构
+    var leftEl = items[idx].querySelector('.file-meta-left');
+    if (leftEl) {
+      var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
+      leftEl.innerHTML = pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab;
+    }
+    var sellerEl = items[idx].querySelector('.file-seller');
+    if (sellerEl) {
+      sellerEl.innerHTML = sb;
+      sellerEl.title = f.sellerName || '';
+      sellerEl.style.display = sb ? '' : 'none';
+    } else if (sb) {
+      // .file-seller didn't exist at render time (no sellerName yet), insert it now
+      var nameEl = items[idx].querySelector('.file-name');
+      if (nameEl && nameEl.parentElement) {
+        var newSeller = document.createElement('div');
+        newSeller.className = 'file-seller';
+        newSeller.title = f.sellerName || '';
+        newSeller.innerHTML = sb;
+        nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+      }
     }
   }
-  // Update per-file OCR button state
+  // Update per-file OCR button state (both views share .ocr-btn)
   var ocrBtn = items[idx].querySelector('.ocr-btn');
   if (ocrBtn) {
     if (f._ocrPending) {
@@ -1987,8 +2001,8 @@ function renderFileList() {
         gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
           '<button class="ib card-ib' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
           (hasOcr ? (f._ocrPending
-            ? '<button class="ib card-ib" disabled title="识别中"><span class="ocr-spinner"></span></button>'
-            : '<button class="ib card-ib" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>') : '') +
+            ? '<button class="ib card-ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
+            : '<button class="ib card-ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>') : '') +
           '<button class="ib card-ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button>' +
           '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
       } else {
