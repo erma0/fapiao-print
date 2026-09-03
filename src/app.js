@@ -65,6 +65,7 @@ var S = {
   amtMode: 'tax',
   printedFilter: 'all',
   fileFilter: 'all',
+  fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
@@ -1238,7 +1239,7 @@ async function processFilesIncremental(paths) {
 }
 
 // NOTE: loadFile(), loadFileFromDataUrl(), loadPdfFromDataUrl(), loadPdfFromDataUrlFast() removed.
-// PDF.js removed in v1.7.1 — all PDF rendering via WinRT native, all text extraction via PP-OCRv5.
+// PDF.js removed in v1.7.1 — all PDF rendering via WinRT native, all text extraction via PP-OCRv6.
 
 // =====================================================
 // Fast loading functions — show preview first, OCR in background
@@ -1425,26 +1426,56 @@ function updateFileItem(fileObj) {
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
   var ab = buildAmtBadge(f);
-  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
-  var metaEl = items[idx].querySelector('.file-meta');
-  var sellerEl = items[idx].querySelector('.file-seller');
-  if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
-  if (sellerEl) {
-    sellerEl.innerHTML = sb;
-    sellerEl.title = f.sellerName || '';
-    sellerEl.style.display = sb ? '' : 'none';
-  } else if (sb) {
-    // .file-seller didn't exist at render time (no sellerName yet), insert it now
-    var nameEl = items[idx].querySelector('.file-name');
-    if (nameEl && nameEl.parentElement) {
-      var newSeller = document.createElement('div');
-      newSeller.className = 'file-seller';
-      newSeller.title = f.sellerName || '';
-      newSeller.innerHTML = sb;
-      nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+  var pd = f._printed ? '<span class="printed-dot" title="已打印">\u2713</span>' : '';
+  if (S.fileView === 'grid') {
+    // grid 卡片：更新 card-meta（与 renderFileList grid 分支字段顺序一致）
+    var cardMetaEl = items[idx].querySelector('.card-meta');
+    if (cardMetaEl) {
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">\u26A0</span>' : '';
+      cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb + '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+    }
+    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sellerLine = items[idx].querySelector('.card-seller');
+    if (sellerLine) {
+      sellerLine.innerHTML = gsellerHtml;
+      sellerLine.title = f.sellerName || '';
+      sellerLine.style.display = gsellerHtml ? '' : 'none';
+    } else if (gsellerHtml) {
+      var cardNameEl = items[idx].querySelector('.card-name');
+      if (cardNameEl && cardNameEl.parentElement) {
+        var newSellerLine = document.createElement('div');
+        newSellerLine.className = 'card-seller';
+        newSellerLine.title = f.sellerName || '';
+        newSellerLine.innerHTML = gsellerHtml;
+        cardNameEl.parentElement.insertBefore(newSellerLine, cardNameEl.nextSibling);
+      }
+    }
+  } else {
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    // 只更新 .file-meta-left，保留 file-meta-right 操作按钮与布局结构
+    var leftEl = items[idx].querySelector('.file-meta-left');
+    if (leftEl) {
+      var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
+      leftEl.innerHTML = pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab;
+    }
+    var sellerEl = items[idx].querySelector('.file-seller');
+    if (sellerEl) {
+      sellerEl.innerHTML = sb;
+      sellerEl.title = f.sellerName || '';
+      sellerEl.style.display = sb ? '' : 'none';
+    } else if (sb) {
+      // .file-seller didn't exist at render time (no sellerName yet), insert it now
+      var nameEl = items[idx].querySelector('.file-name');
+      if (nameEl && nameEl.parentElement) {
+        var newSeller = document.createElement('div');
+        newSeller.className = 'file-seller';
+        newSeller.title = f.sellerName || '';
+        newSeller.innerHTML = sb;
+        nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+      }
     }
   }
-  // Update per-file OCR button state
+  // Update per-file OCR button state (both views share .ocr-btn)
   var ocrBtn = items[idx].querySelector('.ocr-btn');
   if (ocrBtn) {
     if (f._ocrPending) {
@@ -1809,17 +1840,6 @@ function loadFileFast(file) {
   });
 }
 
-// Drag & Drop (browser fallback)
-function handleDragOver(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.add('drag-over'); }
-function handleDragLeave(e) { e.preventDefault(); e.stopPropagation(); document.getElementById('dropZone').classList.remove('drag-over'); }
-async function handleDrop(e) {
-  e.preventDefault(); e.stopPropagation();
-  document.getElementById('dropZone').classList.remove('drag-over');
-  if (e.dataTransfer.files && e.dataTransfer.files.length) {
-    await processFiles(Array.from(e.dataTransfer.files));
-  }
-}
-
 // =====================================================
 // File list management
 // =====================================================
@@ -1959,6 +1979,8 @@ function renderFileList() {
   var realCount = filtered.filter(function(f) { return !f._placeholder; }).length;
   var sel = filtered.filter(function(f) { return f.checked; }).length;
   document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
+  syncSelectAllBtn();
+  syncDeleteBtn();
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -1966,6 +1988,9 @@ function renderFileList() {
   // Snapshot and clear new-file IDs so animation only plays once
   var currentNewIds = _newFileIds;
   _newFileIds = {};
+
+  var grid = S.fileView === 'grid';
+  list.classList.toggle('grid', grid);
 
   list.innerHTML = S.files.map(function(f, i) {
     var cls = 'file-item';
@@ -1975,6 +2000,42 @@ function renderFileList() {
     var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
       (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
+    if (grid) {
+      if (f._placeholder) {
+        return '<div class="file-item file-card placeholder-item" data-idx="' + i + '"' + hideStyle + '>' +
+          '<div class="file-thumb"><div class="blank-thumb">\u25A6</div></div>' +
+          '<div class="card-name">空白占位</div>' +
+          '<div class="card-meta"><button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除空白占位">\u2715</button></div></div>';
+      }
+      var gcb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '\u4efd</span>' : '';
+      var grb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
+      var gab = buildAmtBadge(f);
+      var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+      var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
+      var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
+      var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
+      var gacts = '';
+      if (!f._loading) {
+        gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
+          '<button class="ib card-ib' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
+          (hasOcr ? (f._ocrPending
+            ? '<button class="ib card-ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
+            : '<button class="ib card-ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>') : '') +
+          '<button class="ib card-ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button>' +
+          '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      } else {
+        gacts = '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      }
+      return '<div class="' + cls + ' file-card" data-idx="' + i + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+        '<div class="file-thumb">' + gthumb + '<div class="type-badge">' + gtype + '</div>' +
+        '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
+        '<div class="card-actions">' + gacts + '</div></div>' +
+        '<div class="card-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' +
+        gseller +
+        '<div class="card-meta">' + gpd + gab + gcb + grb + gdupb + gsize + '</div></div>';
+    }
     if (f._placeholder) {
       var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
         '<div class="file-meta-sep"></div>' +
@@ -2012,7 +2073,7 @@ function renderFileList() {
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
         '<button class="ib sort-btn' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
         ocrBtnHtml + '<button class="ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button><button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button></div>';
-    return '<div class="' + cls + '" data-idx="' + i + '" data-printed="' + (f._printed ? '1' : '0') + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+    return '<div class="' + cls + '" data-idx="' + i + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + typeBadgeText + '</div></div>' +
       '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' + (sb ? '<div class="file-seller" title="' + escHtml(f.sellerName) + '">' + sb + '</div>' : '') + '<div class="file-meta">' + metaActions + '</div></div>' +
@@ -2027,6 +2088,19 @@ function renderFileList() {
 
   list.scrollTop = scrollTop;
   updateAmountSummary();
+}
+function toggleFileView() {
+  S.fileView = S.fileView === 'grid' ? 'list' : 'grid';
+  syncFileViewBtn();
+  saveSettings();
+  renderFileList();
+}
+function syncFileViewBtn() {
+  var btn = document.getElementById('fileViewBtn');
+  if (!btn) return;
+  var grid = S.fileView === 'grid';
+  btn.textContent = grid ? '\u2630' : '\u25A6';
+  btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
   var menu = document.getElementById('copyMenu');
@@ -2073,6 +2147,26 @@ function setAllCopies(e, n) {
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function toggleSelectAll() {
+  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
+  if (all) deselectAll(); else selectAll();
+}
+function syncSelectAllBtn() {
+  var btn = document.getElementById('selectAllBtn');
+  if (!btn) return;
+  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
+  btn.textContent = all ? '\u25FB' : '\u2611';
+  btn.title = all ? '取消全选' : '全选';
+}
+function syncDeleteBtn() {
+  var btn = document.getElementById('deleteBtn');
+  if (!btn) return;
+  var n = S.files.filter(function(f) { return f.checked; }).length;
+  btn.disabled = n === 0;
+  btn.title = n > 0 ? '删除选中 ' + n + ' 张' : '未勾选发票';
+}
 function deleteSelected() {
   if (!S.files.some(function(f) { return f.checked; })) return;
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
@@ -2150,7 +2244,15 @@ function clickFileItem(idx, event) {
   }
   if (activeIdx >= 0) {
     S.currentPage = Math.floor(activeIdx / perPage);
+    S.selectedSlot = activeIdx % perPage;
     updatePreview();
+  } else {
+    // 不参与排版的文件（如 XML 数电票）：清除预览槽位选中态并刷新面板
+    S.selectedSlot = -1;
+    var selEl = document.querySelector('.invoice-slot.selected');
+    if (selEl) selEl.classList.remove('selected');
+    updateAdjPanel();
+    updatePrintBtn();
   }
 
   updateActiveFileHighlight();
@@ -2962,6 +3064,7 @@ function updatePreview() {
   document.getElementById('stLayout').textContent = S.feat.reimburse ? '报销单' : (S.layout.rows + '×' + S.layout.cols);
   var ps = document.getElementById('paperSize').value;
   document.getElementById('stPaper').textContent = ps + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
+  updatePrintBtn();
 
   if (!files.length) {
     document.getElementById('emptyState').style.display = 'flex';
@@ -3089,6 +3192,7 @@ function saveSettings() {
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
+  o.fileView = S.fileView;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3165,6 +3269,8 @@ function loadSettings() {
   // from a user-customized three-item list, so do not overwrite them.
   if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
+  if (o.fileView === 'grid') S.fileView = 'grid';
+  syncFileViewBtn();
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
@@ -3473,7 +3579,8 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// Ctrl+Wheel zoom
+// Wheel: selected slot + cursor over it → zoom slot; plain → flip page; Ctrl → zoom view
+var _wheelFlipTs = 0; // 上次滚轮翻页时间，节流防触控板惯性连翻
 document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   if (!e.ctrlKey && S.selectedSlot >= 0) {
     var slotEl = e.target.closest('.invoice-slot');
@@ -3491,7 +3598,24 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
       }
     }
   }
-  if (!e.ctrlKey) return;
+  if (!e.ctrlKey) {
+    // Plain wheel: flip pages, unless the zoomed view still has content to scroll
+    if (e.deltaY !== 0 && S.totalPages > 1) {
+      var wrap = this;
+      var canScroll = wrap.scrollHeight > wrap.clientHeight + 1;
+      var atTop = wrap.scrollTop <= 0;
+      var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
+      if (!canScroll || (e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop)) {
+        e.preventDefault();
+        var now = Date.now();
+        if (now - _wheelFlipTs > 150) {
+          _wheelFlipTs = now;
+          if (e.deltaY > 0) nextPage(); else prevPage();
+        }
+      }
+    }
+    return;
+  }
   e.preventDefault();
   var step = 5;
   var curZoom = S.viewZoom === 0 ? getFitZoom() : S.viewZoom;

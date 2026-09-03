@@ -1,6 +1,6 @@
 {
   "name": "ticketchan",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "发票酱 - Tauri 桌面应用",
   "scripts": {
     "dev": "tauri dev",
@@ -13,8 +13,7 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/cli": "^2"
-  },
-  "dependencies": {}
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/cli": "^2.11.4"
+  }
 }

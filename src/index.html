@@ -27,11 +27,6 @@
 
     <div class="sidebar-panel" id="panel-files">
       <div class="sidebar-panel-scroll">
-        <div class="upload-zone" id="dropZone" onclick="triggerUpload()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
-          <div class="upload-icon">📂</div>
-          <div class="upload-text">拖入发票或点击选择</div>
-          <div class="upload-hint">支持 PDF / 图片 / OFD 格式</div>
-        </div>
         <div class="file-header">
           <div class="file-count" id="fileCount">0 张，已选 0</div>
           <div class="file-actions">
@@ -53,9 +48,9 @@
                 <div class="copy-menu-item" onclick="sortByDate(-1)">📅↓ 新→旧</div>
               </div>
             </div>
-            <button class="ib" onclick="selectAll()" title="全选">☑</button>
-            <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
-            <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
+            <button class="ib" id="selectAllBtn" onclick="toggleSelectAll()" title="全选">☑</button>
+            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图">▦</button>
+            <button class="ib danger" id="deleteBtn" onclick="deleteSelected()" title="删除选中">🗑</button>
           </div>
         </div>
         <div class="print-filter-bar" id="printFilterBar">
@@ -325,12 +320,6 @@
       <div class="toolbar-group" id="quickLayoutBar"></div>
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm" onclick="prevPage()" id="prevBtn" disabled>◀</button>
-        <span class="page-info" id="pageInfo">— / —</span>
-        <button class="btn btn-sm" onclick="nextPage()" id="nextBtn" disabled>▶</button>
-      </div>
-      <div class="toolbar-sep"></div>
-      <div class="toolbar-group">
         <button class="btn btn-sm btn-icon" onclick="changeZoom(-5)" title="缩小 (Ctrl+−)" style="font-size:16px;font-weight:700">−</button>
         <div class="zoom-ctrl" id="zoomCtrl">
           <span id="zoomLabel" onclick="toggleZoomMenu()">自适应</span>
@@ -361,16 +350,17 @@
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">📄</div>
         <div style="font-size:17px;font-weight:700;color:var(--text-secondary)">尚未添加发票</div>
-        <div style="font-size:13px">拖入文件或点击添加<br>Ctrl+O 添加 | Ctrl+P 打印 | ←→ 翻页</div>
+        <div style="font-size:13px">拖入发票或点击添加（支持 PDF / 图片 / OFD / XML）<br>Ctrl+O 添加 | Ctrl+P 打印 | ←→/滚轮 翻页</div>
         <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
     </div>
 
     <div class="page-nav" id="pageNav" style="display:none">
-      <button class="btn btn-sm btn-icon" onclick="prevPage()">◀</button>
+      <button class="btn btn-sm btn-icon" onclick="prevPage()" id="prevBtn" disabled>◀</button>
       <div class="page-dots" id="pageDots"></div>
-      <button class="btn btn-sm btn-icon" onclick="nextPage()">▶</button>
+      <span class="page-info" id="pageInfo">— / —</span>
+      <button class="btn btn-sm btn-icon" onclick="nextPage()" id="nextBtn" disabled>▶</button>
     </div>
 
     <div class="statusbar">

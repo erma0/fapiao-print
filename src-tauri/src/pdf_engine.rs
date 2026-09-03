@@ -2821,9 +2821,9 @@ static OCR_ENGINE: Mutex<Option<ocr_rs::OcrEngine>> = Mutex::new(None);
 
 /// Get or create the OCR engine.
 /// Model files are expected alongside the executable:
-///   - PP-OCRv5_mobile_det.mnn  (detection model)
-///   - PP-OCRv5_mobile_rec.mnn  (recognition model)
-///   - ppocr_keys_v5.txt        (character set, 18383 chars)
+///   - PP-OCRv6_small_det.mnn   (detection model)
+///   - PP-OCRv6_small_rec.mnn   (recognition model)
+///   - ppocr_keys_v6_small.txt  (character set)
 #[cfg(feature = "ocr")]
 fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrEngine>>, String> {
     let mut lock = OCR_ENGINE.lock().map_err(|e| format!("OCR引擎锁失败: {}", e))?;
@@ -2838,20 +2838,20 @@ fn get_ocr_engine() -> Result<std::sync::MutexGuard<'static, Option<ocr_rs::OcrE
         // Tauri 2.x bundle.resources preserves directory structure:
         // "models/X.mnn" → <exe_dir>/models/X.mnn
         // Also try <exe_dir>/X.mnn as fallback (green portable deployment)
-        let det_path = if exe_dir.join("models").join("PP-OCRv5_mobile_det.mnn").exists() {
-            exe_dir.join("models").join("PP-OCRv5_mobile_det.mnn")
+        let det_path = if exe_dir.join("models").join("PP-OCRv6_small_det.mnn").exists() {
+            exe_dir.join("models").join("PP-OCRv6_small_det.mnn")
         } else {
-            exe_dir.join("PP-OCRv5_mobile_det.mnn")
+            exe_dir.join("PP-OCRv6_small_det.mnn")
         };
-        let rec_path = if exe_dir.join("models").join("PP-OCRv5_mobile_rec.mnn").exists() {
-            exe_dir.join("models").join("PP-OCRv5_mobile_rec.mnn")
+        let rec_path = if exe_dir.join("models").join("PP-OCRv6_small_rec.mnn").exists() {
+            exe_dir.join("models").join("PP-OCRv6_small_rec.mnn")
         } else {
-            exe_dir.join("PP-OCRv5_mobile_rec.mnn")
+            exe_dir.join("PP-OCRv6_small_rec.mnn")
         };
-        let keys_path = if exe_dir.join("models").join("ppocr_keys_v5.txt").exists() {
-            exe_dir.join("models").join("ppocr_keys_v5.txt")
+        let keys_path = if exe_dir.join("models").join("ppocr_keys_v6_small.txt").exists() {
+            exe_dir.join("models").join("ppocr_keys_v6_small.txt")
         } else {
-            exe_dir.join("ppocr_keys_v5.txt")
+            exe_dir.join("ppocr_keys_v6_small.txt")
         };
 
         // Validate model files exist
