@@ -325,12 +325,6 @@
       <div class="toolbar-group" id="quickLayoutBar"></div>
       <div class="toolbar-sep"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm" onclick="prevPage()" id="prevBtn" disabled>◀</button>
-        <span class="page-info" id="pageInfo">— / —</span>
-        <button class="btn btn-sm" onclick="nextPage()" id="nextBtn" disabled>▶</button>
-      </div>
-      <div class="toolbar-sep"></div>
-      <div class="toolbar-group">
         <button class="btn btn-sm btn-icon" onclick="changeZoom(-5)" title="缩小 (Ctrl+−)" style="font-size:16px;font-weight:700">−</button>
         <div class="zoom-ctrl" id="zoomCtrl">
           <span id="zoomLabel" onclick="toggleZoomMenu()">自适应</span>
@@ -368,9 +362,10 @@
     </div>
 
     <div class="page-nav" id="pageNav" style="display:none">
-      <button class="btn btn-sm btn-icon" onclick="prevPage()">◀</button>
+      <button class="btn btn-sm btn-icon" onclick="prevPage()" id="prevBtn" disabled>◀</button>
       <div class="page-dots" id="pageDots"></div>
-      <button class="btn btn-sm btn-icon" onclick="nextPage()">▶</button>
+      <span class="page-info" id="pageInfo">— / —</span>
+      <button class="btn btn-sm btn-icon" onclick="nextPage()" id="nextBtn" disabled>▶</button>
     </div>
 
     <div class="statusbar">
