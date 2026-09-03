@@ -1963,6 +1963,7 @@ function renderFileList() {
   var realCount = filtered.filter(function(f) { return !f._placeholder; }).length;
   var sel = filtered.filter(function(f) { return f.checked; }).length;
   document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
+  syncSelectAllBtn();
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -2126,6 +2127,19 @@ function setAllCopies(e, n) {
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function toggleSelectAll() {
+  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
+  if (all) deselectAll(); else selectAll();
+}
+function syncSelectAllBtn() {
+  var btn = document.getElementById('selectAllBtn');
+  if (!btn) return;
+  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
+  btn.textContent = all ? '\u25FB' : '\u2611';
+  btn.title = all ? '取消全选' : '全选';
+}
 function deleteSelected() {
   if (!S.files.some(function(f) { return f.checked; })) return;
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
