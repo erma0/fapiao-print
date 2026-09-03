@@ -133,6 +133,38 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 
 - **占位持久化**: 占位无 `_filePath`，saveSettings 不保存，重启不恢复（留白为临时布局）
 
+### 文件列表双视图 (v2.4.0)
+
+左侧文件列表支持 列表/方格 两种视图，`S.fileView`（默认 `'list'` / `'grid'`）。
+
+- **切换**: `toggleFileView()` + `syncFileViewBtn()`（`#fileViewBtn` ☰/▦），选择随设置持久化（`o.fileView`）
+- **渲染**: `renderFileList()` grid 分支输出 `.file-card`（缩略图 `.file-thumb` + 类型徽章 + 勾选框 + hover 操作条 `.card-actions` + `.card-name` / `.card-meta`）
+- **增量更新**: `updateFileItem()` 按视图分流——grid 更新 `.card-meta`（已打印✓ + 金额徽章 + 份数 + 旋转 + ⚠重复），list 只重写 `.file-meta-left` 保留右侧操作按钮；OCR 按钮两种视图统一用 `.ocr-btn` 类定位
+- **空态提示**: 拖入提示合并至预览区空状态（原左上角拖入选区已移除）
+
+### 预览滚轮交互 (v2.4.0)
+
+`previewWrap` wheel 监听按优先级三分支：
+
+- 选中槽位 + 光标悬停该槽位 → 滚轮缩放单票（5%/步）
+- Ctrl + 滚轮 → 缩放整体视图
+- 普通滚轮 → 翻页；视图内容可滚动时先滚动，触顶/触底再翻页
+- `_wheelFlipTs` 150ms 节流防触控板惯性连翻
+
+### 列表与版面双向联动 (v2.4.0)
+
+- **正向**: `clickFileItem()` — activeIdx → `S.currentPage = ⌊idx/perPage⌋` + `S.selectedSlot = idx % perPage`，跳页并选中槽位；未命中（如 XML 数电票）清空 `selectedSlot`
+- **反向**: `syncSidebarToSelectedSlot()`（v2.2.2）— 选中槽位高亮列表并滚动定位
+- 每页 slot 数一律走 `getPerPage(s)`（含报销单单列分段），禁止直接写 `cols * rows`
+
+### 车票检测加严 (v2.4.0)
+
+`_detectInvoiceType()` ticket 判定改为强标记直判 + 弱信号双组确认，防增值税发票误判为车票。
+
+- **强标记**: 「铁路电子客票」「电子客票号」正则直判 ticket
+- **弱信号**: `_countTicketSignalGroups()` 统计 13 组关键词（车次/票价/座位/席别/检票/进站/出站/铁路/乘车/二等/一等/动车/高铁），≥2 组才判 ticket
+- **标签分级**: `getTicketTypeLabel()` 细分类型标签为 铁路电子客票 / 火车票 / 出租车票 / 网约车票 / 车票（兜底）；原 `isTicketText` 死代码已删除
+
 ### PDF 渲染双引擎 (v1.9.10+)
 
 首选 **WinRT PDF**（系统组件）→ 失败时自动回退 **PDFium 渲染**
@@ -546,7 +578,7 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 
 | 文件          | 职责                                                                                |
 | ----------- | --------------------------------------------------------------------------------- |
-| `app.js`    | 主入口、状态管理(S)、文件加载（批量IPC+并行渲染）、Tauri IPC、设置持久化、批量文字提取分发、XML数电票加载                    |
+| `app.js`    | 主入口、状态管理(S)、文件加载（批量IPC+并行渲染）、文件列表双视图、Tauri IPC、设置持久化、批量文字提取分发、XML数电票加载                    |
 | `ocr.js`    | 发票字段提取、金额解析、中文大写解析、类型检测、金额校验                                                      |
 | `layout.js` | 布局计算、预览渲染、单票调整拖拽、slot 交互                                                          |
 | `print.js`  | 打印/导出、构建 LayoutRenderRequest、智能 PDF 缓存（deepEqual）、四种打印模式分发、PDFium→SumatraPDF 自动降级 |
@@ -665,4 +697,3 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 2. **CHANGELOG.md**：补充新版本更新日志，包含新功能/修复/优化/依赖变更等
 3. **AGENTS.md**：更新版本号、架构要点（如有变更）
 4. **其他文档**：如有新增配置/命令/架构变更，同步更新对应文档
-
