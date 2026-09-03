@@ -3474,7 +3474,7 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// Ctrl+Wheel zoom
+// Wheel: selected slot + cursor over it → zoom slot; plain → flip page; Ctrl → zoom view
 document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   if (!e.ctrlKey && S.selectedSlot >= 0) {
     var slotEl = e.target.closest('.invoice-slot');
@@ -3492,7 +3492,20 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
       }
     }
   }
-  if (!e.ctrlKey) return;
+  if (!e.ctrlKey) {
+    // Plain wheel: flip pages, unless the zoomed view still has content to scroll
+    if (e.deltaY !== 0 && S.totalPages > 1) {
+      var wrap = this;
+      var canScroll = wrap.scrollHeight > wrap.clientHeight + 1;
+      var atTop = wrap.scrollTop <= 0;
+      var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
+      if (!canScroll || (e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop)) {
+        e.preventDefault();
+        if (e.deltaY > 0) nextPage(); else prevPage();
+      }
+    }
+    return;
+  }
   e.preventDefault();
   var step = 5;
   var curZoom = S.viewZoom === 0 ? getFitZoom() : S.viewZoom;
