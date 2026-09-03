@@ -140,19 +140,12 @@ function parseChineseNumeral(str) {
 }
 
 /**
- * Detect if text is a train/ride ticket (no seller info needed)
- */
-function isTicketText(text) {
-  var t = text.substring(0, 500);
-  return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位|出\s*租|打\s*车|网\s*约|滴\s*滴)/.test(t);
-}
-
-/**
  * Get a descriptive label for ticket type (shown as sellerName for tickets)
  */
 function getTicketTypeLabel(text) {
   var t = text.substring(0, 500);
-  if (/(?:铁\s*路|动\s*车|高\s*铁|火\s*车|车\s*次|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '铁路电子客票';
+  if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(t)) return '铁路电子客票';
+  if (/(?:火\s*车|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '火车票';
   if (/(?:出\s*租|打\s*车|的\s*士)/.test(t)) return '出租车票';
   if (/(?:网\s*约|滴\s*滴|专\s*车|快\s*车)/.test(t)) return '网约车票';
   return '车票';
@@ -2664,6 +2657,19 @@ function _findNearbyAmount(words, kw, opts) {
   return candidates[0];
 }
 
+function _countTicketSignalGroups(text) {
+  var groups = [
+    '车次', '票价', '座位', '席别', '检票', '进站', '出站',
+    '铁路', '乘车', '二等', '一等', '动车', '高铁'
+  ];
+  var count = 0;
+  for (var i = 0; i < groups.length; i++) {
+    var re = new RegExp(groups[i].split('').join('\\s*'));
+    if (re.test(text)) count++;
+  }
+  return count;
+}
+
 /**
  * Detect invoice type from word positions.
  * Returns: 'vat' | 'ticket' | 'ride' | 'unknown'
@@ -2671,11 +2677,10 @@ function _findNearbyAmount(words, kw, opts) {
 function _detectInvoiceType(words, imgW, imgH) {
   // Build full text from all words (not just top 60%) for more reliable detection
   var allText = words.map(function(w) { return w.normText; }).join('');
-  // Check for train ticket keywords — scan ALL words (not just top 60%)
-  // because PDF text extraction may have different layout than OCR,
-  // and ticket-specific keywords (票价, 车次, 二等座, etc.) can be anywhere.
-  // Also check for "铁路电子客票" / "电子客票号" which are definitive ticket markers.
-  if (/(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|电\s*子\s*客\s*票\s*号|铁\s*路\s*电\s*子\s*客\s*票)/.test(allText)) {
+  if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(allText)) {
+    return 'ticket';
+  }
+  if (_countTicketSignalGroups(allText) >= 2) {
     return 'ticket';
   }
   // Also check: has "购买方名称:" but no "销售方" — likely a ticket (not VAT)
