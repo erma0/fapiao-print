@@ -65,6 +65,7 @@ var S = {
   amtMode: 'tax',
   printedFilter: 'all',
   fileFilter: 'all',
+  fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
@@ -1956,6 +1957,9 @@ function renderFileList() {
   var currentNewIds = _newFileIds;
   _newFileIds = {};
 
+  var grid = S.fileView === 'grid';
+  list.classList.toggle('grid', grid);
+
   list.innerHTML = S.files.map(function(f, i) {
     var cls = 'file-item';
     if (currentNewIds[f.id]) cls += ' entering';
@@ -1964,6 +1968,39 @@ function renderFileList() {
     var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
       (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
+    if (grid) {
+      if (f._placeholder) {
+        return '<div class="file-item file-card placeholder-item" data-idx="' + i + '"' + hideStyle + '>' +
+          '<div class="file-thumb"><div class="blank-thumb">\u25A6</div></div>' +
+          '<div class="card-name">空白占位</div>' +
+          '<div class="card-meta"><button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除空白占位">\u2715</button></div></div>';
+      }
+      var gcb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '\u4efd</span>' : '';
+      var grb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
+      var gab = buildAmtBadge(f);
+      var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+      var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
+      var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
+      var gacts = '';
+      if (!f._loading) {
+        gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
+          '<button class="ib card-ib' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
+          (hasOcr ? (f._ocrPending
+            ? '<button class="ib card-ib" disabled title="识别中"><span class="ocr-spinner"></span></button>'
+            : '<button class="ib card-ib" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>') : '') +
+          '<button class="ib card-ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button>' +
+          '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      } else {
+        gacts = '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      }
+      return '<div class="' + cls + ' file-card" data-idx="' + i + '" data-printed="' + (f._printed ? '1' : '0') + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+        '<div class="file-thumb">' + gthumb + '<div class="type-badge">' + gtype + '</div>' +
+        '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
+        '<div class="card-actions">' + gacts + '</div></div>' +
+        '<div class="card-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' +
+        '<div class="card-meta">' + gpd + gab + gcb + grb + gdupb + '</div></div>';
+    }
     if (f._placeholder) {
       var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
         '<div class="file-meta-sep"></div>' +
@@ -2016,6 +2053,19 @@ function renderFileList() {
 
   list.scrollTop = scrollTop;
   updateAmountSummary();
+}
+function toggleFileView() {
+  S.fileView = S.fileView === 'grid' ? 'list' : 'grid';
+  syncFileViewBtn();
+  saveSettings();
+  renderFileList();
+}
+function syncFileViewBtn() {
+  var btn = document.getElementById('fileViewBtn');
+  if (!btn) return;
+  var grid = S.fileView === 'grid';
+  btn.textContent = grid ? '\u2630' : '\u25A6';
+  btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
   var menu = document.getElementById('copyMenu');
@@ -3082,6 +3132,7 @@ function saveSettings() {
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
+  o.fileView = S.fileView;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3158,6 +3209,8 @@ function loadSettings() {
   // from a user-customized three-item list, so do not overwrite them.
   if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
+  if (o.fileView === 'grid') S.fileView = 'grid';
+  syncFileViewBtn();
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
