@@ -3580,6 +3580,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 // Wheel: selected slot + cursor over it → zoom slot; plain → flip page; Ctrl → zoom view
+var _wheelFlipTs = 0; // 上次滚轮翻页时间，节流防触控板惯性连翻
 document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   if (!e.ctrlKey && S.selectedSlot >= 0) {
     var slotEl = e.target.closest('.invoice-slot');
@@ -3606,7 +3607,11 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
       var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
       if (!canScroll || (e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop)) {
         e.preventDefault();
-        if (e.deltaY > 0) nextPage(); else prevPage();
+        var now = Date.now();
+        if (now - _wheelFlipTs > 150) {
+          _wheelFlipTs = now;
+          if (e.deltaY > 0) nextPage(); else prevPage();
+        }
       }
     }
     return;
