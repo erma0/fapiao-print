@@ -1432,7 +1432,23 @@ function updateFileItem(fileObj) {
     var cardMetaEl = items[idx].querySelector('.card-meta');
     if (cardMetaEl) {
       var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">\u26A0</span>' : '';
-      cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb;
+      cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb + '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+    }
+    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sellerLine = items[idx].querySelector('.card-seller');
+    if (sellerLine) {
+      sellerLine.innerHTML = gsellerHtml;
+      sellerLine.title = f.sellerName || '';
+      sellerLine.style.display = gsellerHtml ? '' : 'none';
+    } else if (gsellerHtml) {
+      var cardNameEl = items[idx].querySelector('.card-name');
+      if (cardNameEl && cardNameEl.parentElement) {
+        var newSellerLine = document.createElement('div');
+        newSellerLine.className = 'card-seller';
+        newSellerLine.title = f.sellerName || '';
+        newSellerLine.innerHTML = gsellerHtml;
+        cardNameEl.parentElement.insertBefore(newSellerLine, cardNameEl.nextSibling);
+      }
     }
   } else {
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
@@ -1996,6 +2012,8 @@ function renderFileList() {
       var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
       var gab = buildAmtBadge(f);
       var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+      var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
       var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
       var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
       var gacts = '';
@@ -2015,7 +2033,8 @@ function renderFileList() {
         '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
         '<div class="card-actions">' + gacts + '</div></div>' +
         '<div class="card-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' +
-        '<div class="card-meta">' + gpd + gab + gcb + grb + gdupb + '</div></div>';
+        gseller +
+        '<div class="card-meta">' + gpd + gab + gcb + grb + gdupb + gsize + '</div></div>';
     }
     if (f._placeholder) {
       var pMeta = '<div class="file-meta-left"><span class="blank-badge">空白</span></div>' +
