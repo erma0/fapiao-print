@@ -2150,7 +2150,10 @@ function clickFileItem(idx, event) {
   }
   if (activeIdx >= 0) {
     S.currentPage = Math.floor(activeIdx / perPage);
+    S.selectedSlot = activeIdx % perPage;
     updatePreview();
+  } else {
+    S.selectedSlot = -1;
   }
 
   updateActiveFileHighlight();
