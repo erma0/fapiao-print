@@ -2962,6 +2962,7 @@ function updatePreview() {
   document.getElementById('stLayout').textContent = S.feat.reimburse ? '报销单' : (S.layout.rows + '×' + S.layout.cols);
   var ps = document.getElementById('paperSize').value;
   document.getElementById('stPaper').textContent = ps + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
+  updatePrintBtn();
 
   if (!files.length) {
     document.getElementById('emptyState').style.display = 'flex';
