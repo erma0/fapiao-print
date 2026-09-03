@@ -1964,6 +1964,7 @@ function renderFileList() {
   var sel = filtered.filter(function(f) { return f.checked; }).length;
   document.getElementById('fileCount').textContent = realCount + ' 张，已选 ' + sel;
   syncSelectAllBtn();
+  syncDeleteBtn();
   var summaryEl = document.getElementById('amountSummary');
   if (!S.files.length) { list.innerHTML = ''; if (summaryEl) summaryEl.style.display = 'none'; updateAmountSummary(); return; }
   if (summaryEl) summaryEl.style.display = 'flex';
@@ -2139,6 +2140,13 @@ function syncSelectAllBtn() {
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
   btn.textContent = all ? '\u25FB' : '\u2611';
   btn.title = all ? '取消全选' : '全选';
+}
+function syncDeleteBtn() {
+  var btn = document.getElementById('deleteBtn');
+  if (!btn) return;
+  var n = S.files.filter(function(f) { return f.checked; }).length;
+  btn.disabled = n === 0;
+  btn.title = n > 0 ? '删除选中 ' + n + ' 张' : '未勾选发票';
 }
 function deleteSelected() {
   if (!S.files.some(function(f) { return f.checked; })) return;
