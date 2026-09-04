@@ -341,7 +341,7 @@ function updateFileItem(fileObj) {
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
   var ab = buildAmtBadge(f);
-  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : /非税/.test(f.invoiceType || '') ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
   var metaEl = items[idx].querySelector('.file-meta');
   var sellerEl = items[idx].querySelector('.file-seller');
   if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
@@ -650,7 +650,7 @@ function renderFileList() {
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var ab = buildAmtBadge(f);
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : /非税/.test(f.invoiceType || '') ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
@@ -1988,6 +1988,7 @@ function getSummaryCellValue(fileObj, field, idx) {
     case 'seq': return String(idx + 1);
     case 'invoiceType':
       if (fileObj.invoiceType) return fileObj.invoiceType;
+      if (fileObj._isToll) return '通行费发票';
       if (fileObj._isTicket) return fileObj.sellerName || '车票'; // sellerName holds ticket label
       return '增值税发票';
     case 'amountTax': return fileObj.amountTax > 0 ? fileObj.amountTax.toFixed(2) : '';

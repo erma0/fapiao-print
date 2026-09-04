@@ -148,19 +148,12 @@ function parseChineseNumeral(str) {
 }
 
 /**
- * Detect if text is a train/ride ticket (no seller info needed)
- */
-function isTicketText(text) {
-  var t = text.substring(0, 500);
-  return /(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|站\s*台|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|硬\s*座|软\s*座|卧\s*铺|铺\s*位|出\s*租|打\s*车|网\s*约|滴\s*滴)/.test(t);
-}
-
-/**
  * Get a descriptive label for ticket type (shown as sellerName for tickets)
  */
 function getTicketTypeLabel(text) {
   var t = text.substring(0, 500);
-  if (/(?:铁\s*路|动\s*车|高\s*铁|火\s*车|车\s*次|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '铁路电子客票';
+  if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(t)) return '铁路电子客票';
+  if (/(?:火\s*车|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '火车票';
   if (/(?:出\s*租|打\s*车|的\s*士)/.test(t)) return '出租车票';
   if (/(?:网\s*约|滴\s*滴|专\s*车|快\s*车)/.test(t)) return '网约车票';
   return '车票';
@@ -329,10 +322,15 @@ function cleanOcrAmtStr(raw) {
  * Returns true if the value looks like a year/date, false otherwise.
  */
 function isLikelyYearOrDate(val, rawText) {
-  // Integer part in year range (1900-2099) and value < 2100 → almost certainly a year
-  if (val >= 1900 && val < 2100) return true;
-  // Check raw text for year-like pattern: "20XX.XX" where XX could be month
-  if (rawText && /^-?¥?(20\d{2})\.\d{2}$/.test(rawText)) return true;
+  // ¥-prefixed values are always amounts, never dates
+  if (rawText && /^[¥·•]/.test(rawText.trim())) return false;
+  // Pure integer in year range (1900-2099) without decimal → year
+  // "2000.00" has decimal → amount (¥2000.00), not year 2000
+  if (val >= 1900 && val < 2100 && Number.isInteger(val) &&
+      !(rawText && /\.\d{2}$/.test(rawText))) return true;
+  // "20XX.0X" or "20XX.1X" where XX is 01-12 → date (year.month)
+  // But NOT ".00" — that's an amount (e.g., ¥2000.00)
+  if (rawText && /^-?(20\d{2})\.(0[1-9]|1[0-2])$/.test(rawText)) return true;
   return false;
 }
 
@@ -402,23 +400,6 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
   try {
     // PdfTextResult lines use {words: [{text,x,y,w,h}], confidence: 1.0}
 
-    // 调试：查看原始文本内容
-    console.log('[PDF文字提取] 原始文本内容:', pdfTextResult.text);
-    var allWords = [];
-    var amountWords = [];
-    pdfTextResult.lines.forEach(function(line, lineIdx) {
-      if (line.words && line.words.length > 0) {
-        line.words.forEach(function(word, wordIdx) {
-          allWords.push(word.text);
-          if (/\d+\.\d/.test(word.text) || /¥/.test(word.text)) {
-            amountWords.push({ text: word.text, x: Math.round(word.x), y: Math.round(word.y), w: Math.round(word.w), h: Math.round(word.h) });
-          }
-        });
-      }
-    });
-    console.log('[PDF文字提取] 词列表:', allWords);
-    console.log('[PDF文字提取] 金额词:', amountWords);
-
     var info = extractByCoordinates(pdfTextResult);
 
     console.log('[PDF文字提取] 字段:', {
@@ -467,6 +448,7 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
     fileObj._ocrText = info._ocrText || pdfTextResult.text || '';
     fileObj._isTicket = info.isTicket || false;
     fileObj._isNonTax = info.isNonTax || false;
+    fileObj._isToll = info.isToll || false;
 
     // Only fill empty fields — structured extraction priority
     if (info.invoiceNo && !fileObj.invoiceNo) fileObj.invoiceNo = info.invoiceNo;
@@ -2535,19 +2517,41 @@ function _findNearbyAmount(words, kw, opts) {
   return candidates[0];
 }
 
+function _countTicketSignalGroups(text) {
+  var groups = [
+    '车次', '票价', '座位', '席别', '检票', '进站', '出站',
+    '铁路', '乘车', '二等', '一等', '动车', '高铁'
+  ];
+  var count = 0;
+  for (var i = 0; i < groups.length; i++) {
+    var re = new RegExp(groups[i].split('').join('\\s*'));
+    if (re.test(text)) count++;
+  }
+  return count;
+}
+
 /**
  * Detect invoice type from word positions.
- * Returns: 'vat' | 'ticket' | 'ride' | 'unknown'
+ * Returns: 'vat' | 'ticket' | 'toll' | 'nontax' | 'ride' | 'unknown'
  */
 function _detectInvoiceType(words, imgW, imgH) {
   // Build full text from all words (not just top 60%) for more reliable detection
   var allText = words.map(function(w) { return w.normText; }).join('');
-  // Check for train ticket keywords — scan ALL words (not just top 60%)
-  // because PDF text extraction may have different layout than image-based extraction,
-  // and ticket-specific keywords (票价, 车次, 二等座, etc.) can be anywhere.
-  // Also check for "铁路电子客票" / "电子客票号" which are definitive ticket markers.
-  if (/(?:车\s*次|票\s*价|座\s*位|席\s*别|检\s*票|进\s*站|出\s*站|铁\s*路|乘\s*车|二\s*等|一\s*等|动\s*车|高\s*铁|电\s*子\s*客\s*票\s*号|铁\s*路\s*电\s*子\s*客\s*票)/.test(allText)) {
+  if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(allText)) {
     return 'ticket';
+  }
+  // 弱信号双组确认（桌面版 v2.4.0 加严）：单个关键词命中不再判定车票，
+  // 防止增值税/通行费发票中的偶发词（如「进站」「乘车」）导致误判
+  if (_countTicketSignalGroups(allText) >= 2) {
+    return 'ticket';
+  }
+  // 通行费电子发票（ETC/高速公路）：结构同增值税发票，走 VAT 提取，仅打 toll 标记
+  // 强标记「通行费」；弱标记「车牌号/车牌颜色 + 通行日期」双组确认
+  if (/(?:通\s*行\s*费)/.test(allText)) {
+    return 'toll';
+  }
+  if (/(?:车\s*牌\s*号|车\s*牌\s*颜\s*色)/.test(allText) && /通\s*行\s*日\s*期/.test(allText)) {
+    return 'toll';
   }
   // Also check: has "购买方名称:" but no "销售方" — likely a ticket (not VAT)
   if (/购买方\s*名\s*称/.test(allText) && !/销售方/.test(allText)) {
@@ -2810,6 +2814,7 @@ function extractByCoordinates(ocrResult) {
   // Detect invoice type
   var invType = _detectInvoiceType(words, imgW, imgH);
   var isTicket = invType === 'ticket';
+  var isToll = invType === 'toll';
   var sellerName = textInfo.sellerName || '';
   var sellerCreditCode = textInfo.sellerCreditCode || '';
   var amountTax = 0, amountNoTax = 0, taxAmount = 0;
@@ -2933,7 +2938,7 @@ function extractByCoordinates(ocrResult) {
              sellerName: sellerName, sellerCreditCode: sellerCreditCode,
              invoiceNo: invoiceNo, invoiceDate: invoiceDate,
              buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-             _ocrText: fullText, isTicket: true, isNonTax: false };
+             _ocrText: fullText, isTicket: true, isNonTax: false, isToll: false };
   }
 
   // === Non-tax invoice extraction (非税收入票据) ===
@@ -2964,7 +2969,7 @@ function extractByCoordinates(ocrResult) {
              sellerName: sellerName, sellerCreditCode: sellerCreditCode,
              invoiceNo: invoiceNo, invoiceDate: invoiceDate,
              buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-             _ocrText: fullText, isTicket: false, isNonTax: true };
+             _ocrText: fullText, isTicket: false, isNonTax: true, isToll: false };
   }
 
   // === VAT / Ride invoice extraction ===
@@ -3520,9 +3525,6 @@ function extractByCoordinates(ocrResult) {
         // Single code → likely seller
         sellerCreditCode = tracedCodes[0].code;
       }
-      if (tracedCodes.length > 0) {
-        console.log('[信用代码追踪] 从标签追踪拼接:', tracedCodes.map(function(c) { return c.code + (c.isLeft ? '(买)' : '(售)'); }));
-      }
     }
     // Then try text regex
     if (!sellerCreditCode || !buyerCreditCode) {
@@ -3651,6 +3653,30 @@ function extractByCoordinates(ocrResult) {
     taxAmount = 0;
   }
 
+  // 通行费兜底：老式纸质通行费票无价税合计结构（web 版无 OCR，此路径极少触发），
+  // 退化为「金额标签邻近 → 全文最大合理金额」两段式扫描
+  if (isToll && !amountTax) {
+    var _tollText = normFullText || _normTextForExtract(fullText);
+    var _tollLabelMatch = _tollText.match(/(?:金\s*额|通\s*行\s*费)[^\d¥]{0,8}¥?\s*(\d+(?:,\d{3})*\.\d{2})/);
+    if (_tollLabelMatch) {
+      var _tollV = parseFloat(_tollLabelMatch[1].replace(/,/g, ''));
+      if (_tollV >= 1 && _tollV <= 50000) amountTax = _tollV;
+    }
+    if (!amountTax) {
+      var _tollCands = (_tollText.match(/\d+\.\d{2}/g) || [])
+        .map(function(s) { return parseFloat(s); })
+        .filter(function(v) { return v >= 5 && v <= 5000 && !isLikelyYearOrDate(v, v.toFixed(2)); });
+      if (_tollCands.length) amountTax = Math.max.apply(null, _tollCands);
+    }
+    if (amountTax > 0) {
+      amountNoTax = amountTax;
+      taxAmount = 0;
+      console.log('[通行费提取] 兜底金额:', amountTax);
+    }
+  }
+  // 电子通行费发票销售方为路桥公司（保留真实名称），纸质票无销售方时给标签
+  if (isToll && !sellerName) sellerName = '通行费发票';
+
   console.log('[坐标提取] 结果:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount,
     sellerName: sellerName || '(空)', sellerCreditCode: sellerCreditCode || '(空)',
     invoiceNo: invoiceNo || '(空)', invoiceDate: invoiceDate || '(空)',
@@ -3660,7 +3686,7 @@ function extractByCoordinates(ocrResult) {
            sellerName: sellerName, sellerCreditCode: sellerCreditCode,
            invoiceNo: invoiceNo, invoiceDate: invoiceDate,
            buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-           _ocrText: fullText, isTicket: false, isNonTax: false };
+           _ocrText: fullText, isTicket: false, isNonTax: false, isToll: isToll };
 }
 
 /**
