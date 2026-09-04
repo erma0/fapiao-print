@@ -303,6 +303,8 @@ var _slotDrag = null; // Current drag/resize state
 
 var _slotInteractionBound = false;
 
+var _dragHintShown = false; // 本次会话是否已提示过拖拽手势
+
 /**
  * Bind mousedown on invoice-slot elements for drag-move and corner-resize.
  * Called after each renderPage(). Only binds once.
@@ -363,8 +365,13 @@ function onSlotMouseDown(e) {
     // Cache settings/layout for perf (avoid getSettings() every mousemove)
     cachedSettings: settings,
     cachedLayout: layout,
+    // 主轴方向：单列（含报销单分段）取上下边缘，多列取左右边缘
+    vertical: !!layout.reimburse || settings.cols === 1,
+    perPage: perPage,
+    activeLen: files.length,
     dropEl: null,
-    dropIdx: -1
+    dropIdx: -1,
+    dropZone: ''
   };
   slotEl.classList.add('dragging');
 
@@ -492,7 +499,14 @@ function onSlotMouseUp(e) {
 
   if (d.mode === 'move' && d.dropIdx >= 0 && d.dropIdx !== d.idx) {
     clearDropTarget(d.dropEl);
-    swapSlotInvoices(d.idx, d.dropIdx);
+    // 跨槽拖拽是排序手势，撤销拖动过程中产生的单票偏移
+    d.fileObj.slotOffsetX = d.startOffX;
+    d.fileObj.slotOffsetY = d.startOffY;
+    if (d.dropZone === 'before' || d.dropZone === 'after') {
+      moveSlotInvoice(d.idx, d.dropIdx, d.dropZone);
+    } else {
+      swapSlotInvoices(d.idx, d.dropIdx);
+    }
     return;
   }
   clearDropTarget(d.dropEl);
@@ -502,21 +516,54 @@ function onSlotMouseUp(e) {
   }
 }
 
-// Track the slot under cursor while dragging; highlight as drop target
+// Track the slot under cursor while dragging; cursor zone decides insert vs swap
 function updateDropTarget(e) {
   var el = document.elementFromPoint(e.clientX, e.clientY);
   el = el && el.closest ? el.closest('.invoice-slot') : null;
   var idx = el ? parseInt(el.dataset.slotIdx) : -1;
   if (isNaN(idx)) idx = -1;
-  if (el === _slotDrag.dropEl) return;
-  if (_slotDrag.dropEl) _slotDrag.dropEl.classList.remove('drop-target');
-  _slotDrag.dropEl = el && idx !== _slotDrag.idx ? el : null;
-  _slotDrag.dropIdx = _slotDrag.dropEl ? idx : -1;
-  if (_slotDrag.dropEl) _slotDrag.dropEl.classList.add('drop-target');
+  if (idx < 0 || idx === _slotDrag.idx) { el = null; idx = -1; }
+  // 只有装着发票（含空白占位）的槽位才是有效落点，尾部空槽不接收
+  if (el && S.currentPage * _slotDrag.perPage + idx >= _slotDrag.activeLen) { el = null; idx = -1; }
+  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
+  var zone = '';
+  if (el) {
+    var r = el.getBoundingClientRect();
+    var ratio = _slotDrag.vertical
+      ? (e.clientY - r.top) / (r.height || 1)
+      : (e.clientX - r.left) / (r.width || 1);
+    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+    showDragHint();
+  }
+  if (el === _slotDrag.dropEl && zone === _slotDrag.dropZone) return;
+  clearDropTarget(_slotDrag.dropEl);
+  _slotDrag.dropEl = el;
+  _slotDrag.dropIdx = idx;
+  _slotDrag.dropZone = zone;
+  if (!el) return;
+  if (zone === 'swap') {
+    el.classList.add('drop-target');
+  } else {
+    el.classList.add('drop-insert');
+    el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
+    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+  }
 }
 
 function clearDropTarget(el) {
-  if (el) el.classList.remove('drop-target');
+  if (!el) return;
+  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end');
+}
+
+// 首次跨槽拖拽时提示两种手势的区别
+function showDragHint() {
+  if (_dragHintShown) return;
+  _dragHintShown = true;
+  try {
+    if (localStorage.getItem('ticketchan-drag-hint')) return;
+    localStorage.setItem('ticketchan-drag-hint', '1');
+  } catch (err) { return; }
+  toast('拖到发票边缘 = 顺位插入，拖到中间 = 两张对调', 4000);
 }
 
 // Swap invoice positions between two slots (slot idx → active array index)
@@ -544,6 +591,43 @@ function swapSlotInvoices(fromIdx, toIdx) {
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
   renderFileList();
   toast('已互换位置');
+  updatePreview();
+}
+
+// Move invoice into a neighbor position (insert before/after instead of swapping)
+function moveSlotInvoice(fromIdx, toIdx, zone) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var toDi = S.currentPage * perPage + toIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || toDi < 0 || fromDi >= n || toDi >= n || fromDi === toDi) {
+    updatePreview();
+    return;
+  }
+  var a = active[fromDi], b = active[toDi];
+  if (a === b) { updatePreview(); return; }
+  var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
+  if (ia < 0 || ib < 0) { updatePreview(); return; }
+  var after = (zone === 'after');
+  // 倒序渲染时 S.files 尾部先显示，显示序「插到前面」等于底层数组「插到后面」
+  if (document.getElementById('pageOrder').value === 'reverse') after = !after;
+  S.files.splice(ia, 1);
+  var ibNew = S.files.indexOf(b);
+  var insertAt = after ? ibNew + 1 : ibNew;
+  S.files.splice(insertAt, 0, a);
+  // 落点就是原位（相邻槽位往自己那侧插），顺序没变
+  if (insertAt === ia) { updatePreview(); return; }
+  _activeFileIdx = S.files.indexOf(a);
+  // 选中态跟随移动后的槽位（可能跨页）
+  var newDi = getActiveFiles().indexOf(a);
+  if (newDi >= 0) {
+    S.currentPage = Math.floor(newDi / perPage);
+    S.selectedSlot = newDi % perPage;
+  }
+  renderFileList();
+  toast('已调整顺序');
   updatePreview();
 }
 

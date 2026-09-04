@@ -387,6 +387,19 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; overflow: visible !important; }
 .invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; pointer-events: none; }
 .invoice-slot.drop-target { outline: 2px dashed var(--accent); z-index: 6; }
+/* 顺位插入落点：在目标槽位主轴边缘画插入指示线 */
+.invoice-slot.drop-insert { z-index: 6; }
+.invoice-slot.drop-insert::before {
+  content: ''; position: absolute; background: var(--accent);
+  border-radius: 2px; pointer-events: none; z-index: 12;
+  box-shadow: 0 0 5px var(--accent);
+}
+.invoice-slot.drop-axis-h::before { top: 0; bottom: 0; width: 4px; }
+.invoice-slot.drop-axis-h.drop-at-start::before { left: 0; }
+.invoice-slot.drop-axis-h.drop-at-end::before { right: 0; }
+.invoice-slot.drop-axis-v::before { left: 0; right: 0; height: 4px; }
+.invoice-slot.drop-axis-v.drop-at-start::before { top: 0; }
+.invoice-slot.drop-axis-v.drop-at-end::before { bottom: 0; }
 .invoice-slot.selected::after,
 .invoice-slot.dragging::after {
   content: ''; position: absolute; inset: 0;
