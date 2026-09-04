@@ -540,6 +540,9 @@ function swapSlotInvoices(fromIdx, toIdx) {
   S.files[ia] = b; S.files[ib] = a;
   a.slotOffsetX = offA; a.slotOffsetY = offAY;
   b.slotOffsetX = offB; b.slotOffsetY = offBY;
+  if (_activeFileIdx === ia) { _activeFileIdx = ib; }
+  else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
+  renderFileList();
   toast('已互换位置');
   updatePreview();
 }
