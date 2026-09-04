@@ -69,6 +69,7 @@ html.dark .amt-warn-badge { background: #3a2020; color: #fc8181; }
 html.dark .seller-badge { background: #1e2a4a; color: #a0aec0; }
 html.dark .ticket-badge { background: #1a2a4a; color: #64b5f6; }
 html.dark .nontax-badge { background: #2a1e1a; color: #ed8936; }
+html.dark .toll-badge { background: #122a26; color: #2dd4bf; border-color: #1f4d45; }
 html.dark .file-summary { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .sec { border-bottom-color: #2a2a4a; }
 html.dark .tgl { background: #3a3a5a; }

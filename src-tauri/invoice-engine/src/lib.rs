@@ -31,6 +31,8 @@ pub struct OfdInvoiceInfo {
     pub tax_amount: Option<f64>,
     pub amount_tax: Option<f64>,
     pub invoice_type: Option<String>,
+    /// 通行费电子发票标记（销售方保留真实路桥公司名）
+    pub is_toll: Option<bool>,
 }
 
 /// Result returned by `parse_ofd_file`: SVG rendering + structured invoice data.
@@ -68,6 +70,8 @@ pub struct XmlInvoiceInfo {
     pub amount_tax: Option<f64>,
     /// Invoice type label (e.g. "增值税专用发票", "电子发票(普通发票)")
     pub invoice_type: Option<String>,
+    /// 通行费电子发票标记（ItemName 含「通行费」）
+    pub is_toll: Option<bool>,
 }
 
 // =====================================================
@@ -1564,6 +1568,244 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String, u32, u32)>,
 // Text-based Invoice Extraction (Fallback)
 // =====================================================
 
+/// Semi-structured extraction for 数电票 OFD (digital e-invoices, e.g. toll invoices).
+///
+/// These OFDs have no Template layer and no CustomData/CustomTag: template labels
+/// and data values live in the same Content.xml as two Layers, so label-value
+/// sequence proximity is useless (values are 10+ texts away from labels).
+/// However, data-layer TextObjects carry page-absolute TextCode X/Y coordinates
+/// (their Boundary spans the whole page), and 数电票 layout is standardized:
+///   - invoice no / issue date: top-right area (ny < 0.2)
+///   - buyer/seller names + credit codes: middle band, left/right halves
+///   - ¥ amounts: bottom band (ny > 0.5) — 合计 row + 价税合计 row
+///
+/// Returns default (all-None) info when the input doesn't match the 数电票
+/// data-layer signature, so callers can safely fall back to other extractors.
+fn extract_invoice_from_body_coords(texts: &[OfdTextObject], page_w: f64, page_h: f64) -> OfdInvoiceInfo {
+    let mut info = OfdInvoiceInfo::default();
+    if page_w <= 0.0 || page_h <= 0.0 {
+        return info;
+    }
+
+    // 数电票数据层签名：Boundary 覆盖 ≥70% 页面 → TextCode X/Y 为页面绝对 mm 坐标。
+    // 普通 OFD（含 dzcp）的数据层 Boundary 是局部小矩形，自动排除。
+    let body: Vec<&OfdTextObject> = texts.iter()
+        .filter(|t| t.boundary.2 >= page_w * 0.7 && t.boundary.3 >= page_h * 0.7)
+        .collect();
+    if body.is_empty() {
+        return info;
+    }
+
+    let half_w = page_w * 0.5;
+    let mut no_candidates: Vec<String> = Vec::new();
+    let mut name_candidates: Vec<(f64, f64, String)> = Vec::new(); // (y, x, text)
+    let mut taxid_candidates: Vec<(f64, f64, String)> = Vec::new(); // (y, x, text)
+    let mut yen_amounts: Vec<(f64, f64, f64)> = Vec::new(); // (y, x, value)
+
+    for t in &body {
+        let text = t.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let (x, y) = (t.text_x, t.text_y);
+        let ny = y / page_h;
+
+        // 开票日期：头部区「YYYY年MM月DD日」
+        if info.invoice_date.is_none() && ny < 0.2 {
+            if let Some(d) = parse_cn_date(text) {
+                info.invoice_date = Some(d);
+            }
+        }
+
+        // 发票号候选：头部区纯数字（10~20 位，数电票为 20 位）
+        if ny < 0.2 && text.len() >= 10 && text.chars().all(|c| c.is_ascii_digit()) {
+            no_candidates.push(text.to_string());
+        }
+
+        // 税号候选：18 位大写字母数字（统一社会信用代码）
+        if text.chars().count() == 18
+            && text.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        {
+            taxid_candidates.push((y, x, text.to_string()));
+        }
+
+        // 名称候选：纯 CJK 文本（≥2 字），购销信息区
+        let is_pure_cjk = text.chars().count() >= 2
+            && text.chars().all(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        if is_pure_cjk && ny > 0.15 && ny < 0.5 {
+            name_candidates.push((y, x, text.to_string()));
+        }
+
+        // ¥ 金额：合计区
+        if text.starts_with('¥') || text.starts_with('￥') {
+            let amt_str = text.trim_start_matches('¥').trim_start_matches('￥').trim();
+            if let Ok(v) = amt_str.parse::<f64>() {
+                if ny > 0.5 {
+                    yen_amounts.push((y, x, v));
+                }
+            }
+        }
+    }
+
+    // 发票号：取最长候选（数电票 20 位 > 其他短数字串）
+    if !no_candidates.is_empty() {
+        no_candidates.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        info.invoice_no = Some(no_candidates[0].clone());
+    }
+
+    // 名称：有税号时以税号行为锚（±10% 页高），否则取首聚类行；左半=购买方，右半=销售方
+    if !name_candidates.is_empty() {
+        let anchor_y: Option<f64> = taxid_candidates.first().map(|(y, _, _)| *y);
+        let in_band = |y: f64| -> bool {
+            match anchor_y {
+                Some(a) => (y - a).abs() <= page_h * 0.1,
+                None => true, // 无锚时 name_candidates 已按 ny∈(0.15,0.5) 预过滤
+            }
+        };
+        let mut rows: Vec<Vec<(f64, f64, String)>> = Vec::new(); // 聚类行（y 差 < 5% 页高）
+        let mut sorted_names = name_candidates;
+        sorted_names.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (y, x, name) in sorted_names {
+            if !in_band(y) {
+                continue;
+            }
+            match rows.last_mut() {
+                Some(row) if (y - row[0].0).abs() < page_h * 0.05 => row.push((y, x, name)),
+                _ => rows.push(vec![(y, x, name)]),
+            }
+        }
+        if let Some(first_row) = rows.first() {
+            for (_, x, name) in first_row {
+                if *x < half_w {
+                    if info.buyer_name.is_none() {
+                        info.buyer_name = Some(name.clone());
+                    }
+                } else if info.seller_name.is_none() {
+                    info.seller_name = Some(name.clone());
+                }
+            }
+        }
+    }
+
+    // 税号：左半=购买方，右半=销售方
+    for (_, x, code) in &taxid_candidates {
+        if *x < half_w {
+            if info.buyer_tax_id.is_none() {
+                info.buyer_tax_id = Some(code.clone());
+            }
+        } else if info.seller_tax_id.is_none() {
+            info.seller_tax_id = Some(code.clone());
+        }
+    }
+
+    // 金额：按 y 聚类成行（差 < 5% 页高）。
+    // 末行（价税合计行）最大 ¥ = 含税价；前行（合计行）大值=不含税、小值=税额。
+    // 交叉校验失败时退回全局 ¥ 配对（a + b ≈ c）。
+    if !yen_amounts.is_empty() {
+        yen_amounts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut amt_rows: Vec<Vec<(f64, f64, f64)>> = Vec::new();
+        for &(y, x, v) in &yen_amounts {
+            match amt_rows.last_mut() {
+                Some(row) if (y - row[0].0).abs() < page_h * 0.05 => row.push((y, x, v)),
+                _ => amt_rows.push(vec![(y, x, v)]),
+            }
+        }
+
+        let mut resolved = false;
+        if amt_rows.len() >= 2 {
+            let last_row = &amt_rows[amt_rows.len() - 1];
+            let prev_row = &amt_rows[amt_rows.len() - 2];
+            let tax_total = last_row.iter().map(|(_, _, v)| *v).fold(0.0_f64, f64::max);
+            let mut prev_vals: Vec<f64> = prev_row.iter().map(|(_, _, v)| *v).collect();
+            prev_vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            if tax_total > 0.0 {
+                let (no_tax, tax) = match prev_vals.len() {
+                    0 => (None, None),
+                    1 => (Some(prev_vals[0]), None),
+                    _ => (Some(prev_vals[0]), Some(prev_vals[1])),
+                };
+                if let Some(nt) = no_tax {
+                    let t = tax.unwrap_or(0.0);
+                    let sum = ((nt + t) * 100.0).round() / 100.0;
+                    if (sum - tax_total).abs() < 0.02 {
+                        info.amount_tax = Some(tax_total);
+                        info.amount_no_tax = Some(nt);
+                        info.tax_amount = Some(t);
+                        resolved = true;
+                    }
+                }
+            }
+        }
+
+        if !resolved {
+            // 全局配对：找 (a, b, c) 使 a + b ≈ c
+            let vals: Vec<f64> = yen_amounts.iter().map(|(_, _, v)| *v).collect();
+            let n = vals.len();
+            'outer: for i in 0..n {
+                for j in (i + 1)..n {
+                    for k in 0..n {
+                        if k == i || k == j {
+                            continue;
+                        }
+                        let sum = ((vals[i] + vals[j]) * 100.0).round() / 100.0;
+                        if (sum - vals[k]).abs() < 0.02 && vals[i] > 0.0 && vals[j] > 0.0 {
+                            let (no_tax, tax) = if vals[i] >= vals[j] {
+                                (vals[i], vals[j])
+                            } else {
+                                (vals[j], vals[i])
+                            };
+                            info.amount_tax = Some(vals[k]);
+                            info.amount_no_tax = Some(no_tax);
+                            info.tax_amount = Some(tax);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            // 兜底：只有一行 ¥ 时，最大值视为含税价
+            if info.amount_tax.is_none() && !vals.is_empty() {
+                let max_v = vals.iter().cloned().fold(0.0_f64, f64::max);
+                if max_v > 0.0 {
+                    info.amount_tax = Some(max_v);
+                }
+            }
+        }
+    }
+
+    if info.invoice_no.is_some() || info.amount_tax.is_some() || info.seller_name.is_some() {
+        log::info!(
+            "OFD 数电票坐标提取: no={:?} date={:?} buyer={:?} seller={:?} tax={:?} noTax={:?} taxAmt={:?}",
+            info.invoice_no, info.invoice_date, info.buyer_name, info.seller_name,
+            info.amount_tax, info.amount_no_tax, info.tax_amount
+        );
+    }
+
+    info
+}
+
+/// Parse "YYYY年MM月DD日" into "YYYY-MM-DD". Returns None on mismatch.
+fn parse_cn_date(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let find = |c: char| chars.iter().position(|&x| x == c);
+    let (yi, mi, di) = (find('年')?, find('月')?, find('日')?);
+    if yi == 0 || mi <= yi + 1 || di <= mi + 1 || di != chars.len() - 1 {
+        return None;
+    }
+    let year: String = chars[..yi].iter().collect();
+    let month: String = chars[yi + 1..mi].iter().collect();
+    let day: String = chars[mi + 1..di].iter().collect();
+    if !year.chars().all(|c| c.is_ascii_digit())
+        || !month.chars().all(|c| c.is_ascii_digit())
+        || !day.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    if year.len() != 4 || month.is_empty() || month.len() > 2 || day.is_empty() || day.len() > 2 {
+        return None;
+    }
+    Some(format!("{}-{:0>2}-{:0>2}", year, month, day))
+}
+
 /// Extract invoice data from text content when no CustomData or CustomTag is available.
 /// This handles OFD files from non-standard producers that embed subset fonts
 /// but don't include structured XML metadata.
@@ -2122,6 +2364,26 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         invoice_info.seller_tax_id = get_tag_text("SellerTaxID");
     }
 
+    // 11a. 数电票半结构化提取（无 Template/CustomData/CustomTag 的双层 Content.xml，
+    // 数据层 TextCode 为页面绝对坐标，如通行费电子发票）。仅填充仍为 None 的字段。
+    let body_info = extract_invoice_from_body_coords(&page_texts, page_w, page_h);
+    if invoice_info.invoice_no.is_none() { invoice_info.invoice_no = body_info.invoice_no; }
+    if invoice_info.invoice_date.is_none() { invoice_info.invoice_date = body_info.invoice_date; }
+    if invoice_info.buyer_name.is_none() { invoice_info.buyer_name = body_info.buyer_name; }
+    if invoice_info.buyer_tax_id.is_none() { invoice_info.buyer_tax_id = body_info.buyer_tax_id; }
+    if invoice_info.seller_name.is_none() { invoice_info.seller_name = body_info.seller_name; }
+    if invoice_info.seller_tax_id.is_none() { invoice_info.seller_tax_id = body_info.seller_tax_id; }
+    if invoice_info.amount_no_tax.is_none() { invoice_info.amount_no_tax = body_info.amount_no_tax; }
+    if invoice_info.tax_amount.is_none() { invoice_info.tax_amount = body_info.tax_amount; }
+    if invoice_info.amount_tax.is_none() { invoice_info.amount_tax = body_info.amount_tax; }
+
+    // 通行费标记：模板层或数据层文本含「通行费」
+    if invoice_info.is_toll.is_none() {
+        let has_toll_text = tpl_texts.iter().chain(page_texts.iter())
+            .any(|t| t.text.contains("通行费"));
+        invoice_info.is_toll = Some(has_toll_text);
+    }
+
     // Detect invoice type from template title
     for t in &tpl_texts {
         if t.text.contains("增值税专用") {
@@ -2154,8 +2416,9 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     // 11b. Text-based fallback extraction when no CustomData or CustomTag
     // This handles OFD files from non-tax producers (e.g., dzcp) that embed fonts
     // but don't include structured metadata.
-    if invoice_info.invoice_no.is_none() && invoice_info.invoice_date.is_none()
-        && invoice_info.buyer_name.is_none() && invoice_info.seller_name.is_none() {
+    // Run when any key field is still missing (11a may only fill part of them).
+    if invoice_info.invoice_no.is_none() || invoice_info.invoice_date.is_none()
+        || invoice_info.buyer_name.is_none() || invoice_info.seller_name.is_none() {
         // Combine template + page texts (preserving order by ID)
         let mut all_texts: Vec<&OfdTextObject> = Vec::new();
         all_texts.extend(&tpl_texts);
@@ -2250,6 +2513,8 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
     // Track LabelName values from EInvoiceType and GeneralOrSpecialVAT
     let mut einvoice_type_label: Option<String> = None;
     let mut general_or_special_label: Option<String> = None;
+    // Item names (IssuItemInformation) — used for toll detection
+    let mut item_names: Vec<String> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -2304,6 +2569,8 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
                             }
                             _ => {}
                         },
+                        // Item names — used for toll detection (通行费)
+                        "ItemName" => item_names.push(text.to_string()),
                         _ => {}
                     }
                 }
@@ -2324,6 +2591,9 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
     } else if let Some(type_label) = &einvoice_type_label {
         info.invoice_type = Some(type_label.clone());
     }
+
+    // Toll detection: item name contains 通行费 (e.g. "*生产生活服务*通行费")
+    info.is_toll = Some(item_names.iter().any(|s| s.contains("通行费")));
 
     // Fallback: if amount_tax still empty, try alternate tag name
     if info.amount_tax.is_none() {

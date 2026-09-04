@@ -116,6 +116,7 @@ function createFileObj(opts) {
     invoiceType: opts.invoiceType || '',
     _ocrText: opts._ocrText || '',
     _isTicket: opts._isTicket || false,
+    _isToll: opts._isToll || false,
     _loading: opts._loading || false,
     _placeholder: opts._placeholder || false,   // 版面空白占位（只占槽位，不打印不统计）
     _ocrPending: false,
@@ -1702,6 +1703,7 @@ function loadFileFromDataUrlFast(fd) {
           buyerName: info.buyerName || '',
           buyerCreditCode: info.buyerTaxId || '',
           invoiceType: info.invoiceType || '',
+          _isToll: !!info.isToll,
           // OFD page dimensions for layout
           ow: payload.img.naturalWidth,
           oh: payload.img.naturalHeight,
@@ -1759,6 +1761,7 @@ function loadFileFromDataUrlFast(fd) {
           buyerName: info.buyerName || '',
           buyerCreditCode: info.buyerTaxId || '',
           invoiceType: info.invoiceType || '',
+          _isToll: !!info.isToll,
           // XML has no preview image — use placeholder dimensions
           ow: 0, oh: 0,
           _xmlInvoice: true
