@@ -4,6 +4,14 @@
 // Dependencies (global): S, MM2PX, PDF_RENDER_DPI, MIN_RENDER_PX
 
 /**
+ * Slots per page. Web 版无报销单分段，恒等于 cols × rows。
+ * 统一入口：所有分页计算点禁止直接写 cols * rows。
+ */
+function getPerPage(s) {
+  return Math.max(1, s.cols * s.rows);
+}
+
+/**
  * Unified layout calculation — pure function used by both preview and print rendering.
  * Returns slot positions, dimensions, and cut-line positions.
  * @param {Object} settings - From getSettings()
@@ -177,7 +185,7 @@ function renderPage(pageFiles, pi, total, s) {
       // Image fills wrapper
       var imgStyle = 'width:100%;height:100%;object-fit:' + fit + ';' + filt;
       inner = '<div style="' + wrapperStyle + '"><img src="' + src + '" style="' + imgStyle + '"></div>';
-      if (s.number) inner += '<div class="slot-num">' + (pi * s.rows * s.cols + i + 1) + '</div>';
+      if (s.number) inner += '<div class="slot-num">' + (pi * getPerPage(s) + i + 1) + '</div>';
       if (s.watermark && s.watermarkText) {
         var ws = s.watermarkSize * MM2PX * scale;
         inner += '<div class="watermark" style="color:' + s.watermarkColor + ';opacity:' + s.watermarkOpacity + ';font-size:' + ws + 'px;transform:translate(-50%,-50%) rotate(' + s.watermarkAngle + 'deg);top:50%;left:50%">' + s.watermarkText + '</div>';
@@ -256,6 +264,8 @@ var _slotDrag = null; // Current drag/resize state
 
 var _slotInteractionBound = false;
 
+var _dragHintShown = false; // 本次会话是否已提示过拖拽手势
+
 /**
  * Bind mousedown on invoice-slot elements for drag-move and corner-resize.
  * Called after each renderPage(). Only binds once.
@@ -297,7 +307,7 @@ function onSlotMouseDown(e) {
   var files = getActiveFiles();
   var settings = getSettings();
   var layout = calculateLayout(settings);
-  var perPage = settings.cols * settings.rows;
+  var perPage = getPerPage(settings);
   var fileIdx = S.currentPage * perPage + idx;
   var f = fileIdx < files.length ? files[fileIdx] : null;
   if (!f) return;
@@ -315,7 +325,14 @@ function onSlotMouseDown(e) {
     previewScale: getCurrentPreviewScale(),
     // Cache settings/layout for perf (avoid getSettings() every mousemove)
     cachedSettings: settings,
-    cachedLayout: layout
+    cachedLayout: layout,
+    // 拖拽排序：主轴方向（单列取上下边缘，多列取左右边缘）
+    vertical: settings.cols === 1,
+    perPage: perPage,
+    activeLen: files.length,
+    dropEl: null,
+    dropIdx: -1,
+    dropZone: ''
   };
   slotEl.classList.add('dragging');
 
@@ -329,7 +346,7 @@ function startResize(e, idx, slotEl, corner) {
   var files = getActiveFiles();
   var settings = getSettings();
   var layout = calculateLayout(settings);
-  var perPage = settings.cols * settings.rows;
+  var perPage = getPerPage(settings);
   var fileIdx = S.currentPage * perPage + idx;
   var f = fileIdx < files.length ? files[fileIdx] : null;
   if (!f) return;
@@ -368,6 +385,7 @@ function onSlotMouseMove(e) {
   var layout = _slotDrag.cachedLayout;
 
   if (_slotDrag.mode === 'move') {
+    updateDropTarget(e);
     var dx = e.clientX - _slotDrag.startX;
     var dy = e.clientY - _slotDrag.startY;
     // Convert pixel delta to mm
@@ -435,14 +453,141 @@ function onSlotMouseMove(e) {
 function onSlotMouseUp(e) {
   if (!_slotDrag) return;
   _slotDrag.slotEl.classList.remove('dragging');
-  var didMove = !!_slotDrag.moved;
+  var d = _slotDrag;
   _slotDrag = null;
   document.removeEventListener('mousemove', onSlotMouseMove);
   document.removeEventListener('mouseup', onSlotMouseUp);
-  if (didMove) {
+
+  if (d.mode === 'move' && d.dropIdx >= 0 && d.dropIdx !== d.idx) {
+    clearDropTarget(d.dropEl);
+    // 跨槽拖拽是排序手势，撤销拖动过程中产生的单票偏移
+    d.fileObj.slotOffsetX = d.startOffX;
+    d.fileObj.slotOffsetY = d.startOffY;
+    if (d.dropZone === 'before' || d.dropZone === 'after') {
+      moveSlotInvoice(d.idx, d.dropIdx, d.dropZone);
+    } else {
+      swapSlotInvoices(d.idx, d.dropIdx);
+    }
+    return;
+  }
+  clearDropTarget(d.dropEl);
+  if (d.moved) {
     updatePreview();
     updateAdjPanel();
   }
+}
+
+// Track the slot under cursor while dragging; cursor zone decides insert vs swap
+function updateDropTarget(e) {
+  var el = document.elementFromPoint(e.clientX, e.clientY);
+  el = el && el.closest ? el.closest('.invoice-slot') : null;
+  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (idx < 0 || idx === _slotDrag.idx) { el = null; idx = -1; }
+  // 只有装着发票的槽位才是有效落点，尾部空槽不接收
+  if (el && S.currentPage * _slotDrag.perPage + idx >= _slotDrag.activeLen) { el = null; idx = -1; }
+  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
+  var zone = '';
+  if (el) {
+    var r = el.getBoundingClientRect();
+    var ratio = _slotDrag.vertical
+      ? (e.clientY - r.top) / (r.height || 1)
+      : (e.clientX - r.left) / (r.width || 1);
+    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+    showDragHint();
+  }
+  if (el === _slotDrag.dropEl && zone === _slotDrag.dropZone) return;
+  clearDropTarget(_slotDrag.dropEl);
+  _slotDrag.dropEl = el;
+  _slotDrag.dropIdx = idx;
+  _slotDrag.dropZone = zone;
+  if (!el) return;
+  if (zone === 'swap') {
+    el.classList.add('drop-target');
+  } else {
+    el.classList.add('drop-insert');
+    el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
+    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+  }
+}
+
+function clearDropTarget(el) {
+  if (!el) return;
+  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end');
+}
+
+// 首次跨槽拖拽时提示两种手势的区别
+function showDragHint() {
+  if (_dragHintShown) return;
+  _dragHintShown = true;
+  try {
+    if (localStorage.getItem('ticketchan-drag-hint')) return;
+    localStorage.setItem('ticketchan-drag-hint', '1');
+  } catch (err) { return; }
+  toast('拖到发票边缘 = 顺位插入，拖到中间 = 两张对调', 4000);
+}
+
+// Swap invoice positions between two slots (slot idx → active array index)
+function swapSlotInvoices(fromIdx, toIdx) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var toDi = S.currentPage * perPage + toIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || toDi < 0 || fromDi >= n || toDi >= n || fromDi === toDi) {
+    updatePreview();
+    return;
+  }
+  var a = active[fromDi], b = active[toDi];
+  if (a === b) { updatePreview(); return; }
+  var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
+  if (ia < 0 || ib < 0) { updatePreview(); return; }
+  var offA = a.slotOffsetX, offB = b.slotOffsetX;
+  var offAY = a.slotOffsetY, offBY = b.slotOffsetY;
+  S.files[ia] = b; S.files[ib] = a;
+  a.slotOffsetX = offA; a.slotOffsetY = offAY;
+  b.slotOffsetX = offB; b.slotOffsetY = offBY;
+  if (_activeFileIdx === ia) { _activeFileIdx = ib; }
+  else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
+  renderFileList();
+  toast('已互换位置');
+  updatePreview();
+}
+
+// Move invoice into a neighbor position (insert before/after instead of swapping)
+function moveSlotInvoice(fromIdx, toIdx, zone) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var toDi = S.currentPage * perPage + toIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || toDi < 0 || fromDi >= n || toDi >= n || fromDi === toDi) {
+    updatePreview();
+    return;
+  }
+  var a = active[fromDi], b = active[toDi];
+  if (a === b) { updatePreview(); return; }
+  var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
+  if (ia < 0 || ib < 0) { updatePreview(); return; }
+  var after = (zone === 'after');
+  S.files.splice(ia, 1);
+  var ibNew = S.files.indexOf(b);
+  var insertAt = after ? ibNew + 1 : ibNew;
+  S.files.splice(insertAt, 0, a);
+  // 落点就是原位（相邻槽位往自己那侧插），顺序没变
+  if (insertAt === ia) { updatePreview(); return; }
+  _activeFileIdx = S.files.indexOf(a);
+  // 选中态跟随移动后的槽位（可能跨页）
+  var newDi = getActiveFiles().indexOf(a);
+  if (newDi >= 0) {
+    S.currentPage = Math.floor(newDi / perPage);
+    S.selectedSlot = newDi % perPage;
+  }
+  renderFileList();
+  toast('已调整顺序');
+  updatePreview();
 }
 
 /**

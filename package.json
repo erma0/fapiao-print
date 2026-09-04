@@ -1,7 +1,7 @@
 {
   "name": "fapiao",
-  "version": "1.0.0",
-  "description": "[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]() [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]() [![Version](https://img.shields.io/badge/Version-3.1.0-blue.svg)]()",
+  "version": "3.2.0",
+  "description": "[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]() [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]() [![Version](https://img.shields.io/badge/Version-3.2.0-blue.svg)]()",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

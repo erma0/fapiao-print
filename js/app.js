@@ -42,6 +42,8 @@ var S = {
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
   printedFilter: 'all',
+  fileFilter: 'all',   // 'all' | 'duplicates'
+  fileView: 'list',    // 'list' | 'grid'
   feat: {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, pageNum: false,
@@ -341,23 +343,53 @@ function updateFileItem(fileObj) {
   var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
   var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
   var ab = buildAmtBadge(f);
-  var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
-  var metaEl = items[idx].querySelector('.file-meta');
-  var sellerEl = items[idx].querySelector('.file-seller');
-  if (metaEl) metaEl.innerHTML = fmtSize(f.size) + cb + rb + ab;
-  if (sellerEl) {
-    sellerEl.innerHTML = sb;
-    sellerEl.title = f.sellerName || '';
-    sellerEl.style.display = sb ? '' : 'none';
-  } else if (sb) {
-    // .file-seller didn't exist at render time (no sellerName yet), insert it now
-    var nameEl = items[idx].querySelector('.file-name');
-    if (nameEl && nameEl.parentElement) {
-      var newSeller = document.createElement('div');
-      newSeller.className = 'file-seller';
-      newSeller.title = f.sellerName || '';
-      newSeller.innerHTML = sb;
-      nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+  var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+  if (S.fileView === 'grid') {
+    // grid 卡片：更新 card-meta（与 renderFileList grid 分支字段顺序一致）
+    var cardMetaEl = items[idx].querySelector('.card-meta');
+    if (cardMetaEl) {
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
+      cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb + '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+    }
+    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sellerLine = items[idx].querySelector('.card-seller');
+    if (sellerLine) {
+      sellerLine.innerHTML = gsellerHtml;
+      sellerLine.title = f.sellerName || '';
+      sellerLine.style.display = gsellerHtml ? '' : 'none';
+    } else if (gsellerHtml) {
+      var cardNameEl = items[idx].querySelector('.card-name');
+      if (cardNameEl && cardNameEl.parentElement) {
+        var newSellerLine = document.createElement('div');
+        newSellerLine.className = 'card-seller';
+        newSellerLine.title = f.sellerName || '';
+        newSellerLine.innerHTML = gsellerHtml;
+        cardNameEl.parentElement.insertBefore(newSellerLine, cardNameEl.nextSibling);
+      }
+    }
+  } else {
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    // 只更新 .file-meta-left，保留 file-meta-right 操作按钮与布局结构
+    var leftEl = items[idx].querySelector('.file-meta-left');
+    if (leftEl) {
+      var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
+      leftEl.innerHTML = pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab;
+    }
+    var sellerEl = items[idx].querySelector('.file-seller');
+    if (sellerEl) {
+      sellerEl.innerHTML = sb;
+      sellerEl.title = f.sellerName || '';
+      sellerEl.style.display = sb ? '' : 'none';
+    } else if (sb) {
+      // .file-seller didn't exist at render time (no sellerName yet), insert it now
+      var nameEl = items[idx].querySelector('.file-name');
+      if (nameEl && nameEl.parentElement) {
+        var newSeller = document.createElement('div');
+        newSeller.className = 'file-seller';
+        newSeller.title = f.sellerName || '';
+        newSeller.innerHTML = sb;
+        nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
+      }
     }
   }
 }
@@ -611,13 +643,28 @@ async function handleDrop(e) {
 // =====================================================
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
+  S.fileFilter = 'all';
+  syncFilterButtons();
+  renderFileList();
+}
+
+// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮
+function syncFilterButtons() {
+  var active = S.fileFilter === 'duplicates' ? 'duplicates' : S.printedFilter;
   document.querySelectorAll('.pf-btn').forEach(function(b) {
-    b.classList.toggle('pf-active', b.dataset.filter === filter);
+    b.classList.toggle('pf-active', b.dataset.filter === active);
   });
+}
+
+function setFileFilter(filter) {
+  if (filter === 'duplicates') { selectDuplicateExtras(); return; }
+  S.fileFilter = 'all';
+  syncFilterButtons();
   renderFileList();
 }
 
 function getFilteredFiles() {
+  if (S.fileFilter === 'duplicates') return S.files.filter(function(f) { return f._dup; });
   if (S.printedFilter === 'all') return S.files;
   return S.files.filter(function(f) {
     if (S.printedFilter === 'printed') return f._printed;
@@ -626,7 +673,103 @@ function getFilteredFiles() {
   });
 }
 
+// 生成发票去重key：优先发票号，回退到 销售方+含税金额+日期（针对重复下载被改名的文件）
+function getDupKey(f) {
+  if (f.invoiceNo) return 'no:' + String(f.invoiceNo).replace(/\s+/g, '').trim().toUpperCase();
+  if (f.sellerName && f.amountTax > 0) {
+    return 'sum:' + String(f.sellerName).replace(/\s+/g, '').toUpperCase() + '|' + Number(f.amountTax).toFixed(2) + '|' + String(f.invoiceDate || '').replace(/\D/g, '');
+  }
+  return null;
+}
+
+// 标记重复发票：同 key 出现多次的文件置 _dup=true（保留第一份为原迹）
+function updateDuplicateMarks() {
+  var counts = {};
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  }
+  for (var i = 0; i < S.files.length; i++) {
+    var k = getDupKey(S.files[i]);
+    S.files[i]._dup = !!k && counts[k] > 1;
+  }
+  var dupCount = S.files.filter(function(f) { return f._dup; }).length;
+  var dupEl = document.getElementById('duplicateCount');
+  if (dupEl) dupEl.textContent = dupCount ? '(' + dupCount + ')' : '';
+}
+
+// 删除每组第一份之后的重复项。仅处理按发票号判定的可靠重复（no: key）；
+// sum:（同销售方+金额+日期）疑似重复可能是同日同额的两张真发票，只标记不删除，
+// 交由人工勾选处理。无 key、加载骨架一律不动。
+// silent=true 为自动去重路径（识别完成后），删除后仍会 toast 告知用户。
+function removeDuplicates(silent) {
+  var seen = {};
+  var removed = 0;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) {
+    if (f._loading) return true;
+    var key = getDupKey(f);
+    if (!key || key.indexOf('no:') !== 0) return true;
+    if (seen[key]) { removed++; return false; }
+    seen[key] = true;
+    return true;
+  });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  updateDuplicateMarks();
+  if (!silent) {
+    S.fileFilter = 'all';
+    S.printedFilter = 'all';
+    syncFilterButtons();
+    renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
+    toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
+  } else if (removed) {
+    toast('已自动去重：删除 ' + removed + ' 个重复项（每组保留第一份）');
+  }
+  return removed;
+}
+
+// 一键勾选每组第一份之后的重复项，配合删除按钮安全去重。
+// 仅勾选按发票号判定的可靠重复（no: key）；sum:（同销售方+金额+日期）疑似重复
+// 只保留 ⚠ 标记供人工核对——同日同销售方同金额的两张真发票会被误判，不能自动勾选删除。
+// 注意：此操作会覆盖用户原有勾选，toast 中明确提示。
+function selectDuplicateExtras() {
+  updateDuplicateMarks();
+  if (!S.files.some(function(f) { return f._dup; })) {
+    toast('未发现重复项');
+    return 0;
+  }
+  var seen = {};
+  var selected = 0;
+  var suspected = 0;
+  S.files.forEach(function(f) {
+    if (f._loading || !f._dup) {
+      f.checked = false;
+      return;
+    }
+    var key = getDupKey(f);
+    if (seen[key]) {
+      if (key.indexOf('no:') === 0) { f.checked = true; selected++; }
+      else { f.checked = false; suspected++; }
+    } else {
+      seen[key] = true;
+      f.checked = false;
+    }
+  });
+  S.fileFilter = 'duplicates';
+  S.printedFilter = 'all';
+  syncFilterButtons();
+  renderFileList();
+  if (selected) {
+    toast('已覆盖原有勾选：选中 ' + selected + ' 个重复项（每组保留第一份），点击删除按钮即可去重' +
+      (suspected ? '；另有 ' + suspected + ' 个疑似重复仅标记 ⚠，请人工核对' : ''));
+  } else {
+    toast('未发现可靠重复' + (suspected ? '；' + suspected + ' 个疑似重复（同销售方+金额+日期）仅标记 ⚠，请人工核对' : ''));
+  }
+  return selected;
+}
+
 function renderFileList() {
+  updateDuplicateMarks();
   var list = document.getElementById('fileList');
   var scrollTop = list.scrollTop;
   var filtered = getFilteredFiles();
@@ -640,15 +783,47 @@ function renderFileList() {
   var currentNewIds = _newFileIds;
   _newFileIds = {};
 
+  var grid = S.fileView === 'grid';
+  list.classList.toggle('grid', grid);
+
   list.innerHTML = S.files.map(function(f, i) {
     var cls = 'file-item';
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = (S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed);
+    var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
+      (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
+    if (grid) {
+      var gcb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
+      var grb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+      var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
+      var gab = buildAmtBadge(f);
+      var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+      var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
+      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
+      var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
+      var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
+      var gacts = '';
+      if (!f._loading) {
+        gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
+          '<button class="ib card-ib' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
+          '<button class="ib card-ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button>' +
+          '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      } else {
+        gacts = '<button class="ib card-ib danger" onclick="rmFile(' + i + ')" title="删除">\u2715</button>';
+      }
+      return '<div class="' + cls + ' file-card" data-idx="' + i + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
+        '<div class="file-thumb">' + gthumb + '<div class="type-badge">' + gtype + '</div>' +
+        '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
+        '<div class="card-actions">' + gacts + '</div></div>' +
+        '<div class="card-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' +
+        gseller +
+        '<div class="card-meta">' + gpd + gab + gcb + grb + gdupb + gsize + '</div></div>';
+    }
     var cb = f.copies > 1 ? '<span class="copy-badge">' + f.copies + '份</span>' : '';
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
+    var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
     var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
@@ -657,9 +832,10 @@ function renderFileList() {
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     var typeBadgeText = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : safeType;
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
+    var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<div class="file-meta-left">' + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + ab + '</div>' +
+      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab + '</div>' +
         '<div class="file-meta-sep"></div>' +
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -680,6 +856,19 @@ function renderFileList() {
 
   list.scrollTop = scrollTop;
   updateAmountSummary();
+}
+function toggleFileView() {
+  S.fileView = S.fileView === 'grid' ? 'list' : 'grid';
+  syncFileViewBtn();
+  saveSettings();
+  renderFileList();
+}
+function syncFileViewBtn() {
+  var btn = document.getElementById('fileViewBtn');
+  if (!btn) return;
+  var grid = S.fileView === 'grid';
+  btn.textContent = grid ? '\u2630' : '\u25A6';
+  btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
   var menu = document.getElementById('copyMenu');
@@ -726,7 +915,13 @@ function setAllCopies(e, n) {
 function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 function selectAll() { S.files.forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deleteSelected() { if (!S.files.some(function(f) { return f.checked; })) return; S.files = S.files.filter(function(f) { return !f.checked; }); renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn(); }
+function deleteSelected() {
+  if (!S.files.some(function(f) { return f.checked; })) return;
+  var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
+  S.files = S.files.filter(function(f) { return !f.checked; });
+  _activeFileIdx = active ? S.files.indexOf(active) : -1;
+  renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
+}
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 function clearAll() {
@@ -758,14 +953,21 @@ function clickFileItem(idx, event) {
 
   // Find which page this file is on
   var activeFiles = getActiveFiles();
-  var perPage = S.layout.cols * S.layout.rows;
+  var perPage = getPerPage(getSettings());
   var activeIdx = -1;
   for (var i = 0; i < activeFiles.length; i++) {
     if (activeFiles[i].id === f.id) { activeIdx = i; break; }
   }
   if (activeIdx >= 0) {
     S.currentPage = Math.floor(activeIdx / perPage);
+    S.selectedSlot = activeIdx % perPage;
     updatePreview();
+  } else {
+    // 不参与排版的文件（如 XML 数电票）：清除预览槽位选中态并刷新面板
+    S.selectedSlot = -1;
+    var selEl = document.querySelector('.invoice-slot.selected');
+    if (selEl) selEl.classList.remove('selected');
+    updateAdjPanel();
   }
 
   updateActiveFileHighlight();
@@ -785,7 +987,7 @@ function updateActiveFileHighlight() {
 // Sync _activeFileIdx with current preview page (called from updatePreview)
 function syncActiveFileFromPage() {
   var activeFiles = getActiveFiles();
-  var perPage = S.layout.cols * S.layout.rows;
+  var perPage = getPerPage(getSettings());
   var pageStart = S.currentPage * perPage;
   if (pageStart < activeFiles.length) {
     var firstFileOnPage = activeFiles[pageStart];
@@ -961,13 +1163,28 @@ function selectSlot(idx) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
   }
+  syncSidebarToSelectedSlot();
+}
+
+// 选中槽位 → 同步左侧列表高亮并滚动定位（列表与版面双向联动）
+function syncSidebarToSelectedSlot() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx < 0) return;
+  _activeFileIdx = idx;
+  updateActiveFileHighlight();
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var el = list.querySelector('.file-item[data-idx="' + idx + '"]');
+  if (el) el.scrollIntoView({ block: 'nearest' });
 }
 
 function getSelectedFileObj() {
   if (S.selectedSlot < 0) return null;
   var files = getActiveFiles();
   var settings = getSettings();
-  var perPage = settings.cols * settings.rows;
+  var perPage = getPerPage(settings);
   var pageStart = S.currentPage * perPage;
   var fileIdx = pageStart + S.selectedSlot;
   return fileIdx < files.length ? files[fileIdx] : null;
@@ -1379,7 +1596,7 @@ function getActiveFiles() {
 }
 
 function buildPages(files, settings) {
-  var perPage = settings.cols * settings.rows;
+  var perPage = getPerPage(settings);
   var pages = [];
   for (var i = 0; i < files.length; i += perPage) pages.push(files.slice(i, i + perPage));
   return pages;
@@ -1499,6 +1716,7 @@ function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); i
 function saveSettings() {
   var o = {
     layout: { cols: S.layout.cols, rows: S.layout.rows },
+    fileView: S.fileView,
     paperSize: document.getElementById('paperSize').value,
     orientation: document.getElementById('orientation').value,
     customW: document.getElementById('customW').value,
@@ -1573,6 +1791,10 @@ function loadSettings() {
       if (parseInt(e.dataset.cols) === S.layout.cols && parseInt(e.dataset.rows) === S.layout.rows) e.classList.add('active');
     });
     syncToolbarHighlight(S.layout.cols, S.layout.rows);
+  }
+  if (o.fileView === 'grid' || o.fileView === 'list') {
+    S.fileView = o.fileView;
+    syncFileViewBtn();
   }
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
@@ -1675,6 +1897,10 @@ function resetSettings() {
   S.layout = { cols: 1, rows: 1 };
   S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false };
   S.viewZoom = 0;
+  S.fileView = 'list';
+  S.fileFilter = 'all';
+  S.printedFilter = 'all';
+  syncFileViewBtn();
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
   document.getElementById('customRows').value = 1;
@@ -1758,7 +1984,8 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// Ctrl+Wheel zoom
+// Wheel: selected slot + cursor over it → zoom slot; plain → flip page; Ctrl → zoom view
+var _wheelFlipTs = 0; // 上次滚轮翻页时间，节流防触控板惯性连翻
 document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   if (!e.ctrlKey && S.selectedSlot >= 0) {
     var slotEl = e.target.closest('.invoice-slot');
@@ -1776,7 +2003,24 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
       }
     }
   }
-  if (!e.ctrlKey) return;
+  if (!e.ctrlKey) {
+    // Plain wheel: flip pages, unless the zoomed view still has content to scroll
+    if (e.deltaY !== 0 && S.totalPages > 1) {
+      var wrap = this;
+      var canScroll = wrap.scrollHeight > wrap.clientHeight + 1;
+      var atTop = wrap.scrollTop <= 0;
+      var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
+      if (!canScroll || (e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop)) {
+        e.preventDefault();
+        var now = Date.now();
+        if (now - _wheelFlipTs > 150) {
+          _wheelFlipTs = now;
+          if (e.deltaY > 0) nextPage(); else prevPage();
+        }
+      }
+    }
+    return;
+  }
   e.preventDefault();
   var step = 5;
   var curZoom = S.viewZoom === 0 ? getFitZoom() : S.viewZoom;
@@ -1882,7 +2126,7 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.1.0';
+    APP_VERSION = '3.2.0';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);

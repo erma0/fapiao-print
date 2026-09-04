@@ -52,6 +52,7 @@
               </div>
             </div>
             <button class="ib" onclick="selectAll()" title="全选">☑</button>
+            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图">▦</button>
             <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
             <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
           </div>
@@ -60,6 +61,7 @@
           <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
           <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
           <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
+          <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项并勾选可安全删除的重复（按发票号判定，会覆盖原有勾选）；同销售方+金额+日期的疑似重复仅标记不勾选">重复 <span id="duplicateCount"></span></button>
         </div>
         <div id="fileList"></div>
       </div>
