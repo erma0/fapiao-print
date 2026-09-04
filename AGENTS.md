@@ -2,7 +2,7 @@
 
 ## 项目概览
 
-- **版本**: v2.4.0
+- **版本**: v2.5.0
 
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架）
 
@@ -142,6 +142,17 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 - **增量更新**: `updateFileItem()` 按视图分流——grid 更新 `.card-meta`（已打印✓ + 金额徽章 + 份数 + 旋转 + ⚠重复），list 只重写 `.file-meta-left` 保留右侧操作按钮；OCR 按钮两种视图统一用 `.ocr-btn` 类定位
 - **空态提示**: 拖入提示合并至预览区空状态（原左上角拖入选区已移除）
 
+### 版面拖拽排序 (v2.5.0)
+
+预览区把发票拖到另一槽位即排序，与单票偏移拖拽共存于同一 `_slotDrag` 状态机（`mode: 'move'`）。
+
+- **双手势**: `updateDropTarget()` 按目标槽位主轴 25%/50%/25% 分区——边缘 before/after 顺位插入（`moveSlotInvoice`，`.drop-insert` 指示线），中间对调（`swapSlotInvoices`，`.drop-target` 虚线框）；单列布局主轴为纵向；落点用 `elementFromPoint`
+- **有效落点**: 仅装有发票（含空白占位）的槽位，尾部空槽拒收（`currentPage * perPage + idx >= activeLen` 过滤）
+- **偏移撤销**: 跨槽松手时回滚拖动产生的 slotOffsetX/Y——排序手势不得产生单票偏移
+- **排序语义**: splice 两步法（先移除源、再 `indexOf` 重取目标索引）；倒序打印时 before/after 反映射；选中态跨页跟随；相邻槽位往自侧插入 = 原位，直接 no-op
+- **⚠️ `_dragHintShown` 必须在 layout.js 顶层声明**: 未声明时 `showDragHint()` 抛 ReferenceError 被 mousemove 事件派发边界吞掉，`dropZone/dropIdx` 静默保持空值，落点判定全灭（v2.5.0 实测踩坑）
+- **web 同步**: web 分支 layout.js 同逻辑（无倒序反映射，web 无 pageOrder）
+
 ### 预览滚轮交互 (v2.4.0)
 
 `previewWrap` wheel 监听按优先级三分支：
@@ -164,6 +175,16 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 - **强标记**: 「铁路电子客票」「电子客票号」正则直判 ticket
 - **弱信号**: `_countTicketSignalGroups()` 统计 13 组关键词（车次/票价/座位/席别/检票/进站/出站/铁路/乘车/二等/一等/动车/高铁），≥2 组才判 ticket
 - **标签分级**: `getTicketTypeLabel()` 细分类型标签为 铁路电子客票 / 火车票 / 出租车票 / 网约车票 / 车票（兜底）；原 `isTicketText` 死代码已删除
+
+### 通行费识别 (v2.5.0)
+
+ETC/高速公路通行费电子发票打 toll 标记，按增值税结构正常提取，不走 ticket/nontax 早退分支。
+
+- **检测**: `_detectInvoiceType()` — 「通行费」强标记直判；「车牌号/车牌颜色 + 通行日期」弱标记双组确认；位于车票检测之后、nontax 之前
+- **提取**: 复用 VAT 提取链路（销售方=路桥公司保留真实名称）；`isToll` 随结果对象返回，`applyOcrResult`/`applyPdfTextResult` 写入 `fileObj._isToll`
+- **兜底**: 老式纸质通行费票（OCR 路径）无价税合计 → 「金额标签邻近 → 全文最大合理金额(5~5000)」两段式扫描，amountNoTax=amountTax、taxAmount=0
+- **显示**: sellerName 为空时置「通行费发票」；徽章 `.toll-badge`（青绿，深浅主题各一条）；汇总表类型列 `_isToll → '通行费发票'`
+- **双分支同步**: web `js/pdf-text.js` 与本分支逻辑一致，识别改动必须双向同步
 
 ### PDF 渲染双引擎 (v1.9.10+)
 
@@ -199,7 +220,7 @@ npm run bump <版本号>    # 同步版本号到 Cargo.toml + tauri.conf.json
 
 **路径优先级**: PDF文字层 > OFD XML > XML 数电票 > OCR
 
-- **发票类型检测**: `_detectInvoiceType()` — nontax(优先级最高) > vat > ticket > ride > unknown
+- **发票类型检测**: `_detectInvoiceType()` — ticket(强标记+双组弱信号) > toll > nontax > vat > ride > unknown
 
 - **金额三阶段**: 含税价 → 数学验证配对 → 区域解析
 
@@ -580,7 +601,7 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 | ----------- | --------------------------------------------------------------------------------- |
 | `app.js`    | 主入口、状态管理(S)、文件加载（批量IPC+并行渲染）、文件列表双视图、Tauri IPC、设置持久化、批量文字提取分发、XML数电票加载                    |
 | `ocr.js`    | 发票字段提取、金额解析、中文大写解析、类型检测、金额校验                                                      |
-| `layout.js` | 布局计算、预览渲染、单票调整拖拽、slot 交互                                                          |
+| `layout.js` | 布局计算、预览渲染、单票调整拖拽、slot 交互、版面拖拽排序（双手势） |                                                         |
 | `print.js`  | 打印/导出、构建 LayoutRenderRequest、智能 PDF 缓存（deepEqual）、四种打印模式分发、PDFium→SumatraPDF 自动降级 |
 
 - 全部用 `var` 声明顶层变量（避免与 Tauri 注入脚本冲突）
