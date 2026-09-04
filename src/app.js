@@ -1434,7 +1434,7 @@ function updateFileItem(fileObj) {
       var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">\u26A0</span>' : '';
       cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb + '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
     }
-    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
     var sellerLine = items[idx].querySelector('.card-seller');
     if (sellerLine) {
       sellerLine.innerHTML = gsellerHtml;
@@ -1451,7 +1451,7 @@ function updateFileItem(fileObj) {
       }
     }
   } else {
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // 只更新 .file-meta-left，保留 file-meta-right 操作按钮与布局结构
     var leftEl = items[idx].querySelector('.file-meta-left');
     if (leftEl) {
@@ -2013,7 +2013,7 @@ function renderFileList() {
       var gab = buildAmtBadge(f);
       var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
       var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
-      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
+      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
       var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
       var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
       var gacts = '';
@@ -2052,7 +2052,7 @@ function renderFileList() {
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
@@ -4129,6 +4129,7 @@ function getSummaryCellValue(fileObj, field, idx) {
     case 'seq': return String(idx + 1);
     case 'invoiceType':
       if (fileObj._xmlInvoice && fileObj.invoiceType) return fileObj.invoiceType;
+      if (fileObj._isToll) return '通行费发票';
       if (fileObj._isTicket) return fileObj.sellerName || '车票'; // sellerName holds ticket label
       if (fileObj._ocrText && /非税/.test(fileObj._ocrText)) return '非税票据';
       return '增值税发票';
