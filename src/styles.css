@@ -344,8 +344,11 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .main-area { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
 .toolbar {
   background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 8px 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 16px; min-height: 44px; height: 44px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
 }
+.toolbar .btn { line-height: 1.2; }
+.toolbar .btn[style*="16px"] { line-height: 1; }
 .toolbar-group { display: flex; gap: 4px; align-items: center; }
 .toolbar-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
 .zoom-ctrl { position: relative; display: flex; align-items: center; gap: 1px; padding: 3px 8px; font-size: 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; user-select: none; min-width: 56px; justify-content: center; }
