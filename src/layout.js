@@ -362,7 +362,9 @@ function onSlotMouseDown(e) {
     previewScale: getCurrentPreviewScale(),
     // Cache settings/layout for perf (avoid getSettings() every mousemove)
     cachedSettings: settings,
-    cachedLayout: layout
+    cachedLayout: layout,
+    dropEl: null,
+    dropIdx: -1
   };
   slotEl.classList.add('dragging');
 
@@ -415,6 +417,7 @@ function onSlotMouseMove(e) {
   var layout = _slotDrag.cachedLayout;
 
   if (_slotDrag.mode === 'move') {
+    updateDropTarget(e);
     var dx = e.clientX - _slotDrag.startX;
     var dy = e.clientY - _slotDrag.startY;
     // Convert pixel delta to mm
@@ -482,14 +485,63 @@ function onSlotMouseMove(e) {
 function onSlotMouseUp(e) {
   if (!_slotDrag) return;
   _slotDrag.slotEl.classList.remove('dragging');
-  var didMove = !!_slotDrag.moved;
+  var d = _slotDrag;
   _slotDrag = null;
   document.removeEventListener('mousemove', onSlotMouseMove);
   document.removeEventListener('mouseup', onSlotMouseUp);
-  if (didMove) {
+
+  if (d.mode === 'move' && d.dropIdx >= 0 && d.dropIdx !== d.idx) {
+    clearDropTarget(d.dropEl);
+    swapSlotInvoices(d.idx, d.dropIdx);
+    return;
+  }
+  clearDropTarget(d.dropEl);
+  if (d.moved) {
     updatePreview();
     updateAdjPanel();
   }
+}
+
+// Track the slot under cursor while dragging; highlight as drop target
+function updateDropTarget(e) {
+  var el = document.elementFromPoint(e.clientX, e.clientY);
+  el = el && el.closest ? el.closest('.invoice-slot') : null;
+  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (el === _slotDrag.dropEl) return;
+  if (_slotDrag.dropEl) _slotDrag.dropEl.classList.remove('drop-target');
+  _slotDrag.dropEl = el && idx !== _slotDrag.idx ? el : null;
+  _slotDrag.dropIdx = _slotDrag.dropEl ? idx : -1;
+  if (_slotDrag.dropEl) _slotDrag.dropEl.classList.add('drop-target');
+}
+
+function clearDropTarget(el) {
+  if (el) el.classList.remove('drop-target');
+}
+
+// Swap invoice positions between two slots (slot idx → active array index)
+function swapSlotInvoices(fromIdx, toIdx) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var toDi = S.currentPage * perPage + toIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || toDi < 0 || fromDi >= n || toDi >= n || fromDi === toDi) {
+    updatePreview();
+    return;
+  }
+  var a = active[fromDi], b = active[toDi];
+  if (a === b) { updatePreview(); return; }
+  var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
+  if (ia < 0 || ib < 0) { updatePreview(); return; }
+  var offA = a.slotOffsetX, offB = b.slotOffsetX;
+  var offAY = a.slotOffsetY, offBY = b.slotOffsetY;
+  S.files[ia] = b; S.files[ib] = a;
+  a.slotOffsetX = offA; a.slotOffsetY = offAY;
+  b.slotOffsetX = offB; b.slotOffsetY = offBY;
+  toast('已互换位置');
+  updatePreview();
 }
 
 /**

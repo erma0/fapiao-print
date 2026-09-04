@@ -385,7 +385,8 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 /* ===== Per-slot adjustment ===== */
 .invoice-slot { cursor: pointer; }
 .invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; overflow: visible !important; }
-.invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; }
+.invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; pointer-events: none; }
+.invoice-slot.drop-target { outline: 2px dashed var(--accent); z-index: 6; }
 .invoice-slot.selected::after,
 .invoice-slot.dragging::after {
   content: ''; position: absolute; inset: 0;
