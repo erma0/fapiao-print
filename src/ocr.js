@@ -401,6 +401,7 @@ function applyOcrResult(fileObj, ocrResult) {
     fileObj._ocrText = info._ocrText || ocrResult.text || '';
     fileObj._isTicket = info.isTicket || false;
     fileObj._isNonTax = info.isNonTax || false;
+    fileObj._isToll = info.isToll || false;
 
     // If amounts already set by PDF text extraction, skip OCR amount validation
     // to avoid duplicate warning logs
@@ -549,6 +550,7 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
     fileObj._ocrText = info._ocrText || pdfTextResult.text || '';
     fileObj._isTicket = info.isTicket || false;
     fileObj._isNonTax = info.isNonTax || false;
+    fileObj._isToll = info.isToll || false;
 
     // Only fill empty fields — structured extraction priority
     if (info.invoiceNo && !fileObj.invoiceNo) fileObj.invoiceNo = info.invoiceNo;
@@ -2672,7 +2674,7 @@ function _countTicketSignalGroups(text) {
 
 /**
  * Detect invoice type from word positions.
- * Returns: 'vat' | 'ticket' | 'ride' | 'unknown'
+ * Returns: 'vat' | 'ticket' | 'toll' | 'nontax' | 'ride' | 'unknown'
  */
 function _detectInvoiceType(words, imgW, imgH) {
   // Build full text from all words (not just top 60%) for more reliable detection
@@ -2682,6 +2684,14 @@ function _detectInvoiceType(words, imgW, imgH) {
   }
   if (_countTicketSignalGroups(allText) >= 2) {
     return 'ticket';
+  }
+  // 通行费电子发票（ETC/高速公路）：结构同增值税发票，走 VAT 提取，仅打 toll 标记
+  // 强标记「通行费」；弱标记「车牌号/车牌颜色 + 通行日期」双组确认
+  if (/(?:通\s*行\s*费)/.test(allText)) {
+    return 'toll';
+  }
+  if (/(?:车\s*牌\s*号|车\s*牌\s*颜\s*色)/.test(allText) && /通\s*行\s*日\s*期/.test(allText)) {
+    return 'toll';
   }
   // Also check: has "购买方名称:" but no "销售方" — likely a ticket (not VAT)
   if (/购买方\s*名\s*称/.test(allText) && !/销售方/.test(allText)) {
@@ -2944,6 +2954,7 @@ function extractByCoordinates(ocrResult) {
   // Detect invoice type
   var invType = _detectInvoiceType(words, imgW, imgH);
   var isTicket = invType === 'ticket';
+  var isToll = invType === 'toll';
   var sellerName = textInfo.sellerName || '';
   var sellerCreditCode = textInfo.sellerCreditCode || '';
   var amountTax = 0, amountNoTax = 0, taxAmount = 0;
@@ -3067,7 +3078,7 @@ function extractByCoordinates(ocrResult) {
              sellerName: sellerName, sellerCreditCode: sellerCreditCode,
              invoiceNo: invoiceNo, invoiceDate: invoiceDate,
              buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-             _ocrText: fullText, isTicket: true, isNonTax: false };
+             _ocrText: fullText, isTicket: true, isNonTax: false, isToll: false };
   }
 
   // === Non-tax invoice extraction (非税收入票据) ===
@@ -3098,7 +3109,7 @@ function extractByCoordinates(ocrResult) {
              sellerName: sellerName, sellerCreditCode: sellerCreditCode,
              invoiceNo: invoiceNo, invoiceDate: invoiceDate,
              buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-             _ocrText: fullText, isTicket: false, isNonTax: true };
+             _ocrText: fullText, isTicket: false, isNonTax: true, isToll: false };
   }
 
   // === VAT / Ride invoice extraction ===
@@ -3782,6 +3793,30 @@ function extractByCoordinates(ocrResult) {
     taxAmount = 0;
   }
 
+  // 通行费兜底：老式纸质通行费票（OCR 路径）无价税合计结构，
+  // 退化为「金额标签邻近 → 全文最大合理金额」两段式扫描
+  if (isToll && !amountTax) {
+    var _tollText = normFullText || _normTextForExtract(fullText);
+    var _tollLabelMatch = _tollText.match(/(?:金\s*额|通\s*行\s*费)[^\d¥]{0,8}¥?\s*(\d+(?:,\d{3})*\.\d{2})/);
+    if (_tollLabelMatch) {
+      var _tollV = parseFloat(_tollLabelMatch[1].replace(/,/g, ''));
+      if (_tollV >= 1 && _tollV <= 50000) amountTax = _tollV;
+    }
+    if (!amountTax) {
+      var _tollCands = (_tollText.match(/\d+\.\d{2}/g) || [])
+        .map(function(s) { return parseFloat(s); })
+        .filter(function(v) { return v >= 5 && v <= 5000 && !isLikelyYearOrDate(v, v.toFixed(2)); });
+      if (_tollCands.length) amountTax = Math.max.apply(null, _tollCands);
+    }
+    if (amountTax > 0) {
+      amountNoTax = amountTax;
+      taxAmount = 0;
+      console.log('[通行费提取] 兜底金额:', amountTax);
+    }
+  }
+  // 电子通行费发票销售方为路桥公司（保留真实名称），纸质票无销售方时给标签
+  if (isToll && !sellerName) sellerName = '通行费发票';
+
   console.log('[坐标提取] 结果:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount,
     sellerName: sellerName || '(空)', sellerCreditCode: sellerCreditCode || '(空)',
     invoiceNo: invoiceNo || '(空)', invoiceDate: invoiceDate || '(空)',
@@ -3791,7 +3826,7 @@ function extractByCoordinates(ocrResult) {
            sellerName: sellerName, sellerCreditCode: sellerCreditCode,
            invoiceNo: invoiceNo, invoiceDate: invoiceDate,
            buyerName: buyerName, buyerCreditCode: buyerCreditCode,
-           _ocrText: fullText, isTicket: false, isNonTax: false };
+           _ocrText: fullText, isTicket: false, isNonTax: false, isToll: isToll };
 }
 
 /**
