@@ -1275,6 +1275,10 @@ var _activeFileIdx = -1;   // Index of currently active/highlighted file in side
 var _printedMap = {};      // Printed state cache: {filePath: true}
 var _restoreFilePaths = null; // File paths to restore on startup
 var _isRestoringFiles = false; // True while restoring files (skip OCR)
+var _listDrag = null;          // 左侧列表拖拽排序状态机 (#26)
+var _listDragBound = false;    // 列表拖拽事件只绑定一次
+var _listDragSuppressClick = false; // 拖拽松手后吞掉浏览器派发的 click
+var _listDragHintShown = false; // 本次会话是否已提示过列表拖拽手势
 
 function _onOcrTaskDone() {
   _ocrRunning--;
@@ -2295,23 +2299,170 @@ function syncActiveFileFromPage() {
   }
 }
 // =====================================================
-// File list sorting — move up / move down
+// File list sorting — move up / move down + drag reorder (#26)
 // =====================================================
 function moveFile(i, dir) {
-  var target = i + dir;
-  if (target < 0 || target >= S.files.length) return;
-  var tmp = S.files[i];
-  S.files[i] = S.files[target];
-  S.files[target] = tmp;
+  swapFiles(i, i + dir);
+}
+
+function swapFiles(ia, ib) {
+  if (ia === ib || ia < 0 || ib < 0 || ia >= S.files.length || ib >= S.files.length) return;
+  var tmp = S.files[ia];
+  S.files[ia] = S.files[ib];
+  S.files[ib] = tmp;
   // Update active file index to follow the moved item
-  if (_activeFileIdx === i) { _activeFileIdx = target; }
-  else if (_activeFileIdx === target) { _activeFileIdx = i; }
+  if (_activeFileIdx === ia) { _activeFileIdx = ib; }
+  else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
   renderFileList();
   updatePreview();
-  // Scroll to keep the moved item visible
+  scrollToListItem(ib);
+}
+
+// Insert file at neighbor position (before/after target instead of swapping)
+function moveFileTo(fromIdx, toIdx, zone) {
+  if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= S.files.length || toIdx >= S.files.length) return;
+  var a = S.files[fromIdx];
+  var b = S.files[toIdx];
+  if (!a || !b || a === b) return;
+  S.files.splice(fromIdx, 1);
+  var insertAt = zone === 'after' ? S.files.indexOf(b) + 1 : S.files.indexOf(b);
+  S.files.splice(insertAt, 0, a);
+  if (insertAt === fromIdx) return; // 落点即原位，顺序未变
+  _activeFileIdx = S.files.indexOf(a);
+  renderFileList();
+  updatePreview();
+  scrollToListItem(insertAt);
+}
+
+function scrollToListItem(idx) {
   var list = document.getElementById('fileList');
+  if (!list) return;
   var items = list.querySelectorAll('.file-item');
-  if (items[target]) items[target].scrollIntoView({ block: 'nearest' });
+  if (items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+// 列表拖拽排序仅在无筛选时启用：筛选态显示序 ≠ 底层序，拖拽会乱序
+function canListDrag() {
+  return S.fileFilter === 'all' && S.printedFilter === 'all';
+}
+
+function initListDrag() {
+  if (_listDragBound) return;
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  _listDragBound = true;
+  list.addEventListener('mousedown', onListMouseDown);
+  // 拖拽松手后浏览器派发的合成 click 会误触选中/弹窗，capture 阶段吞掉一次
+  document.addEventListener('click', function(e) {
+    if (!_listDragSuppressClick) return;
+    _listDragSuppressClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}
+
+function onListMouseDown(e) {
+  if (e.button !== 0 || !canListDrag()) return;
+  var itemEl = e.target.closest ? e.target.closest('#fileList .file-item') : null;
+  if (!itemEl) return;
+  // 勾选框/操作按钮区域保持原有点击行为，不启动拖拽
+  if (e.target.closest('.file-check') || e.target.closest('button')) return;
+  var idx = parseInt(itemEl.dataset.idx);
+  if (isNaN(idx)) return;
+  var f = S.files[idx];
+  if (!f || f._loading) return;
+  _listDrag = {
+    itemEl: itemEl,
+    idx: idx,
+    startX: e.clientX,
+    startY: e.clientY,
+    moved: false,
+    dropEl: null,
+    dropIdx: -1,
+    dropZone: ''
+  };
+  e.preventDefault();
+  document.addEventListener('mousemove', onListMouseMove);
+  document.addEventListener('mouseup', onListMouseUp);
+}
+
+function onListMouseMove(e) {
+  if (!_listDrag) return;
+  if (!_listDrag.moved) {
+    var dx = e.clientX - _listDrag.startX;
+    var dy = e.clientY - _listDrag.startY;
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    _listDrag.moved = true;
+    _listDrag.itemEl.classList.add('dragging');
+    showListDragHint();
+  }
+  e.preventDefault();
+  updateListDropTarget(e);
+}
+
+function onListMouseUp(e) {
+  if (!_listDrag) return;
+  var d = _listDrag;
+  _listDrag = null;
+  document.removeEventListener('mousemove', onListMouseMove);
+  document.removeEventListener('mouseup', onListMouseUp);
+  d.itemEl.classList.remove('dragging');
+  clearListDropTarget(d.dropEl);
+  if (!d.moved) return;
+  _listDragSuppressClick = true;
+  setTimeout(function() { _listDragSuppressClick = false; }, 0);
+  if (d.dropIdx >= 0 && d.dropIdx !== d.idx) {
+    if (d.dropZone === 'before' || d.dropZone === 'after') {
+      moveFileTo(d.idx, d.dropIdx, d.dropZone);
+    } else {
+      swapFiles(d.idx, d.dropIdx);
+    }
+  }
+}
+
+// 落点分区：目标项上下各 25% 为顺位插入（指示线），中间 50% 为对调（虚线框）
+function updateListDropTarget(e) {
+  var el = document.elementFromPoint(e.clientX, e.clientY);
+  el = el && el.closest ? el.closest('.file-item') : null;
+  if (el && !el.closest('#fileList')) el = null;
+  var idx = el ? parseInt(el.dataset.idx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (idx < 0 || idx === _listDrag.idx) { el = null; idx = -1; }
+  var zone = '';
+  if (el) {
+    var r = el.getBoundingClientRect();
+    var ratio = (e.clientY - r.top) / (r.height || 1);
+    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+  }
+  if (el === _listDrag.dropEl && zone === _listDrag.dropZone) return;
+  clearListDropTarget(_listDrag.dropEl);
+  _listDrag.dropEl = el;
+  _listDrag.dropIdx = idx;
+  _listDrag.dropZone = zone;
+  if (!el) return;
+  if (zone === 'swap') {
+    el.classList.add('drop-target');
+  } else {
+    el.classList.add('drop-insert');
+    el.classList.add('drop-axis-v');
+    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+  }
+}
+
+function clearListDropTarget(el) {
+  if (!el) return;
+  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-at-start', 'drop-at-end');
+}
+
+// 首次拖拽列表时提示两种手势的区别
+function showListDragHint() {
+  if (_listDragHintShown) return;
+  _listDragHintShown = true;
+  try {
+    if (localStorage.getItem('ticketchan-list-drag-hint')) return;
+    localStorage.setItem('ticketchan-list-drag-hint', '1');
+  } catch (err) { return; }
+  toast('拖到列表项边缘 = 顺位插入，拖到中间 = 两张对调', 4000);
 }
 
 // Amount statistics
@@ -3905,9 +4056,9 @@ renderQuickLayoutList();
     }
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() { showApp(); bindFooterTextEvent(); setupInputWheelSupport(); });
+    document.addEventListener('DOMContentLoaded', function() { showApp(); bindFooterTextEvent(); setupInputWheelSupport(); initListDrag(); });
   } else {
-    showApp(); bindFooterTextEvent(); setupInputWheelSupport();
+    showApp(); bindFooterTextEvent(); setupInputWheelSupport(); initListDrag();
   }
   setTimeout(showApp, 2000);
 })();

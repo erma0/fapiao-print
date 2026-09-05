@@ -160,6 +160,17 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .file-item:hover { background: var(--surface2); }
 .file-item.active-item { background: var(--accent-light); box-shadow: inset 3px 0 0 var(--accent); }
 .file-item.active-item .file-name { color: var(--accent); }
+/* ===== 列表拖拽排序落点 (#26) — 与版面拖拽同一套指示样式 ===== */
+.file-item.dragging { opacity: 0.85; cursor: move; pointer-events: none; }
+.file-item.drop-target { position: relative; outline: 2px dashed var(--accent); z-index: 6; }
+.file-item.drop-insert { position: relative; z-index: 6; }
+.file-item.drop-insert::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 4px;
+  background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 12;
+  box-shadow: 0 0 5px var(--accent);
+}
+.file-item.drop-at-start::before { top: 0; }
+.file-item.drop-at-end::before { bottom: 0; }
 .file-check {
   width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
   cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: white;
