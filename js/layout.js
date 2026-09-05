@@ -458,19 +458,42 @@ function onSlotMouseUp(e) {
   document.removeEventListener('mousemove', onSlotMouseMove);
   document.removeEventListener('mouseup', onSlotMouseUp);
 
+  // 空槽 mousedown 已 preventDefault 不会触发 click；但占位槽等子元素
+  // 仍可能派发合成 click 误触 onclick=addFileToSlot，统一吞一次
+  if (d.moved) {
+    _slotSuppressClick = true;
+    setTimeout(function() { _slotSuppressClick = false; }, 0);
+  }
   if (d.mode === 'move' && d.dropIdx >= 0 && d.dropIdx !== d.idx) {
     clearDropTarget(d.dropEl);
+    if (d.tempPlaceholder && d.dropZone === 'tail') {
+      // 临时占位拖回尾部空槽 = 原位，视为取消，销毁占位
+      var ti = S.files.indexOf(d.tempPlaceholder);
+      if (ti >= 0) S.files.splice(ti, 1);
+      updatePreview();
+      return;
+    }
     // 跨槽拖拽是排序手势，撤销拖动过程中产生的单票偏移
     d.fileObj.slotOffsetX = d.startOffX;
     d.fileObj.slotOffsetY = d.startOffY;
     if (d.dropZone === 'before' || d.dropZone === 'after') {
       moveSlotInvoice(d.idx, d.dropIdx, d.dropZone);
+    } else if (d.dropZone === 'tail') {
+      moveSlotInvoiceToTail(d.idx);
     } else {
       swapSlotInvoices(d.idx, d.dropIdx);
     }
+    if (d.tempPlaceholder) toast('已在中间留白，点击可上传发票');
     return;
   }
   clearDropTarget(d.dropEl);
+  if (d.tempPlaceholder) {
+    // 未产生有效落点：临时占位用完即销毁，版面恢复原状
+    var ti2 = S.files.indexOf(d.tempPlaceholder);
+    if (ti2 >= 0) S.files.splice(ti2, 1);
+    updatePreview();
+    return;
+  }
   if (d.moved) {
     updatePreview();
     updateAdjPanel();
@@ -588,6 +611,47 @@ function moveSlotInvoice(fromIdx, toIdx, zone) {
   renderFileList();
   toast('已调整顺序');
   updatePreview();
+}
+
+// Move invoice to the end of the active list (drop on the first tail slot)
+function moveSlotInvoiceToTail(fromIdx) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || fromDi >= n - 1) { updatePreview(); return; }
+  var a = active[fromDi];
+  var ia = S.files.indexOf(a);
+  if (ia < 0) { updatePreview(); return; }
+  S.files.splice(ia, 1);
+  var last = active[n - 1];
+  var iLast = last === a ? -1 : S.files.indexOf(last);
+  var insertAt = iLast >= 0 ? iLast + 1 : S.files.length;
+  S.files.splice(insertAt, 0, a);
+  _activeFileIdx = S.files.indexOf(a);
+  var newDi = getActiveFiles().indexOf(a);
+  if (newDi >= 0) {
+    S.currentPage = Math.floor(newDi / perPage);
+    S.selectedSlot = newDi % perPage;
+  }
+  renderFileList();
+  toast('已移到末尾');
+  updatePreview();
+}
+
+// 尾部空槽按下即拖：临时创建占位对象进入拖拽链路，松手落在实体之间 = 中间留白
+// 占位对象不保存，重启不恢复；未产生有效落点时由 onSlotMouseUp 销毁
+function insertTempPlaceholder() {
+  var temp = createFileObj({ name: '空白占位', _placeholder: true });
+  temp.checked = false;
+  var active = getActiveFiles();
+  // 正序：插到最后一个 active 文件之后
+  var n = active.length;
+  var last = n > 0 ? active[n - 1] : null;
+  var iLast = last ? S.files.indexOf(last) : -1;
+  S.files.splice(iLast >= 0 ? iLast + 1 : S.files.length, 0, temp);
+  return temp;
 }
 
 /**

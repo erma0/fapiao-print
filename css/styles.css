@@ -254,6 +254,40 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 #fileList.grid .card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-height: 0; overflow: hidden; }
 #fileList.grid .card-size { margin-left: auto; font-size: 9px; color: var(--text-muted); flex-shrink: 0; }
 #fileList.grid .dup-badge, #fileList.grid .copy-badge, #fileList.grid .amt-badge, #fileList.grid .amt-warn-badge { padding: 1px 4px; font-size: 9px; }
+.file-item.dragging { opacity: 0.45; cursor: grabbing; pointer-events: none; }
+.file-item.drop-target { position: relative; outline: 2px dashed var(--accent); z-index: 6; }
+.file-item.drop-target::after {
+  content: '⇅ 对调'; position: absolute; inset: 0; z-index: 11; border-radius: inherit;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 12px; font-weight: 700; color: #fff;
+  pointer-events: none; animation: dropFade 0.15s ease;
+}
+.file-item.drop-insert { position: relative; z-index: 6; }
+.file-item.drop-insert::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 4px;
+  background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 12;
+}
+.file-item.drop-at-start::before { top: 0; }
+.file-item.drop-at-end::before { bottom: 0; }
+.file-item.drop-insert::after {
+  content: '＋ 插入'; position: absolute; left: 50%; transform: translateX(-50%); z-index: 13;
+  background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  animation: dropFade 0.15s ease;
+}
+.file-item.drop-insert.drop-at-start::after { top: 8px; }
+.file-item.drop-insert.drop-at-end::after { bottom: 8px; }
+@keyframes dropFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes insertPulse { 0%, 100% { box-shadow: 0 0 3px var(--accent); } 50% { box-shadow: 0 0 9px var(--accent); } }
+.placeholder-item { opacity: 0.85; }
+.placeholder-item .file-thumb { display: flex; align-items: center; justify-content: center; background: var(--surface2); }
+#fileList.grid .placeholder-item .file-thumb { aspect-ratio: 3 / 2; }
+.blank-thumb { font-size: 22px; color: var(--text-muted); opacity: 0.6; }
+.blank-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); }
+.file-check.disabled { opacity: 0.4; pointer-events: none; }
 .file-summary .amt-total { color: var(--success); font-weight: 700; font-size: 14px; }
 .file-summary .amt-count { color: var(--text-muted); }
 .file-summary .amt-warn-count { color: var(--danger); font-size: 11px; margin-left: 6px; cursor: help; }

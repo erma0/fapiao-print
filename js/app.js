@@ -231,6 +231,29 @@ async function triggerUpload() {
   document.getElementById('fileInput').click();
 }
 
+// 版面空槽点击上传：新文件精准落在点击的槽位，中间空隙自动补空白占位
+function addFileToSlot(slotIdx) {
+  if (_slotUploadActive || _loadingBatchActive) {
+    toast('当前仍在加载发票，请稍候再补传');
+    return;
+  }
+  _slotUploadActive = true;
+  _insertSlotIdx = slotIdx;
+  // 原生 input 取消选择不会触发 change，窗口重新获得焦点时释放槽位锁
+  var inputEl = document.getElementById('fileInput');
+  var onPickerFocus = function() {
+    window.removeEventListener('focus', onPickerFocus);
+    setTimeout(function() {
+      if (!inputEl.files || inputEl.files.length === 0) {
+        _insertSlotIdx = -1;
+        _slotUploadActive = false;
+      }
+    }, 100);
+  };
+  window.addEventListener('focus', onPickerFocus);
+  inputEl.click();
+}
+
 async function handleFileInput(fl) {
   if (!fl || !fl.length) return;
   try {
@@ -302,8 +325,11 @@ async function processFileList(fileList) {
     renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
     await nextFrame();
   }
+  if (slotInsert) locateInsertedFile(_lastInsertedId);
   toastLoading('加载完成');
   _loadingBatchActive = false;
+  _insertSlotIdx = -1;
+  _lastInsertedId = null;
 
   var elapsed = Date.now() - startTime;
   var minToastDelay = Math.max(300, 800 - elapsed);
@@ -707,7 +733,7 @@ function removeDuplicates(silent) {
   var removed = 0;
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
   S.files = S.files.filter(function(f) {
-    if (f._loading) return true;
+    if (f._placeholder || f._loading) return true;
     var key = getDupKey(f);
     if (!key || key.indexOf('no:') !== 0) return true;
     if (seen[key]) { removed++; return false; }
@@ -942,7 +968,7 @@ function clickFileItem(idx, event) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
   if (event && (event.target.closest('.file-check') || event.target.closest('.sort-btn') || event.target.closest('button'))) return;
   var f = S.files[idx];
-  if (f._loading) return;
+  if (f._loading || f._placeholder) return;
 
   _activeFileIdx = idx;
 
@@ -1016,6 +1042,168 @@ function moveFile(i, dir) {
   var list = document.getElementById('fileList');
   var items = list.querySelectorAll('.file-item');
   if (items[target]) items[target].scrollIntoView({ block: 'nearest' });
+}
+
+// =====================================================
+// File list drag & drop sorting (#26)
+// =====================================================
+var _listDrag = null;
+var _listDragBound = false;
+var _listDragSuppressClick = false;
+var _listDragHintShown = false;
+
+function canListDrag() { return S.fileFilter === 'all' && S.printedFilter === 'all'; }
+
+function initListDrag() {
+  if (_listDragBound) return;
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  _listDragBound = true;
+  list.addEventListener('mousedown', onListMouseDown);
+  // 拖拽松手后浏览器派发的合成 click 会误触选中/弹窗，capture 阶段吞掉一次
+  document.addEventListener('click', function(e) {
+    if (!_listDragSuppressClick) return;
+    _listDragSuppressClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}
+
+function onListMouseDown(e) {
+  if (e.button !== 0 || !canListDrag()) return;
+  var itemEl = e.target.closest ? e.target.closest('#fileList .file-item') : null;
+  if (!itemEl) return;
+  // 勾选框/操作按钮区域保持原有点击行为，不启动拖拽
+  if (e.target.closest('.file-check') || e.target.closest('button')) return;
+  var idx = parseInt(itemEl.dataset.idx);
+  if (isNaN(idx)) return;
+  var f = S.files[idx];
+  if (!f || f._loading) return;
+  _listDrag = { itemEl: itemEl, idx: idx, startX: e.clientX, startY: e.clientY, moved: false, dropEl: null, dropIdx: -1, dropZone: '' };
+  e.preventDefault();
+  document.addEventListener('mousemove', onListMouseMove);
+  document.addEventListener('mouseup', onListMouseUp);
+}
+
+function onListMouseMove(e) {
+  if (!_listDrag) return;
+  if (!_listDrag.moved) {
+    var dx = e.clientX - _listDrag.startX;
+    var dy = e.clientY - _listDrag.startY;
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    _listDrag.moved = true;
+    _listDrag.itemEl.classList.add('dragging');
+    showListDragHint();
+  }
+  e.preventDefault();
+  updateListDropTarget(e);
+}
+
+function onListMouseUp(e) {
+  if (!_listDrag) return;
+  var d = _listDrag;
+  _listDrag = null;
+  document.removeEventListener('mousemove', onListMouseMove);
+  document.removeEventListener('mouseup', onListMouseUp);
+  d.itemEl.classList.remove('dragging');
+  clearListDropTarget(d.dropEl);
+  if (!d.moved) return;
+  _listDragSuppressClick = true;
+  setTimeout(function() { _listDragSuppressClick = false; }, 0);
+  if (d.dropIdx >= 0 && d.dropIdx !== d.idx) {
+    if (d.dropZone === 'before' || d.dropZone === 'after') {
+      moveFileTo(d.idx, d.dropIdx, d.dropZone);
+    } else {
+      swapFiles(d.idx, d.dropIdx);
+    }
+  }
+}
+
+function findNearestListItem(x, y) {
+  var best = null, bestD = Infinity;
+  var items = document.querySelectorAll('#fileList .file-item');
+  for (var i = 0; i < items.length; i++) {
+    var r = items[i].getBoundingClientRect();
+    var dx = Math.max(r.left - x, 0, x - r.right);
+    var dy = Math.max(r.top - y, 0, y - r.bottom);
+    var d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = items[i]; }
+  }
+  if (!best || bestD > 6400) return null;
+  if (best.dataset.idx === undefined || parseInt(best.dataset.idx) === _listDrag.idx) return null;
+  return best;
+}
+
+function updateListDropTarget(e) {
+  var el = document.elementFromPoint(e.clientX, e.clientY);
+  el = el && el.closest ? el.closest('.file-item') : null;
+  if (el && !el.closest('#fileList')) el = null;
+  var idx = el ? parseInt(el.dataset.idx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (idx < 0 || idx === _listDrag.idx) {
+    var near = findNearestListItem(e.clientX, e.clientY);
+    if (near) { el = near; idx = parseInt(el.dataset.idx); }
+  }
+  if (idx < 0) { el = null; idx = -1; }
+  var zone = '';
+  if (el) {
+    var r = el.getBoundingClientRect();
+    var ratio = (e.clientY - r.top) / (r.height || 1);
+    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+  }
+  if (el === _listDrag.dropEl && zone === _listDrag.dropZone) return;
+  clearListDropTarget(_listDrag.dropEl);
+  _listDrag.dropEl = el;
+  _listDrag.dropIdx = idx;
+  _listDrag.dropZone = zone;
+  if (!el) return;
+  if (zone === 'swap') { el.classList.add('drop-target'); }
+  else {
+    el.classList.add('drop-insert');
+    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+  }
+}
+
+function clearListDropTarget(el) {
+  if (!el) return;
+  el.classList.remove('drop-target', 'drop-insert', 'drop-at-start', 'drop-at-end');
+}
+
+function showListDragHint() {
+  if (_listDragHintShown) return;
+  _listDragHintShown = true;
+  try {
+    if (localStorage.getItem('ticketchan-list-drag-hint')) return;
+    localStorage.setItem('ticketchan-list-drag-hint', '1');
+  } catch (err) { return; }
+  toast('拖到列表项边缘 = 顺位插入，拖到中间 = 两张对调', 4000);
+}
+
+function swapFiles(ia, ib) {
+  if (ia === ib || ia < 0 || ib < 0 || ia >= S.files.length || ib >= S.files.length) return;
+  var tmp = S.files[ia]; S.files[ia] = S.files[ib]; S.files[ib] = tmp;
+  if (_activeFileIdx === ia) { _activeFileIdx = ib; }
+  else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
+  renderFileList(); updatePreview(); scrollToListItem(ib);
+}
+
+function moveFileTo(fromIdx, toIdx, zone) {
+  if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= S.files.length || toIdx >= S.files.length) return;
+  var a = S.files[fromIdx], b = S.files[toIdx];
+  if (!a || !b || a === b) return;
+  S.files.splice(fromIdx, 1);
+  var insertAt = zone === 'after' ? S.files.indexOf(b) + 1 : S.files.indexOf(b);
+  S.files.splice(insertAt, 0, a);
+  if (insertAt === fromIdx) return;
+  _activeFileIdx = S.files.indexOf(a);
+  renderFileList(); updatePreview(); scrollToListItem(insertAt);
+}
+
+function scrollToListItem(idx) {
+  var list = document.getElementById('fileList');
+  if (!list) return;
+  var items = list.querySelectorAll('.file-item');
+  if (items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
 }
 
 // Amount statistics
@@ -1589,7 +1777,8 @@ function markFilesAsPrinted(files) {
 }
 
 function getActiveFiles() {
-  var files = S.files.filter(function(f) { return f.checked && !f._loading && !f._xmlInvoice; });
+  // 占位对象（_placeholder）虽未勾选，也参与排版占槽位（版面留白）
+  var files = S.files.filter(function(f) { return (f.checked || f._placeholder) && !f._loading && !f._xmlInvoice; });
   var exp = [];
   files.forEach(function(f) { for (var c = 0; c < Math.max(1, f.copies); c++) exp.push(f); });
   return exp;
@@ -2126,15 +2315,15 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.2.0';
+    APP_VERSION = '3.3.0';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() { showApp(); bindFooterTextEvent(); setupInputWheelSupport(); });
+    document.addEventListener('DOMContentLoaded', function() { showApp(); bindFooterTextEvent(); setupInputWheelSupport(); initListDrag(); });
   } else {
-    showApp(); bindFooterTextEvent(); setupInputWheelSupport();
+    showApp(); bindFooterTextEvent(); setupInputWheelSupport(); initListDrag();
   }
 })();
 
