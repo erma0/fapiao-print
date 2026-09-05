@@ -1293,6 +1293,7 @@ fn build_ofd_svg(
     font_map: &HashMap<u32, OfdFont>,
     color_spaces: &HashMap<u32, String>,
     image_data: &HashMap<u32, String>,
+    image_sizes: &HashMap<u32, (u32, u32)>,
 ) -> String {
     let scale = 3.5; // Scale factor: 1mm → 3.5 SVG units for good resolution
     let vw = page_w * scale;
@@ -1312,7 +1313,7 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in tpl_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
@@ -1325,7 +1326,7 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in page_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
@@ -1335,7 +1336,7 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in annot_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
@@ -1386,27 +1387,52 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
 }
 
 /// Build SVG image from OFD ImageObject
-fn build_svg_image(img: &OfdImageObject, image_data: &HashMap<u32, String>, scale: f64) -> String {
+fn build_svg_image(
+    img: &OfdImageObject,
+    image_data: &HashMap<u32, String>,
+    image_sizes: &HashMap<u32, (u32, u32)>,
+    page_w: f64,
+    page_h: f64,
+    scale: f64,
+) -> String {
     let data_url = match image_data.get(&img.resource_id) {
         Some(url) => url,
         None => return String::new(),
     };
 
-    // Boundary = (x, y, w, h) in mm — already defines where and how big the image should be.
-    // Do NOT apply CTM for images: in OFD, CTM often describes the pixel-to-mm mapping
-    // (e.g. QR 300px image with CTM [20 0 0 20 ...] means 300px → 20mm),
-    // but the Boundary already encodes the target display size.
-    // Applying CTM as SVG transform would incorrectly scale the image again.
-    let x = img.boundary.0 * scale;
-    let y = img.boundary.1 * scale;
-    let w = img.boundary.2 * scale;
-    let h = img.boundary.3 * scale;
+    // Boundary = (x, y, w, h) in mm — normally defines where and how big the image is.
+    // Exception (数电票 producers): some ImageObjects carry a full-page placeholder
+    // Boundary (e.g. "0 0 210 297") while the real placement lives in the CTM
+    // [a b c d e f]: pixel (px, py) → page mm (a*px + e, d*py + f), i.e. position
+    // (e, f) and display size (W/a, H/d). Rendering those by Boundary would stretch
+    // a QR code across the whole page. Detect the placeholder (Boundary covers ≥95%
+    // of the page) and use the CTM instead; a genuine full-page background image has
+    // CTM translation (0,0) with density matching the page size, so the CTM result
+    // is mathematically identical for it.
+    let mut x = img.boundary.0;
+    let mut y = img.boundary.1;
+    let mut w = img.boundary.2;
+    let mut h = img.boundary.3;
+    let is_placeholder = page_w > 0.0 && page_h > 0.0
+        && w >= page_w * 0.95 && h >= page_h * 0.95;
+    if is_placeholder {
+        if let Some((a, _b, _c, d, e, f)) = img.ctm {
+            if a > 0.0 && d > 0.0 {
+                if let Some(&(pw, ph)) = image_sizes.get(&img.resource_id) {
+                    x = e;
+                    y = f;
+                    w = pw as f64 / a;
+                    h = ph as f64 / d;
+                }
+            }
+        }
+    }
 
     let opacity = img.alpha.map(|a| format!(" opacity=\"{:.2}\"", a as f64 / 255.0)).unwrap_or_default();
 
     format!(
         "<image href=\"{}\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\"{}/>",
-        data_url, x, y, w, h, opacity
+        data_url, x * scale, y * scale, w * scale, h * scale, opacity
     )
 }
 
@@ -2225,7 +2251,13 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     }
 
     let mut image_data: HashMap<u32, String> = HashMap::new();
+    // Pixel dimensions per resource — used to compute display size from CTM density
+    // when an ImageObject's Boundary is a full-page placeholder (数电票 qrcode etc.)
+    let mut image_sizes: HashMap<u32, (u32, u32)> = HashMap::new();
     for (res_id, bytes) in &image_raw_bytes {
+        if let Ok(decoded) = image::load_from_memory(bytes) {
+            image_sizes.insert(*res_id, decoded.dimensions());
+        }
         if let Some(&mask_res_id) = mask_map.get(res_id) {
             // Composite: decode main image + mask, merge alpha channel, encode as RGBA PNG
             if let Some(mask_bytes) = image_raw_bytes.get(&mask_res_id) {
@@ -2446,7 +2478,7 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         &tpl_texts, &tpl_paths, &tpl_imgs,
         &page_texts, &page_obj_paths, &page_imgs,
         &annot_texts, &annot_imgs,
-        &font_map, &color_spaces, &image_data,
+        &font_map, &color_spaces, &image_data, &image_sizes,
     );
 
     log::info!("OFD parsed: {}x{}mm, {} template texts, {} page texts, {} paths",
