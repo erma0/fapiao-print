@@ -100,8 +100,8 @@ fapiao/
 
 ## 📝 版本
 
-- **v3.2.0** (本分支): 纯前端,零后端零依赖 — 🕸️ 在线试用 [fapiao.erma0.cn](https://fapiao.erma0.cn)
-- **v2.5.0** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持 OCR / 静默打印 / 批量重命名 / 报销单分段
+- **v3.3.0** (本分支): 纯前端,零后端零依赖 — 🕸️ 在线试用 [fapiao.erma0.cn](https://fapiao.erma0.cn)
+- **v2.5.1** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持 OCR / 静默打印 / 批量重命名 / 报销单分段
 
 ## ⚠️ 与桌面版的差异
 
