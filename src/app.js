@@ -2444,14 +2444,13 @@ function updateListDropTarget(e) {
     el.classList.add('drop-target');
   } else {
     el.classList.add('drop-insert');
-    el.classList.add('drop-axis-v');
     el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
   }
 }
 
 function clearListDropTarget(el) {
   if (!el) return;
-  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-at-start', 'drop-at-end');
+  el.classList.remove('drop-target', 'drop-insert', 'drop-at-start', 'drop-at-end');
 }
 
 // 首次拖拽列表时提示两种手势的区别
