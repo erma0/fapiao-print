@@ -31,6 +31,8 @@ pub struct OfdInvoiceInfo {
     pub tax_amount: Option<f64>,
     pub amount_tax: Option<f64>,
     pub invoice_type: Option<String>,
+    /// 通行费电子发票标记（销售方保留真实路桥公司名）
+    pub is_toll: Option<bool>,
 }
 
 /// Result returned by `parse_ofd_file`: SVG rendering + structured invoice data.
@@ -68,6 +70,8 @@ pub struct XmlInvoiceInfo {
     pub amount_tax: Option<f64>,
     /// Invoice type label (e.g. "增值税专用发票", "电子发票(普通发票)")
     pub invoice_type: Option<String>,
+    /// 通行费电子发票标记（ItemName 含「通行费」）
+    pub is_toll: Option<bool>,
 }
 
 // =====================================================
@@ -147,6 +151,7 @@ struct OfdPathObject {
     id: u32,
     boundary: (f64, f64, f64, f64),
     line_width: f64,
+    ctm: Option<(f64, f64, f64, f64, f64, f64)>,
     stroke_color: Option<(u8, u8, u8)>,
     fill_color: Option<(u8, u8, u8)>,
     fill: bool,
@@ -418,6 +423,11 @@ fn build_svg_text(
     // DeltaX or DeltaY alone is enough to require per-char positioning; a DeltaY-only
     // object (multi-line without horizontal increments) must not fall back to plain text.
     let has_delta = (!text_obj.delta_x.is_empty() || !text_obj.delta_y.is_empty()) && chars.len() > 1;
+    // 数电票 TextCode 的空格是列分隔符而非字形：表头把多个列标题拼进一条
+    // TextCode（如"车牌号车辆类型 通行日期起…"），DeltaX 数组按去空格后的
+    // 字符序列对齐。若把空格当字形消费 DeltaX，后续所有列跳（50~70 设计
+    // 单位）会整体错位一个字符，字距被拉爆。逐字定位时跳过空白字符。
+    let vis: Vec<char> = chars.iter().copied().filter(|c| !c.is_whitespace()).collect();
     // We'll build the tspans later, after we know the base_x coordinate.
     // For now, just store the char data.
 
@@ -426,11 +436,11 @@ fn build_svg_text(
         // CTM text: x is in local coords (text_x * scale)
         let base_x = text_obj.text_x * scale_x;
         let base_y = text_obj.text_y * scale_y;
-        let content = if has_delta {
-            let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&chars[0].to_string()));
+        let content = if has_delta && vis.len() > 1 {
+            let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&vis[0].to_string()));
             let mut x_pos = base_x;
             let mut y_pos = base_y;
-            for (i, ch) in chars.iter().enumerate().skip(1) {
+            for (i, ch) in vis.iter().enumerate().skip(1) {
                 let dx = if i - 1 < text_obj.delta_x.len() {
                     text_obj.delta_x[i - 1]
                 } else {
@@ -468,11 +478,11 @@ fn build_svg_text(
     // Normal: position = Boundary + TextCode offset (absolute SVG coords)
     let base_x = (text_obj.boundary.0 + text_obj.text_x) * scale_x;
     let base_y = (text_obj.boundary.1 + text_obj.text_y) * scale_y;
-    let content = if has_delta {
-        let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&chars[0].to_string()));
+    let content = if has_delta && vis.len() > 1 {
+        let mut s = format!("<tspan x=\"{:.4}\" y=\"{:.4}\">{}</tspan>", base_x, base_y, esc_xml(&vis[0].to_string()));
         let mut x_pos = base_x;
         let mut y_pos = base_y;
-        for (i, ch) in chars.iter().enumerate().skip(1) {
+        for (i, ch) in vis.iter().enumerate().skip(1) {
             let dx = if i - 1 < text_obj.delta_x.len() {
                 text_obj.delta_x[i - 1]
             } else {
@@ -701,6 +711,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
                         }
                         if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "CTM") { p.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
                         if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
                         p.layer_draw_param = current_layer_dp;
@@ -791,6 +802,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
                         }
                         if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "CTM") { p.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
                         if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
                         p.layer_draw_param = current_layer_dp;
@@ -1289,6 +1301,7 @@ fn build_ofd_svg(
     font_map: &HashMap<u32, OfdFont>,
     color_spaces: &HashMap<u32, String>,
     image_data: &HashMap<u32, String>,
+    image_sizes: &HashMap<u32, (u32, u32)>,
 ) -> String {
     let scale = 3.5; // Scale factor: 1mm → 3.5 SVG units for good resolution
     let vw = page_w * scale;
@@ -1308,7 +1321,7 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in tpl_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
@@ -1321,7 +1334,7 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in page_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
@@ -1331,12 +1344,50 @@ fn build_ofd_svg(
         svg.push_str(&build_svg_text(t, font_map, color_spaces, scale, scale));
     }
     for img in annot_imgs {
-        svg.push_str(&build_svg_image(img, image_data, scale));
+        svg.push_str(&build_svg_image(img, image_data, image_sizes, page_w, page_h, scale));
     }
     svg.push_str("</g>");
 
     svg.push_str("</svg>");
     svg
+}
+
+/// Compute the bounding box (u_min, v_min, u_max, v_max) of an OFD AbbreviatedData path.
+/// Only M/L/C/B/Q/S endpoint coordinates are considered (good enough for frame lines;
+/// arcs are rare on invoice frames and their control-point approximation is acceptable).
+fn ofd_path_bbox(data: &str) -> Option<(f64, f64, f64, f64)> {
+    let tokens: Vec<&str> = data.split_whitespace().collect();
+    let mut min_u = f64::MAX; let mut min_v = f64::MAX;
+    let mut max_u = f64::MIN; let mut max_v = f64::MIN;
+    let mut i = 0;
+    let mut extend = |us: &[f64], vs: &[f64]| {
+        for &u in us { if u < min_u { min_u = u; } if u > max_u { max_u = u; } }
+        for &v in vs { if v < min_v { min_v = v; } if v > max_v { max_v = v; } }
+    };
+    let pairs = |t: &[&str], base: usize, n: usize| -> Option<(Vec<f64>, Vec<f64>)> {
+        let mut us = Vec::new(); let mut vs = Vec::new();
+        for k in 0..n {
+            let u: f64 = t.get(base + k * 2)?.parse().ok()?;
+            let v: f64 = t.get(base + k * 2 + 1)?.parse().ok()?;
+            us.push(u); vs.push(v);
+        }
+        Some((us, vs))
+    };
+    while i < tokens.len() {
+        let n = match tokens[i] {
+            "M" | "L" => 1,
+            "C" | "B" | "S" => 2, // S: end + implied control — endpoints only
+            "Q" => 2,
+            _ => { i += 1; continue; }
+        };
+        if let Some((us, vs)) = pairs(&tokens, i + 1, n) {
+            extend(&us, &vs);
+            i += 1 + n * 2;
+        } else {
+            i += 1;
+        }
+    }
+    if min_u == f64::MAX { None } else { Some((min_u, min_v, max_u, max_v)) }
 }
 
 /// Build SVG path from OFD PathObject
@@ -1350,13 +1401,47 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
         return String::new();
     }
 
-    // Boundary = (x, y, w, h) in mm. Path data is in local coords within Boundary.
-    // Apply translate to Boundary position, then scale everything.
-    let tx = p.boundary.0 * scale;
-    let ty = p.boundary.1 * scale;
+    // Normal case: Boundary = (x, y, w, h) in mm, path data in local mm coords.
+    // Apply translate to Boundary position, then scale mm → SVG units.
+    let mut transform = format!(
+        "translate({:.4},{:.4}) scale({:.4})",
+        p.boundary.0 * scale, p.boundary.1 * scale, scale
+    );
+
+    // CTM case (数电票 producers): path data lives in a DESIGN coordinate space
+    // (hundreds of units) and CTM carries the design→mm scale; Boundary carries
+    // the true page placement (CTM's e/f translation is unreliable there — it maps
+    // the shared design origin, not this object's local origin). Two observed
+    // variants unify into one model:
+    //   a) design-space coords (e.g. u∈[9.8, 804.8]) — offset from own bbox origin
+    //   b) already-local coords (u,v from 0) — bbox offset is a no-op
+    // Model: page pos = Boundary.xy + CTM-linear(path - bbox anchor), where the
+    // v anchor is v_max when CTM.d < 0 (design v axis points up) else v_min.
+    // Guard: only when path bbox × CTM scale ≈ Boundary size (±15%), b/c are 0.
+    if let Some((a, b, c, d, _e, _f)) = p.ctm {
+        if b == 0.0 && c == 0.0 && a != 0.0 && d != 0.0 && p.boundary.2 > 0.0 && p.boundary.3 > 0.0 {
+            if let Some((u0, v0, u1, v1)) = ofd_path_bbox(&p.abbreviated_data) {
+                let ew = (u1 - u0) * a.abs();
+                let eh = (v1 - v0) * d.abs();
+                let size_match = (ew - p.boundary.2).abs() <= p.boundary.2 * 0.15
+                    && (eh - p.boundary.3).abs() <= p.boundary.3 * 0.15;
+                if size_match {
+                    let v_anchor = if d < 0.0 { v1 } else { v0 };
+                    // +0.0 normalizes -0.0 to 0.0 for clean output
+                    let (ou, oa) = (-u0 + 0.0, -v_anchor + 0.0);
+                    transform = format!(
+                        "translate({:.4},{:.4}) scale({:.4},{:.4}) translate({:.4},{:.4})",
+                        p.boundary.0 * scale, p.boundary.1 * scale,
+                        a * scale, d * scale,
+                        ou, oa
+                    );
+                }
+            }
+        }
+    }
 
     let mut attrs = String::new();
-    attrs.push_str(&format!(" transform=\"translate({:.4},{:.4}) scale({:.4})\"", tx, ty, scale));
+    attrs.push_str(&format!(" transform=\"{}\"", transform));
     attrs.push_str(&format!(" stroke-width=\"{:.4}\"", p.line_width));
     if p.fill {
         attrs.push_str(" fill-rule=\"nonzero\"");
@@ -1382,27 +1467,56 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
 }
 
 /// Build SVG image from OFD ImageObject
-fn build_svg_image(img: &OfdImageObject, image_data: &HashMap<u32, String>, scale: f64) -> String {
+fn build_svg_image(
+    img: &OfdImageObject,
+    image_data: &HashMap<u32, String>,
+    image_sizes: &HashMap<u32, (u32, u32)>,
+    page_w: f64,
+    page_h: f64,
+    scale: f64,
+) -> String {
     let data_url = match image_data.get(&img.resource_id) {
         Some(url) => url,
         None => return String::new(),
     };
 
-    // Boundary = (x, y, w, h) in mm — already defines where and how big the image should be.
-    // Do NOT apply CTM for images: in OFD, CTM often describes the pixel-to-mm mapping
-    // (e.g. QR 300px image with CTM [20 0 0 20 ...] means 300px → 20mm),
-    // but the Boundary already encodes the target display size.
-    // Applying CTM as SVG transform would incorrectly scale the image again.
-    let x = img.boundary.0 * scale;
-    let y = img.boundary.1 * scale;
-    let w = img.boundary.2 * scale;
-    let h = img.boundary.3 * scale;
+    // Boundary = (x, y, w, h) in mm — normally defines where and how big the image is.
+    // Exception (数电票 producers): some ImageObjects carry a full-page placeholder
+    // Boundary (e.g. "0 0 210 297") while the real placement lives in the CTM.
+    // Verified against the PDF twin of the same invoice: this producer writes CTM as
+    // [displayW 0 0 displayH posX posY] in mm (e.g. QR: 18.2×18.2 @ (5.3,3) matches
+    // the PDF's 18.59×18.59 @ (5.31,2.9)). Fallback to the spec semantics
+    // (a/d = pixel density → size = px/a, px/d) only when a/d is absurdly large.
+    let mut x = img.boundary.0;
+    let mut y = img.boundary.1;
+    let mut w = img.boundary.2;
+    let mut h = img.boundary.3;
+    let is_placeholder = page_w > 0.0 && page_h > 0.0
+        && w >= page_w * 0.95 && h >= page_h * 0.95;
+    if is_placeholder {
+        if let Some((a, _b, _c, d, e, f)) = img.ctm {
+            if a > 0.0 && d > 0.0 {
+                let limit = 2.0 * page_w.max(page_h);
+                let (cw, ch) = if a <= limit && d <= limit {
+                    (a, d)
+                } else if let Some(&(pw, ph)) = image_sizes.get(&img.resource_id) {
+                    (pw as f64 / a, ph as f64 / d)
+                } else {
+                    (a.min(limit), d.min(limit))
+                };
+                x = e;
+                y = f;
+                w = cw;
+                h = ch;
+            }
+        }
+    }
 
     let opacity = img.alpha.map(|a| format!(" opacity=\"{:.2}\"", a as f64 / 255.0)).unwrap_or_default();
 
     format!(
         "<image href=\"{}\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\"{}/>",
-        data_url, x, y, w, h, opacity
+        data_url, x * scale, y * scale, w * scale, h * scale, opacity
     )
 }
 
@@ -1563,6 +1677,244 @@ fn extract_ofd_images(ofd_path: &str) -> Result<Vec<(String, String, u32, u32)>,
 // =====================================================
 // Text-based Invoice Extraction (Fallback)
 // =====================================================
+
+/// Semi-structured extraction for 数电票 OFD (digital e-invoices, e.g. toll invoices).
+///
+/// These OFDs have no Template layer and no CustomData/CustomTag: template labels
+/// and data values live in the same Content.xml as two Layers, so label-value
+/// sequence proximity is useless (values are 10+ texts away from labels).
+/// However, data-layer TextObjects carry page-absolute TextCode X/Y coordinates
+/// (their Boundary spans the whole page), and 数电票 layout is standardized:
+///   - invoice no / issue date: top-right area (ny < 0.2)
+///   - buyer/seller names + credit codes: middle band, left/right halves
+///   - ¥ amounts: bottom band (ny > 0.5) — 合计 row + 价税合计 row
+///
+/// Returns default (all-None) info when the input doesn't match the 数电票
+/// data-layer signature, so callers can safely fall back to other extractors.
+fn extract_invoice_from_body_coords(texts: &[OfdTextObject], page_w: f64, page_h: f64) -> OfdInvoiceInfo {
+    let mut info = OfdInvoiceInfo::default();
+    if page_w <= 0.0 || page_h <= 0.0 {
+        return info;
+    }
+
+    // 数电票数据层签名：Boundary 覆盖 ≥70% 页面 → TextCode X/Y 为页面绝对 mm 坐标。
+    // 普通 OFD（含 dzcp）的数据层 Boundary 是局部小矩形，自动排除。
+    let body: Vec<&OfdTextObject> = texts.iter()
+        .filter(|t| t.boundary.2 >= page_w * 0.7 && t.boundary.3 >= page_h * 0.7)
+        .collect();
+    if body.is_empty() {
+        return info;
+    }
+
+    let half_w = page_w * 0.5;
+    let mut no_candidates: Vec<String> = Vec::new();
+    let mut name_candidates: Vec<(f64, f64, String)> = Vec::new(); // (y, x, text)
+    let mut taxid_candidates: Vec<(f64, f64, String)> = Vec::new(); // (y, x, text)
+    let mut yen_amounts: Vec<(f64, f64, f64)> = Vec::new(); // (y, x, value)
+
+    for t in &body {
+        let text = t.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let (x, y) = (t.text_x, t.text_y);
+        let ny = y / page_h;
+
+        // 开票日期：头部区「YYYY年MM月DD日」
+        if info.invoice_date.is_none() && ny < 0.2 {
+            if let Some(d) = parse_cn_date(text) {
+                info.invoice_date = Some(d);
+            }
+        }
+
+        // 发票号候选：头部区纯数字（10~20 位，数电票为 20 位）
+        if ny < 0.2 && text.len() >= 10 && text.chars().all(|c| c.is_ascii_digit()) {
+            no_candidates.push(text.to_string());
+        }
+
+        // 税号候选：18 位大写字母数字（统一社会信用代码）
+        if text.chars().count() == 18
+            && text.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        {
+            taxid_candidates.push((y, x, text.to_string()));
+        }
+
+        // 名称候选：纯 CJK 文本（≥2 字），购销信息区
+        let is_pure_cjk = text.chars().count() >= 2
+            && text.chars().all(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        if is_pure_cjk && ny > 0.15 && ny < 0.5 {
+            name_candidates.push((y, x, text.to_string()));
+        }
+
+        // ¥ 金额：合计区
+        if text.starts_with('¥') || text.starts_with('￥') {
+            let amt_str = text.trim_start_matches('¥').trim_start_matches('￥').trim();
+            if let Ok(v) = amt_str.parse::<f64>() {
+                if ny > 0.5 {
+                    yen_amounts.push((y, x, v));
+                }
+            }
+        }
+    }
+
+    // 发票号：取最长候选（数电票 20 位 > 其他短数字串）
+    if !no_candidates.is_empty() {
+        no_candidates.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        info.invoice_no = Some(no_candidates[0].clone());
+    }
+
+    // 名称：有税号时以税号行为锚（±10% 页高），否则取首聚类行；左半=购买方，右半=销售方
+    if !name_candidates.is_empty() {
+        let anchor_y: Option<f64> = taxid_candidates.first().map(|(y, _, _)| *y);
+        let in_band = |y: f64| -> bool {
+            match anchor_y {
+                Some(a) => (y - a).abs() <= page_h * 0.1,
+                None => true, // 无锚时 name_candidates 已按 ny∈(0.15,0.5) 预过滤
+            }
+        };
+        let mut rows: Vec<Vec<(f64, f64, String)>> = Vec::new(); // 聚类行（y 差 < 5% 页高）
+        let mut sorted_names = name_candidates;
+        sorted_names.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (y, x, name) in sorted_names {
+            if !in_band(y) {
+                continue;
+            }
+            match rows.last_mut() {
+                Some(row) if (y - row[0].0).abs() < page_h * 0.05 => row.push((y, x, name)),
+                _ => rows.push(vec![(y, x, name)]),
+            }
+        }
+        if let Some(first_row) = rows.first() {
+            for (_, x, name) in first_row {
+                if *x < half_w {
+                    if info.buyer_name.is_none() {
+                        info.buyer_name = Some(name.clone());
+                    }
+                } else if info.seller_name.is_none() {
+                    info.seller_name = Some(name.clone());
+                }
+            }
+        }
+    }
+
+    // 税号：左半=购买方，右半=销售方
+    for (_, x, code) in &taxid_candidates {
+        if *x < half_w {
+            if info.buyer_tax_id.is_none() {
+                info.buyer_tax_id = Some(code.clone());
+            }
+        } else if info.seller_tax_id.is_none() {
+            info.seller_tax_id = Some(code.clone());
+        }
+    }
+
+    // 金额：按 y 聚类成行（差 < 5% 页高）。
+    // 末行（价税合计行）最大 ¥ = 含税价；前行（合计行）大值=不含税、小值=税额。
+    // 交叉校验失败时退回全局 ¥ 配对（a + b ≈ c）。
+    if !yen_amounts.is_empty() {
+        yen_amounts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut amt_rows: Vec<Vec<(f64, f64, f64)>> = Vec::new();
+        for &(y, x, v) in &yen_amounts {
+            match amt_rows.last_mut() {
+                Some(row) if (y - row[0].0).abs() < page_h * 0.05 => row.push((y, x, v)),
+                _ => amt_rows.push(vec![(y, x, v)]),
+            }
+        }
+
+        let mut resolved = false;
+        if amt_rows.len() >= 2 {
+            let last_row = &amt_rows[amt_rows.len() - 1];
+            let prev_row = &amt_rows[amt_rows.len() - 2];
+            let tax_total = last_row.iter().map(|(_, _, v)| *v).fold(0.0_f64, f64::max);
+            let mut prev_vals: Vec<f64> = prev_row.iter().map(|(_, _, v)| *v).collect();
+            prev_vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            if tax_total > 0.0 {
+                let (no_tax, tax) = match prev_vals.len() {
+                    0 => (None, None),
+                    1 => (Some(prev_vals[0]), None),
+                    _ => (Some(prev_vals[0]), Some(prev_vals[1])),
+                };
+                if let Some(nt) = no_tax {
+                    let t = tax.unwrap_or(0.0);
+                    let sum = ((nt + t) * 100.0).round() / 100.0;
+                    if (sum - tax_total).abs() < 0.02 {
+                        info.amount_tax = Some(tax_total);
+                        info.amount_no_tax = Some(nt);
+                        info.tax_amount = Some(t);
+                        resolved = true;
+                    }
+                }
+            }
+        }
+
+        if !resolved {
+            // 全局配对：找 (a, b, c) 使 a + b ≈ c
+            let vals: Vec<f64> = yen_amounts.iter().map(|(_, _, v)| *v).collect();
+            let n = vals.len();
+            'outer: for i in 0..n {
+                for j in (i + 1)..n {
+                    for k in 0..n {
+                        if k == i || k == j {
+                            continue;
+                        }
+                        let sum = ((vals[i] + vals[j]) * 100.0).round() / 100.0;
+                        if (sum - vals[k]).abs() < 0.02 && vals[i] > 0.0 && vals[j] > 0.0 {
+                            let (no_tax, tax) = if vals[i] >= vals[j] {
+                                (vals[i], vals[j])
+                            } else {
+                                (vals[j], vals[i])
+                            };
+                            info.amount_tax = Some(vals[k]);
+                            info.amount_no_tax = Some(no_tax);
+                            info.tax_amount = Some(tax);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            // 兜底：只有一行 ¥ 时，最大值视为含税价
+            if info.amount_tax.is_none() && !vals.is_empty() {
+                let max_v = vals.iter().cloned().fold(0.0_f64, f64::max);
+                if max_v > 0.0 {
+                    info.amount_tax = Some(max_v);
+                }
+            }
+        }
+    }
+
+    if info.invoice_no.is_some() || info.amount_tax.is_some() || info.seller_name.is_some() {
+        log::info!(
+            "OFD 数电票坐标提取: no={:?} date={:?} buyer={:?} seller={:?} tax={:?} noTax={:?} taxAmt={:?}",
+            info.invoice_no, info.invoice_date, info.buyer_name, info.seller_name,
+            info.amount_tax, info.amount_no_tax, info.tax_amount
+        );
+    }
+
+    info
+}
+
+/// Parse "YYYY年MM月DD日" into "YYYY-MM-DD". Returns None on mismatch.
+fn parse_cn_date(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let find = |c: char| chars.iter().position(|&x| x == c);
+    let (yi, mi, di) = (find('年')?, find('月')?, find('日')?);
+    if yi == 0 || mi <= yi + 1 || di <= mi + 1 || di != chars.len() - 1 {
+        return None;
+    }
+    let year: String = chars[..yi].iter().collect();
+    let month: String = chars[yi + 1..mi].iter().collect();
+    let day: String = chars[mi + 1..di].iter().collect();
+    if !year.chars().all(|c| c.is_ascii_digit())
+        || !month.chars().all(|c| c.is_ascii_digit())
+        || !day.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    if year.len() != 4 || month.is_empty() || month.len() > 2 || day.is_empty() || day.len() > 2 {
+        return None;
+    }
+    Some(format!("{}-{:0>2}-{:0>2}", year, month, day))
+}
 
 /// Extract invoice data from text content when no CustomData or CustomTag is available.
 /// This handles OFD files from non-standard producers that embed subset fonts
@@ -1983,7 +2335,13 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     }
 
     let mut image_data: HashMap<u32, String> = HashMap::new();
+    // Pixel dimensions per resource — used to compute display size from CTM density
+    // when an ImageObject's Boundary is a full-page placeholder (数电票 qrcode etc.)
+    let mut image_sizes: HashMap<u32, (u32, u32)> = HashMap::new();
     for (res_id, bytes) in &image_raw_bytes {
+        if let Ok(decoded) = image::load_from_memory(bytes) {
+            image_sizes.insert(*res_id, decoded.dimensions());
+        }
         if let Some(&mask_res_id) = mask_map.get(res_id) {
             // Composite: decode main image + mask, merge alpha channel, encode as RGBA PNG
             if let Some(mask_bytes) = image_raw_bytes.get(&mask_res_id) {
@@ -2122,6 +2480,26 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         invoice_info.seller_tax_id = get_tag_text("SellerTaxID");
     }
 
+    // 11a. 数电票半结构化提取（无 Template/CustomData/CustomTag 的双层 Content.xml，
+    // 数据层 TextCode 为页面绝对坐标，如通行费电子发票）。仅填充仍为 None 的字段。
+    let body_info = extract_invoice_from_body_coords(&page_texts, page_w, page_h);
+    if invoice_info.invoice_no.is_none() { invoice_info.invoice_no = body_info.invoice_no; }
+    if invoice_info.invoice_date.is_none() { invoice_info.invoice_date = body_info.invoice_date; }
+    if invoice_info.buyer_name.is_none() { invoice_info.buyer_name = body_info.buyer_name; }
+    if invoice_info.buyer_tax_id.is_none() { invoice_info.buyer_tax_id = body_info.buyer_tax_id; }
+    if invoice_info.seller_name.is_none() { invoice_info.seller_name = body_info.seller_name; }
+    if invoice_info.seller_tax_id.is_none() { invoice_info.seller_tax_id = body_info.seller_tax_id; }
+    if invoice_info.amount_no_tax.is_none() { invoice_info.amount_no_tax = body_info.amount_no_tax; }
+    if invoice_info.tax_amount.is_none() { invoice_info.tax_amount = body_info.tax_amount; }
+    if invoice_info.amount_tax.is_none() { invoice_info.amount_tax = body_info.amount_tax; }
+
+    // 通行费标记：模板层或数据层文本含「通行费」
+    if invoice_info.is_toll.is_none() {
+        let has_toll_text = tpl_texts.iter().chain(page_texts.iter())
+            .any(|t| t.text.contains("通行费"));
+        invoice_info.is_toll = Some(has_toll_text);
+    }
+
     // Detect invoice type from template title
     for t in &tpl_texts {
         if t.text.contains("增值税专用") {
@@ -2154,8 +2532,9 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
     // 11b. Text-based fallback extraction when no CustomData or CustomTag
     // This handles OFD files from non-tax producers (e.g., dzcp) that embed fonts
     // but don't include structured metadata.
-    if invoice_info.invoice_no.is_none() && invoice_info.invoice_date.is_none()
-        && invoice_info.buyer_name.is_none() && invoice_info.seller_name.is_none() {
+    // Run when any key field is still missing (11a may only fill part of them).
+    if invoice_info.invoice_no.is_none() || invoice_info.invoice_date.is_none()
+        || invoice_info.buyer_name.is_none() || invoice_info.seller_name.is_none() {
         // Combine template + page texts (preserving order by ID)
         let mut all_texts: Vec<&OfdTextObject> = Vec::new();
         all_texts.extend(&tpl_texts);
@@ -2183,7 +2562,7 @@ pub fn parse_ofd_file(ofd_path: &str) -> Result<OfdResult, String> {
         &tpl_texts, &tpl_paths, &tpl_imgs,
         &page_texts, &page_obj_paths, &page_imgs,
         &annot_texts, &annot_imgs,
-        &font_map, &color_spaces, &image_data,
+        &font_map, &color_spaces, &image_data, &image_sizes,
     );
 
     log::info!("OFD parsed: {}x{}mm, {} template texts, {} page texts, {} paths",
@@ -2250,6 +2629,8 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
     // Track LabelName values from EInvoiceType and GeneralOrSpecialVAT
     let mut einvoice_type_label: Option<String> = None;
     let mut general_or_special_label: Option<String> = None;
+    // Item names (IssuItemInformation) — used for toll detection
+    let mut item_names: Vec<String> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -2304,6 +2685,8 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
                             }
                             _ => {}
                         },
+                        // Item names — used for toll detection (通行费)
+                        "ItemName" => item_names.push(text.to_string()),
                         _ => {}
                     }
                 }
@@ -2324,6 +2707,9 @@ fn parse_xml_invoice_content(content: &str) -> Result<XmlInvoiceInfo, String> {
     } else if let Some(type_label) = &einvoice_type_label {
         info.invoice_type = Some(type_label.clone());
     }
+
+    // Toll detection: item name contains 通行费 (e.g. "*生产生活服务*通行费")
+    info.is_toll = Some(item_names.iter().any(|s| s.contains("通行费")));
 
     // Fallback: if amount_tax still empty, try alternate tag name
     if info.amount_tax.is_none() {

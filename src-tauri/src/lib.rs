@@ -1382,8 +1382,16 @@ pub fn run() {
                             #[cfg(not(target_os = "windows"))]
                             std::process::exit(0);
                         }
-                        tauri::WindowEvent::DragDrop(drop_event) => {
-                            if let tauri::DragDropEvent::Drop { paths, .. } = drop_event {
+                        tauri::WindowEvent::DragDrop(drop_event) => match drop_event {
+                            // 拖入提示浮层：进入显示 / 离开隐藏 / 松手隐藏后处理文件
+                            tauri::DragDropEvent::Enter { .. } => {
+                                let _ = win.eval("if(window._tauriDragHover)window._tauriDragHover(true)");
+                            }
+                            tauri::DragDropEvent::Leave => {
+                                let _ = win.eval("if(window._tauriDragHover)window._tauriDragHover(false)");
+                            }
+                            tauri::DragDropEvent::Drop { paths, .. } => {
+                                let _ = win.eval("if(window._tauriDragHover)window._tauriDragHover(false)");
                                 let valid: Vec<String> = paths.iter()
                                     .filter_map(|p| {
                                         let valid_ext = p.extension()
@@ -1397,6 +1405,7 @@ pub fn run() {
                                 let js = format!("if(window._tauriFileDrop)window._tauriFileDrop({})", json);
                                 let _ = win.eval(&js);
                             }
+                            _ => {}
                         }
                         _ => {}
                     }

@@ -2306,13 +2306,16 @@ function _extractAmountsByText(fullText) {
   // Tax amount is usually small and has a clear "税额" label.
 
   // Pattern A: "税额" followed by ¥ amount
+  // 税额合理性约束：税额 ≤ 含税价的一半（增值税最高税率13% → 税额/含税 ≤ 11.5%，50% 极宽松）。
+  // 拦截「税额」表头附近先撞上不含税金额的误配（如通行费票「税额」表头行下方紧跟裸金额 0.47），
+  // 误配被拒后 Pattern B 的 ¥ 对配对会给出正确结果。
   var seIdx = text.search(/税\s*额/);
   if (seIdx >= 0) {
     var afterSe = text.substring(seIdx);
     var seYenMatch = afterSe.substring(0, 50).match(/¥\s*(\d[\d,]*\.\d{2})/);
     if (seYenMatch) {
       var seYenVal = parseAmt(seYenMatch[1]);
-      if (seYenVal > 0 && (result.amountTax === 0 || seYenVal < result.amountTax)) {
+      if (seYenVal > 0 && (result.amountTax === 0 || seYenVal < result.amountTax * 0.5)) {
         result.taxAmount = seYenVal;
       }
     }
@@ -2320,7 +2323,7 @@ function _extractAmountsByText(fullText) {
       var seBareMatch = afterSe.substring(0, 50).match(/(\d[\d,]*\.\d{2})/);
       if (seBareMatch) {
         var seBareVal = parseAmt(seBareMatch[1]);
-        if (seBareVal > 0 && (result.amountTax === 0 || seBareVal < result.amountTax)) {
+        if (seBareVal > 0 && (result.amountTax === 0 || seBareVal < result.amountTax * 0.5)) {
           result.taxAmount = seBareVal;
         }
       }

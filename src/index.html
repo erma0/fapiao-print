@@ -30,6 +30,7 @@
         <div class="file-header">
           <div class="file-count" id="fileCount">0 张，已选 0</div>
           <div class="file-actions">
+            <button class="ib add" onclick="triggerUpload()" title="添加发票文件（PDF/OFD/XML/图片）">➕</button>
             <div class="copy-ctrl">
               <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">②</button>
               <div class="copy-menu hidden" id="copyMenu">
@@ -436,6 +437,11 @@
       <button class="btn btn-primary" onclick="exportSummaryCsv()">📥 导出 CSV</button>
     </div>
   </div>
+</div>
+
+<!-- Drag-in hint overlay (Tauri Enter/Leave 或浏览器 dragenter 触发) -->
+<div id="dropOverlay" class="drop-overlay">
+  <div class="drop-overlay-box">📄 释放鼠标，添加发票文件<small>支持 PDF / OFD / XML / 图片，可多选</small></div>
 </div>
 
 <!-- Scripts — loaded in order: OCR → Layout → Print → App -->

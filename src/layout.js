@@ -305,6 +305,10 @@ var _slotInteractionBound = false;
 
 var _dragHintShown = false; // 本次会话是否已提示过拖拽手势
 
+var _slotTempDrag = null; // 尾部空槽拖拽的临时占位对象（未移动则销毁）
+
+var _slotSuppressClick = false; // 槽位拖拽松手后吞掉浏览器合成的 click
+
 /**
  * Bind mousedown on invoice-slot elements for drag-move and corner-resize.
  * Called after each renderPage(). Only binds once.
@@ -315,6 +319,13 @@ function initSlotInteraction() {
   if (_slotInteractionBound) return;
   _slotInteractionBound = true;
   container.addEventListener('mousedown', onSlotMouseDown);
+  // 拖拽松手后浏览器会向空槽派发合成 click，capture 阶段吞掉防止误触上传
+  document.addEventListener('click', function(e) {
+    if (!_slotSuppressClick) return;
+    _slotSuppressClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
   // Click on empty area deselects
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
     if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle')) {
@@ -323,9 +334,31 @@ function initSlotInteraction() {
   });
 }
 
+// 尾部空槽按下即拖：临时创建空白占位进入拖拽链路，松手落到实体之间 = 中间留白，未移动则销毁
+function insertTempPlaceholder() {
+  var temp = createFileObj({ name: '空白占位', _placeholder: true });
+  var active = getActiveFiles();
+  if (document.getElementById('pageOrder').value === 'reverse') {
+    // 倒序渲染：显示序末尾 = 底层数组 active 区头部
+    var insertAt = 0;
+    for (var i = 0; i < S.files.length; i++) {
+      var f = S.files[i];
+      if (f.checked || f._placeholder) { insertAt = i; break; }
+    }
+    S.files.splice(insertAt, 0, temp);
+  } else {
+    // 正序：插到最后一个 active 文件之后
+    var n = active.length;
+    var last = n > 0 ? active[n - 1] : null;
+    var iLast = last ? S.files.indexOf(last) : -1;
+    S.files.splice(iLast >= 0 ? iLast + 1 : S.files.length, 0, temp);
+  }
+  return temp;
+}
+
 function onSlotMouseDown(e) {
   var slotEl = e.target.closest('.invoice-slot');
-  if (!slotEl || slotEl.querySelector('.slot-empty')) return;
+  if (!slotEl) return;
 
   var idx = parseInt(slotEl.dataset.slotIdx);
   if (isNaN(idx)) return;
@@ -339,23 +372,37 @@ function onSlotMouseDown(e) {
     return;
   }
 
-  // Otherwise: click to select + drag to move
-  e.preventDefault();
-  selectSlot(idx);
-
   var files = getActiveFiles();
   var settings = getSettings();
   var layout = calculateLayout(settings);
   var perPage = getPerPage(settings);
   var fileIdx = S.currentPage * perPage + idx;
   var f = fileIdx < files.length ? files[fileIdx] : null;
+
+  var temp = null;
+  if (slotEl.querySelector('.slot-empty')) {
+    if (f && f._loading) return;
+    if (!f) {
+      // 尾部第一个空槽按下即拖：临时占位进入拖拽链路，其余空槽保持点击上传
+      if (fileIdx !== files.length) return;
+      temp = insertTempPlaceholder();
+      f = temp;
+      files = getActiveFiles();
+    }
+    // 空白占位（slot-blank）：与常规文件一样可拖拽排序，click 仍触发上传
+  }
   if (!f) return;
+
+  // Otherwise: click to select + drag to move
+  e.preventDefault();
+  if (!temp) selectSlot(idx);
 
   _slotDrag = {
     mode: 'move',
     slotEl: slotEl,
     wrapperEl: slotEl.querySelector(':scope > div'),
     fileObj: f,
+    tempPlaceholder: temp,
     idx: idx,
     startX: e.clientX,
     startY: e.clientY,
@@ -497,62 +544,116 @@ function onSlotMouseUp(e) {
   document.removeEventListener('mousemove', onSlotMouseMove);
   document.removeEventListener('mouseup', onSlotMouseUp);
 
+  // 空槽 mousedown 已 preventDefault 不会触发 click；但拖拽路径上 wrapper 等子元素
+  // 仍可能派发合成 click（如占位槽 onclick=addFileToSlot），统一吞一次
+  if (d.moved) {
+    _slotSuppressClick = true;
+    setTimeout(function() { _slotSuppressClick = false; }, 0);
+  }
+
   if (d.mode === 'move' && d.dropIdx >= 0 && d.dropIdx !== d.idx) {
     clearDropTarget(d.dropEl);
+    if (d.tempPlaceholder && d.dropZone === 'tail') {
+      // 临时占位拖到尾部空槽 = 原位，视为取消，销毁占位
+      var ti = S.files.indexOf(d.tempPlaceholder);
+      if (ti >= 0) S.files.splice(ti, 1);
+      updatePreview();
+      return;
+    }
     // 跨槽拖拽是排序手势，撤销拖动过程中产生的单票偏移
     d.fileObj.slotOffsetX = d.startOffX;
     d.fileObj.slotOffsetY = d.startOffY;
     if (d.dropZone === 'before' || d.dropZone === 'after') {
       moveSlotInvoice(d.idx, d.dropIdx, d.dropZone);
+    } else if (d.dropZone === 'tail') {
+      moveSlotInvoiceToTail(d.idx);
     } else {
       swapSlotInvoices(d.idx, d.dropIdx);
     }
+    if (d.tempPlaceholder) toast('已在中间留白，点击可上传发票');
     return;
   }
   clearDropTarget(d.dropEl);
+  if (d.tempPlaceholder) {
+    // 未产生有效落点：临时占位用完即销毁，版面恢复原状
+    var ti2 = S.files.indexOf(d.tempPlaceholder);
+    if (ti2 >= 0) S.files.splice(ti2, 1);
+    updatePreview();
+    return;
+  }
   if (d.moved) {
     updatePreview();
     updateAdjPanel();
   }
 }
 
+// 光标落在槽位间空白时，吸附到距离最近的槽位（gap 盲区兜底，80px 内有效）
+function findNearestSlot(x, y) {
+  var best = null, bestD = Infinity;
+  var slots = document.querySelectorAll('.invoice-slot[data-slot-idx]');
+  for (var i = 0; i < slots.length; i++) {
+    var r = slots[i].getBoundingClientRect();
+    var dx = Math.max(r.left - x, 0, x - r.right);
+    var dy = Math.max(r.top - y, 0, y - r.bottom);
+    var d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = slots[i]; }
+  }
+  if (!best || bestD > 6400) return { el: null, idx: -1 };
+  var idx = parseInt(best.dataset.slotIdx);
+  if (isNaN(idx)) idx = -1;
+  return { el: best, idx: idx };
+}
+
+// 判定槽位能否作为落点，并按光标在槽内的主轴位置分区
+function resolveSlotTarget(el, e) {
+  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (!el || idx < 0 || idx === _slotDrag.idx) return { el: null, idx: -1, zone: '' };
+  var di = S.currentPage * _slotDrag.perPage + idx;
+  var r = el.getBoundingClientRect();
+  var ratio = _slotDrag.vertical
+    ? (e.clientY - r.top) / (r.height || 1)
+    : (e.clientX - r.left) / (r.width || 1);
+  // 尾部空槽不接收；紧邻已装发票的第一个空槽整个作为「移到末尾」落点
+  if (di >= _slotDrag.activeLen) {
+    if (di !== _slotDrag.activeLen) return { el: null, idx: -1, zone: '' };
+    return { el: el, idx: idx, zone: 'tail' };
+  }
+  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
+  var zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+  return { el: el, idx: idx, zone: zone };
+}
+
 // Track the slot under cursor while dragging; cursor zone decides insert vs swap
 function updateDropTarget(e) {
   var el = document.elementFromPoint(e.clientX, e.clientY);
   el = el && el.closest ? el.closest('.invoice-slot') : null;
-  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
-  if (isNaN(idx)) idx = -1;
-  if (idx < 0 || idx === _slotDrag.idx) { el = null; idx = -1; }
-  // 只有装着发票（含空白占位）的槽位才是有效落点，尾部空槽不接收
-  if (el && S.currentPage * _slotDrag.perPage + idx >= _slotDrag.activeLen) { el = null; idx = -1; }
-  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
-  var zone = '';
-  if (el) {
-    var r = el.getBoundingClientRect();
-    var ratio = _slotDrag.vertical
-      ? (e.clientY - r.top) / (r.height || 1)
-      : (e.clientX - r.left) / (r.width || 1);
-    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
-    showDragHint();
+  var target = resolveSlotTarget(el, e);
+  // 槽位之间的空白间隙吸附到最近的槽位，避免插入指示时有时无
+  if (!target.el) {
+    var near = findNearestSlot(e.clientX, e.clientY);
+    if (near.el && near.el !== el) target = resolveSlotTarget(near.el, e);
   }
-  if (el === _slotDrag.dropEl && zone === _slotDrag.dropZone) return;
+  if (target.el) showDragHint();
+  if (target.el === _slotDrag.dropEl && target.zone === _slotDrag.dropZone) return;
   clearDropTarget(_slotDrag.dropEl);
-  _slotDrag.dropEl = el;
-  _slotDrag.dropIdx = idx;
-  _slotDrag.dropZone = zone;
-  if (!el) return;
-  if (zone === 'swap') {
-    el.classList.add('drop-target');
+  _slotDrag.dropEl = target.el;
+  _slotDrag.dropIdx = target.idx;
+  _slotDrag.dropZone = target.zone;
+  if (!target.el) return;
+  if (target.zone === 'swap') {
+    target.el.classList.add('drop-target');
   } else {
-    el.classList.add('drop-insert');
-    el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
-    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+    target.el.classList.add('drop-insert');
+    target.el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
+    target.el.classList.add(target.zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+    if (target.zone === 'tail') target.el.classList.add('drop-tail');
   }
 }
 
 function clearDropTarget(el) {
   if (!el) return;
-  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end');
+  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end', 'drop-tail');
 }
 
 // 首次跨槽拖拽时提示两种手势的区别
@@ -628,6 +729,45 @@ function moveSlotInvoice(fromIdx, toIdx, zone) {
   }
   renderFileList();
   toast('已调整顺序');
+  updatePreview();
+}
+
+// Move invoice to the end of the active sequence (drop on the first blank slot after the last invoice)
+function moveSlotInvoiceToTail(fromIdx) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || fromDi >= n - 1) { updatePreview(); return; }
+  var a = active[fromDi];
+  var ia = S.files.indexOf(a);
+  if (ia < 0) { updatePreview(); return; }
+  S.files.splice(ia, 1);
+  var insertAt;
+  if (document.getElementById('pageOrder').value === 'reverse') {
+    // 倒序渲染：显示序末尾 = 底层数组 active 区头部，找最后一个未勾选文件之前的空隙
+    insertAt = 0;
+    for (var i = 0; i < S.files.length; i++) {
+      var f = S.files[i];
+      if (f.checked || f._placeholder) { insertAt = i; break; }
+    }
+    S.files.splice(insertAt, 0, a);
+  } else {
+    // 正序：插到最后一个 active 文件之后
+    var last = active[n - 1];
+    var iLast = last === a ? -1 : S.files.indexOf(last);
+    insertAt = iLast >= 0 ? iLast + 1 : S.files.length;
+    S.files.splice(insertAt, 0, a);
+  }
+  _activeFileIdx = S.files.indexOf(a);
+  var newDi = getActiveFiles().indexOf(a);
+  if (newDi >= 0) {
+    S.currentPage = Math.floor(newDi / perPage);
+    S.selectedSlot = newDi % perPage;
+  }
+  renderFileList();
+  toast('已移到末尾');
   updatePreview();
 }
 

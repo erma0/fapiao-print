@@ -69,6 +69,7 @@ html.dark .amt-warn-badge { background: #3a2020; color: #fc8181; }
 html.dark .seller-badge { background: #1e2a4a; color: #a0aec0; }
 html.dark .ticket-badge { background: #1a2a4a; color: #64b5f6; }
 html.dark .nontax-badge { background: #2a1e1a; color: #ed8936; }
+html.dark .toll-badge { background: #122a26; color: #2dd4bf; border-color: #1f4d45; }
 html.dark .file-summary { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .sec { border-bottom-color: #2a2a4a; }
 html.dark .tgl { background: #3a3a5a; }
@@ -159,6 +160,43 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .file-item:hover { background: var(--surface2); }
 .file-item.active-item { background: var(--accent-light); box-shadow: inset 3px 0 0 var(--accent); }
 .file-item.active-item .file-name { color: var(--accent); }
+/* ===== 列表拖拽排序落点 (#26) — swap 整项遮罩 + insert 指示线，均带文字提示 ===== */
+.file-item.dragging { opacity: 0.45; cursor: grabbing; pointer-events: none; }
+.file-item.drop-target { position: relative; outline: 2px dashed var(--accent); z-index: 6; }
+.file-item.drop-target::after {
+  content: '⇅ 对调';
+  position: absolute; inset: 0; z-index: 11; border-radius: inherit;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 12px; font-weight: 700; color: #fff;
+  pointer-events: none;
+  animation: dropFade 0.15s ease;
+}
+.file-item.drop-insert { position: relative; z-index: 6; }
+.file-item.drop-insert::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 4px;
+  background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 12;
+  animation: insertPulse 1s ease-in-out infinite;
+}
+.file-item.drop-at-start::before { top: 0; }
+.file-item.drop-at-end::before { bottom: 0; }
+.file-item.drop-insert::after {
+  content: '＋ 插入';
+  position: absolute; left: 50%; transform: translateX(-50%); z-index: 13;
+  background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  animation: dropFade 0.15s ease;
+}
+.file-item.drop-insert.drop-at-start::after { top: 8px; }
+.file-item.drop-insert.drop-at-end::after { bottom: 8px; }
+.file-item.drop-insert.drop-tail::after { content: '⇥ 移到末尾'; }
+@keyframes dropFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes insertPulse {
+  0%, 100% { box-shadow: 0 0 3px var(--accent); }
+  50% { box-shadow: 0 0 9px var(--accent); }
+}
 .file-check {
   width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
   cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: white;
@@ -254,7 +292,14 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
+.ib.add:hover { background: var(--success-light, #e6f7ef); color: var(--success); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 拖入提示浮层 — 纯视觉（pointer-events:none），桌面版由 Rust Enter/Leave 驱动，浏览器版由 dragenter 计数驱动 */
+.drop-overlay { position: fixed; inset: 0; z-index: 9999; background: color-mix(in srgb, var(--accent) 8%, transparent); display: none; align-items: center; justify-content: center; pointer-events: none; }
+.drop-overlay.on { display: flex; }
+.drop-overlay-box { border: 2px dashed var(--accent); border-radius: 14px; padding: 26px 44px; text-align: center; font-size: 16px; font-weight: 600; color: var(--accent); background: var(--surface); box-shadow: 0 8px 30px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 6px; }
+.drop-overlay-box small { font-size: 12px; font-weight: 400; color: var(--text-muted); }
 .file-meta .ib {
   width: 22px; height: 22px; font-size: 11px; padding: 0;
 }
@@ -386,14 +431,14 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 /* ===== Per-slot adjustment ===== */
 .invoice-slot { cursor: pointer; }
 .invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; overflow: visible !important; }
-.invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; pointer-events: none; }
+.invoice-slot.dragging { opacity: 0.85; cursor: grabbing; overflow: visible !important; pointer-events: none; }
 .invoice-slot.drop-target { outline: 2px dashed var(--accent); z-index: 6; }
 /* 顺位插入落点：在目标槽位主轴边缘画插入指示线 */
 .invoice-slot.drop-insert { z-index: 6; }
 .invoice-slot.drop-insert::before {
   content: ''; position: absolute; background: var(--accent);
   border-radius: 2px; pointer-events: none; z-index: 12;
-  box-shadow: 0 0 5px var(--accent);
+  animation: insertPulse 1s ease-in-out infinite;
 }
 .invoice-slot.drop-axis-h::before { top: 0; bottom: 0; width: 4px; }
 .invoice-slot.drop-axis-h.drop-at-start::before { left: 0; }
@@ -401,12 +446,37 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .invoice-slot.drop-axis-v::before { left: 0; right: 0; height: 4px; }
 .invoice-slot.drop-axis-v.drop-at-start::before { top: 0; }
 .invoice-slot.drop-axis-v.drop-at-end::before { bottom: 0; }
+.invoice-slot.drop-insert::after {
+  content: '＋ 插入';
+  position: absolute; z-index: 13;
+  background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  animation: dropFade 0.15s ease;
+}
+.invoice-slot.drop-axis-h.drop-at-start::after { left: 8px; top: 50%; transform: translateY(-50%); }
+.invoice-slot.drop-axis-h.drop-at-end::after { right: 8px; top: 50%; transform: translateY(-50%); }
+.invoice-slot.drop-axis-v.drop-at-start::after { top: 8px; left: 50%; transform: translateX(-50%); }
+.invoice-slot.drop-axis-v.drop-at-end::after { bottom: 8px; left: 50%; transform: translateX(-50%); }
+.invoice-slot.drop-insert.drop-tail::after { content: '⇥ 移到末尾'; }
 .invoice-slot.selected::after,
 .invoice-slot.dragging::after {
   content: ''; position: absolute; inset: 0;
   border: 1px dashed rgba(0, 0, 0, 0.25);
   pointer-events: none; z-index: 10;
 }
+/* 对调落点：整槽遮罩 + 文字提示（声明在 selected/dragging::after 之后以覆盖其虚线框） */
+.invoice-slot.drop-target::after {
+  content: '⇅ 对调';
+  position: absolute; inset: 0; z-index: 11;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 12px; font-weight: 700; color: #fff;
+  pointer-events: none;
+  animation: dropFade 0.15s ease;
+}
+/* 「移到末尾」徽章文案覆盖：指示线复用 drop-insert + drop-at-end 组合，无需额外样式 */
 
 .slot-handle {
   position: absolute; width: 10px; height: 10px; background: var(--accent);
