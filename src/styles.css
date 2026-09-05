@@ -255,6 +255,7 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
+.ib.add:hover { background: var(--success-light, #e6f7ef); color: var(--success); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
 .file-meta .ib {
   width: 22px; height: 22px; font-size: 11px; padding: 0;
