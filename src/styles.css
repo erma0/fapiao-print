@@ -170,13 +170,13 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   font-size: 11px; font-weight: 700; color: var(--accent);
   pointer-events: none;
-  animation: listDropFade 0.15s ease;
+  animation: dropFade 0.15s ease;
 }
 .file-item.drop-insert { position: relative; z-index: 6; }
 .file-item.drop-insert::before {
   content: ''; position: absolute; left: 0; right: 0; height: 4px;
   background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 12;
-  animation: listInsertPulse 1s ease-in-out infinite;
+  animation: insertPulse 1s ease-in-out infinite;
 }
 .file-item.drop-at-start::before { top: 0; }
 .file-item.drop-at-end::before { bottom: 0; }
@@ -187,12 +187,12 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   font-size: 10px; font-weight: 700; line-height: 1;
   padding: 3px 8px; border-radius: 999px; white-space: nowrap;
   pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-  animation: listDropFade 0.15s ease;
+  animation: dropFade 0.15s ease;
 }
 .file-item.drop-insert.drop-at-start::after { top: 8px; }
 .file-item.drop-insert.drop-at-end::after { bottom: 8px; }
-@keyframes listDropFade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes listInsertPulse {
+@keyframes dropFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes insertPulse {
   0%, 100% { box-shadow: 0 0 3px var(--accent); }
   50% { box-shadow: 0 0 9px var(--accent); }
 }
@@ -430,14 +430,14 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 /* ===== Per-slot adjustment ===== */
 .invoice-slot { cursor: pointer; }
 .invoice-slot.selected { outline: 2px solid var(--accent); z-index: 5; overflow: visible !important; }
-.invoice-slot.dragging { opacity: 0.85; cursor: move; overflow: visible !important; pointer-events: none; }
+.invoice-slot.dragging { opacity: 0.85; cursor: grabbing; overflow: visible !important; pointer-events: none; }
 .invoice-slot.drop-target { outline: 2px dashed var(--accent); z-index: 6; }
 /* 顺位插入落点：在目标槽位主轴边缘画插入指示线 */
 .invoice-slot.drop-insert { z-index: 6; }
 .invoice-slot.drop-insert::before {
   content: ''; position: absolute; background: var(--accent);
   border-radius: 2px; pointer-events: none; z-index: 12;
-  box-shadow: 0 0 5px var(--accent);
+  animation: insertPulse 1s ease-in-out infinite;
 }
 .invoice-slot.drop-axis-h::before { top: 0; bottom: 0; width: 4px; }
 .invoice-slot.drop-axis-h.drop-at-start::before { left: 0; }
@@ -445,11 +445,34 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .invoice-slot.drop-axis-v::before { left: 0; right: 0; height: 4px; }
 .invoice-slot.drop-axis-v.drop-at-start::before { top: 0; }
 .invoice-slot.drop-axis-v.drop-at-end::before { bottom: 0; }
+.invoice-slot.drop-insert::after {
+  content: '＋ 插入';
+  position: absolute; z-index: 13;
+  background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  pointer-events: none; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  animation: dropFade 0.15s ease;
+}
+.invoice-slot.drop-axis-h.drop-at-start::after { left: 8px; top: 50%; transform: translateY(-50%); }
+.invoice-slot.drop-axis-h.drop-at-end::after { right: 8px; top: 50%; transform: translateY(-50%); }
+.invoice-slot.drop-axis-v.drop-at-start::after { top: 8px; left: 50%; transform: translateX(-50%); }
+.invoice-slot.drop-axis-v.drop-at-end::after { bottom: 8px; left: 50%; transform: translateX(-50%); }
 .invoice-slot.selected::after,
 .invoice-slot.dragging::after {
   content: ''; position: absolute; inset: 0;
   border: 1px dashed rgba(0, 0, 0, 0.25);
   pointer-events: none; z-index: 10;
+}
+/* 对调落点：整槽遮罩 + 文字提示（声明在 selected/dragging::after 之后以覆盖其虚线框） */
+.invoice-slot.drop-target::after {
+  content: '⇅ 对调';
+  position: absolute; inset: 0; z-index: 11;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-size: 12px; font-weight: 700; color: var(--accent);
+  pointer-events: none;
+  animation: dropFade 0.15s ease;
 }
 
 .slot-handle {
