@@ -151,6 +151,7 @@ struct OfdPathObject {
     id: u32,
     boundary: (f64, f64, f64, f64),
     line_width: f64,
+    ctm: Option<(f64, f64, f64, f64, f64, f64)>,
     stroke_color: Option<(u8, u8, u8)>,
     fill_color: Option<(u8, u8, u8)>,
     fill: bool,
@@ -705,6 +706,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
                         }
                         if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "CTM") { p.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
                         if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
                         p.layer_draw_param = current_layer_dp;
@@ -795,6 +797,7 @@ fn parse_ofd_content(xml: &str) -> (Vec<OfdTextObject>, Vec<OfdPathObject>, Vec<
                             if let Some(f4) = parse_f4(&v) { p.boundary = f4; }
                         }
                         if let Some(v) = attr_val(&e, "LineWidth") { p.line_width = v.parse().unwrap_or(0.25); }
+                        if let Some(v) = attr_val(&e, "CTM") { p.ctm = parse_f6(&v); }
                         if let Some(v) = attr_val(&e, "Fill") { p.fill = v == "true"; }
                         if let Some(v) = attr_val(&e, "Alpha") { p.alpha = v.parse().ok(); }
                         p.layer_draw_param = current_layer_dp;
@@ -1344,6 +1347,44 @@ fn build_ofd_svg(
     svg
 }
 
+/// Compute the bounding box (u_min, v_min, u_max, v_max) of an OFD AbbreviatedData path.
+/// Only M/L/C/B/Q/S endpoint coordinates are considered (good enough for frame lines;
+/// arcs are rare on invoice frames and their control-point approximation is acceptable).
+fn ofd_path_bbox(data: &str) -> Option<(f64, f64, f64, f64)> {
+    let tokens: Vec<&str> = data.split_whitespace().collect();
+    let mut min_u = f64::MAX; let mut min_v = f64::MAX;
+    let mut max_u = f64::MIN; let mut max_v = f64::MIN;
+    let mut i = 0;
+    let mut extend = |us: &[f64], vs: &[f64]| {
+        for &u in us { if u < min_u { min_u = u; } if u > max_u { max_u = u; } }
+        for &v in vs { if v < min_v { min_v = v; } if v > max_v { max_v = v; } }
+    };
+    let pairs = |t: &[&str], base: usize, n: usize| -> Option<(Vec<f64>, Vec<f64>)> {
+        let mut us = Vec::new(); let mut vs = Vec::new();
+        for k in 0..n {
+            let u: f64 = t.get(base + k * 2)?.parse().ok()?;
+            let v: f64 = t.get(base + k * 2 + 1)?.parse().ok()?;
+            us.push(u); vs.push(v);
+        }
+        Some((us, vs))
+    };
+    while i < tokens.len() {
+        let n = match tokens[i] {
+            "M" | "L" => 1,
+            "C" | "B" | "S" => 2, // S: end + implied control — endpoints only
+            "Q" => 2,
+            _ => { i += 1; continue; }
+        };
+        if let Some((us, vs)) = pairs(&tokens, i + 1, n) {
+            extend(&us, &vs);
+            i += 1 + n * 2;
+        } else {
+            i += 1;
+        }
+    }
+    if min_u == f64::MAX { None } else { Some((min_u, min_v, max_u, max_v)) }
+}
+
 /// Build SVG path from OFD PathObject
 fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
     if p.abbreviated_data.is_empty() {
@@ -1355,13 +1396,47 @@ fn build_svg_path(p: &OfdPathObject, scale: f64) -> String {
         return String::new();
     }
 
-    // Boundary = (x, y, w, h) in mm. Path data is in local coords within Boundary.
-    // Apply translate to Boundary position, then scale everything.
-    let tx = p.boundary.0 * scale;
-    let ty = p.boundary.1 * scale;
+    // Normal case: Boundary = (x, y, w, h) in mm, path data in local mm coords.
+    // Apply translate to Boundary position, then scale mm → SVG units.
+    let mut transform = format!(
+        "translate({:.4},{:.4}) scale({:.4})",
+        p.boundary.0 * scale, p.boundary.1 * scale, scale
+    );
+
+    // CTM case (数电票 producers): path data lives in a DESIGN coordinate space
+    // (hundreds of units) and CTM carries the design→mm scale; Boundary carries
+    // the true page placement (CTM's e/f translation is unreliable there — it maps
+    // the shared design origin, not this object's local origin). Two observed
+    // variants unify into one model:
+    //   a) design-space coords (e.g. u∈[9.8, 804.8]) — offset from own bbox origin
+    //   b) already-local coords (u,v from 0) — bbox offset is a no-op
+    // Model: page pos = Boundary.xy + CTM-linear(path - bbox anchor), where the
+    // v anchor is v_max when CTM.d < 0 (design v axis points up) else v_min.
+    // Guard: only when path bbox × CTM scale ≈ Boundary size (±15%), b/c are 0.
+    if let Some((a, b, c, d, _e, _f)) = p.ctm {
+        if b == 0.0 && c == 0.0 && a != 0.0 && d != 0.0 && p.boundary.2 > 0.0 && p.boundary.3 > 0.0 {
+            if let Some((u0, v0, u1, v1)) = ofd_path_bbox(&p.abbreviated_data) {
+                let ew = (u1 - u0) * a.abs();
+                let eh = (v1 - v0) * d.abs();
+                let size_match = (ew - p.boundary.2).abs() <= p.boundary.2 * 0.15
+                    && (eh - p.boundary.3).abs() <= p.boundary.3 * 0.15;
+                if size_match {
+                    let v_anchor = if d < 0.0 { v1 } else { v0 };
+                    // +0.0 normalizes -0.0 to 0.0 for clean output
+                    let (ou, oa) = (-u0 + 0.0, -v_anchor + 0.0);
+                    transform = format!(
+                        "translate({:.4},{:.4}) scale({:.4},{:.4}) translate({:.4},{:.4})",
+                        p.boundary.0 * scale, p.boundary.1 * scale,
+                        a * scale, d * scale,
+                        ou, oa
+                    );
+                }
+            }
+        }
+    }
 
     let mut attrs = String::new();
-    attrs.push_str(&format!(" transform=\"translate({:.4},{:.4}) scale({:.4})\"", tx, ty, scale));
+    attrs.push_str(&format!(" transform=\"{}\"", transform));
     attrs.push_str(&format!(" stroke-width=\"{:.4}\"", p.line_width));
     if p.fill {
         attrs.push_str(" fill-rule=\"nonzero\"");
@@ -1402,13 +1477,11 @@ fn build_svg_image(
 
     // Boundary = (x, y, w, h) in mm — normally defines where and how big the image is.
     // Exception (数电票 producers): some ImageObjects carry a full-page placeholder
-    // Boundary (e.g. "0 0 210 297") while the real placement lives in the CTM
-    // [a b c d e f]: pixel (px, py) → page mm (a*px + e, d*py + f), i.e. position
-    // (e, f) and display size (W/a, H/d). Rendering those by Boundary would stretch
-    // a QR code across the whole page. Detect the placeholder (Boundary covers ≥95%
-    // of the page) and use the CTM instead; a genuine full-page background image has
-    // CTM translation (0,0) with density matching the page size, so the CTM result
-    // is mathematically identical for it.
+    // Boundary (e.g. "0 0 210 297") while the real placement lives in the CTM.
+    // Verified against the PDF twin of the same invoice: this producer writes CTM as
+    // [displayW 0 0 displayH posX posY] in mm (e.g. QR: 18.2×18.2 @ (5.3,3) matches
+    // the PDF's 18.59×18.59 @ (5.31,2.9)). Fallback to the spec semantics
+    // (a/d = pixel density → size = px/a, px/d) only when a/d is absurdly large.
     let mut x = img.boundary.0;
     let mut y = img.boundary.1;
     let mut w = img.boundary.2;
@@ -1418,12 +1491,18 @@ fn build_svg_image(
     if is_placeholder {
         if let Some((a, _b, _c, d, e, f)) = img.ctm {
             if a > 0.0 && d > 0.0 {
-                if let Some(&(pw, ph)) = image_sizes.get(&img.resource_id) {
-                    x = e;
-                    y = f;
-                    w = pw as f64 / a;
-                    h = ph as f64 / d;
-                }
+                let limit = 2.0 * page_w.max(page_h);
+                let (cw, ch) = if a <= limit && d <= limit {
+                    (a, d)
+                } else if let Some(&(pw, ph)) = image_sizes.get(&img.resource_id) {
+                    (pw as f64 / a, ph as f64 / d)
+                } else {
+                    (a.min(limit), d.min(limit))
+                };
+                x = e;
+                y = f;
+                w = cw;
+                h = ch;
             }
         }
     }
