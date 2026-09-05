@@ -2421,13 +2421,33 @@ function onListMouseUp(e) {
 }
 
 // 落点分区：目标项上下各 25% 为顺位插入（指示线），中间 50% 为对调（虚线框）
+// 光标落在列表项之间空白时，吸附到距离最近的列表项（gap 盲区兜底，80px 内有效）
+function findNearestListItem(x, y) {
+  var best = null, bestD = Infinity;
+  var items = document.querySelectorAll('#fileList .file-item');
+  for (var i = 0; i < items.length; i++) {
+    var r = items[i].getBoundingClientRect();
+    var dx = Math.max(r.left - x, 0, x - r.right);
+    var dy = Math.max(r.top - y, 0, y - r.bottom);
+    var d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = items[i]; }
+  }
+  if (!best || bestD > 6400) return null;
+  if (best.dataset.idx === undefined || parseInt(best.dataset.idx) === _listDrag.idx) return null;
+  return best;
+}
+
 function updateListDropTarget(e) {
   var el = document.elementFromPoint(e.clientX, e.clientY);
   el = el && el.closest ? el.closest('.file-item') : null;
   if (el && !el.closest('#fileList')) el = null;
   var idx = el ? parseInt(el.dataset.idx) : -1;
   if (isNaN(idx)) idx = -1;
-  if (idx < 0 || idx === _listDrag.idx) { el = null; idx = -1; }
+  if (idx < 0 || idx === _listDrag.idx) {
+    var near = findNearestListItem(e.clientX, e.clientY);
+    if (near) { el = near; idx = parseInt(el.dataset.idx); }
+  }
+  if (idx < 0) { el = null; idx = -1; }
   var zone = '';
   if (el) {
     var r = el.getBoundingClientRect();

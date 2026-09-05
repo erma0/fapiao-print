@@ -504,6 +504,8 @@ function onSlotMouseUp(e) {
     d.fileObj.slotOffsetY = d.startOffY;
     if (d.dropZone === 'before' || d.dropZone === 'after') {
       moveSlotInvoice(d.idx, d.dropIdx, d.dropZone);
+    } else if (d.dropZone === 'tail') {
+      moveSlotInvoiceToTail(d.idx);
     } else {
       swapSlotInvoices(d.idx, d.dropIdx);
     }
@@ -516,43 +518,73 @@ function onSlotMouseUp(e) {
   }
 }
 
+// 光标落在槽位间空白时，吸附到距离最近的槽位（gap 盲区兜底，80px 内有效）
+function findNearestSlot(x, y) {
+  var best = null, bestD = Infinity;
+  var slots = document.querySelectorAll('.invoice-slot[data-slot-idx]');
+  for (var i = 0; i < slots.length; i++) {
+    var r = slots[i].getBoundingClientRect();
+    var dx = Math.max(r.left - x, 0, x - r.right);
+    var dy = Math.max(r.top - y, 0, y - r.bottom);
+    var d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = slots[i]; }
+  }
+  if (!best || bestD > 6400) return { el: null, idx: -1 };
+  var idx = parseInt(best.dataset.slotIdx);
+  if (isNaN(idx)) idx = -1;
+  return { el: best, idx: idx };
+}
+
+// 判定槽位能否作为落点，并按光标在槽内的主轴位置分区
+function resolveSlotTarget(el, e) {
+  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
+  if (isNaN(idx)) idx = -1;
+  if (!el || idx < 0 || idx === _slotDrag.idx) return { el: null, idx: -1, zone: '' };
+  var di = S.currentPage * _slotDrag.perPage + idx;
+  var r = el.getBoundingClientRect();
+  var ratio = _slotDrag.vertical
+    ? (e.clientY - r.top) / (r.height || 1)
+    : (e.clientX - r.left) / (r.width || 1);
+  // 尾部空槽不接收；紧邻已装发票的第一个空槽整个作为「移到末尾」落点
+  if (di >= _slotDrag.activeLen) {
+    if (di !== _slotDrag.activeLen) return { el: null, idx: -1, zone: '' };
+    return { el: el, idx: idx, zone: 'tail' };
+  }
+  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
+  var zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
+  return { el: el, idx: idx, zone: zone };
+}
+
 // Track the slot under cursor while dragging; cursor zone decides insert vs swap
 function updateDropTarget(e) {
   var el = document.elementFromPoint(e.clientX, e.clientY);
   el = el && el.closest ? el.closest('.invoice-slot') : null;
-  var idx = el ? parseInt(el.dataset.slotIdx) : -1;
-  if (isNaN(idx)) idx = -1;
-  if (idx < 0 || idx === _slotDrag.idx) { el = null; idx = -1; }
-  // 只有装着发票（含空白占位）的槽位才是有效落点，尾部空槽不接收
-  if (el && S.currentPage * _slotDrag.perPage + idx >= _slotDrag.activeLen) { el = null; idx = -1; }
-  // 落点分区：主轴两端各 25% 为顺位插入，中间 50% 为对调
-  var zone = '';
-  if (el) {
-    var r = el.getBoundingClientRect();
-    var ratio = _slotDrag.vertical
-      ? (e.clientY - r.top) / (r.height || 1)
-      : (e.clientX - r.left) / (r.width || 1);
-    zone = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'swap';
-    showDragHint();
+  var target = resolveSlotTarget(el, e);
+  // 槽位之间的空白间隙吸附到最近的槽位，避免插入指示时有时无
+  if (!target.el) {
+    var near = findNearestSlot(e.clientX, e.clientY);
+    if (near.el && near.el !== el) target = resolveSlotTarget(near.el, e);
   }
-  if (el === _slotDrag.dropEl && zone === _slotDrag.dropZone) return;
+  if (target.el) showDragHint();
+  if (target.el === _slotDrag.dropEl && target.zone === _slotDrag.dropZone) return;
   clearDropTarget(_slotDrag.dropEl);
-  _slotDrag.dropEl = el;
-  _slotDrag.dropIdx = idx;
-  _slotDrag.dropZone = zone;
-  if (!el) return;
-  if (zone === 'swap') {
-    el.classList.add('drop-target');
+  _slotDrag.dropEl = target.el;
+  _slotDrag.dropIdx = target.idx;
+  _slotDrag.dropZone = target.zone;
+  if (!target.el) return;
+  if (target.zone === 'swap') {
+    target.el.classList.add('drop-target');
   } else {
-    el.classList.add('drop-insert');
-    el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
-    el.classList.add(zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+    target.el.classList.add('drop-insert');
+    target.el.classList.add(_slotDrag.vertical ? 'drop-axis-v' : 'drop-axis-h');
+    target.el.classList.add(target.zone === 'before' ? 'drop-at-start' : 'drop-at-end');
+    if (target.zone === 'tail') target.el.classList.add('drop-tail');
   }
 }
 
 function clearDropTarget(el) {
   if (!el) return;
-  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end');
+  el.classList.remove('drop-target', 'drop-insert', 'drop-axis-v', 'drop-axis-h', 'drop-at-start', 'drop-at-end', 'drop-tail');
 }
 
 // 首次跨槽拖拽时提示两种手势的区别
@@ -628,6 +660,45 @@ function moveSlotInvoice(fromIdx, toIdx, zone) {
   }
   renderFileList();
   toast('已调整顺序');
+  updatePreview();
+}
+
+// Move invoice to the end of the active sequence (drop on the first blank slot after the last invoice)
+function moveSlotInvoiceToTail(fromIdx) {
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var fromDi = S.currentPage * perPage + fromIdx;
+  var active = getActiveFiles();
+  var n = active.length;
+  if (fromDi < 0 || fromDi >= n - 1) { updatePreview(); return; }
+  var a = active[fromDi];
+  var ia = S.files.indexOf(a);
+  if (ia < 0) { updatePreview(); return; }
+  S.files.splice(ia, 1);
+  var insertAt;
+  if (document.getElementById('pageOrder').value === 'reverse') {
+    // 倒序渲染：显示序末尾 = 底层数组 active 区头部，找最后一个未勾选文件之前的空隙
+    insertAt = 0;
+    for (var i = 0; i < S.files.length; i++) {
+      var f = S.files[i];
+      if (f.checked || f._placeholder) { insertAt = i; break; }
+    }
+    S.files.splice(insertAt, 0, a);
+  } else {
+    // 正序：插到最后一个 active 文件之后
+    var last = active[n - 1];
+    var iLast = last === a ? -1 : S.files.indexOf(last);
+    insertAt = iLast >= 0 ? iLast + 1 : S.files.length;
+    S.files.splice(insertAt, 0, a);
+  }
+  _activeFileIdx = S.files.indexOf(a);
+  var newDi = getActiveFiles().indexOf(a);
+  if (newDi >= 0) {
+    S.currentPage = Math.floor(newDi / perPage);
+    S.selectedSlot = newDi % perPage;
+  }
+  renderFileList();
+  toast('已移到末尾');
   updatePreview();
 }
 
