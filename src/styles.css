@@ -257,6 +257,12 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
 .ib.add:hover { background: var(--success-light, #e6f7ef); color: var(--success); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 拖入提示浮层 — 纯视觉（pointer-events:none），桌面版由 Rust Enter/Leave 驱动，浏览器版由 dragenter 计数驱动 */
+.drop-overlay { position: fixed; inset: 0; z-index: 9999; background: color-mix(in srgb, var(--accent) 8%, transparent); display: none; align-items: center; justify-content: center; pointer-events: none; }
+.drop-overlay.on { display: flex; }
+.drop-overlay-box { border: 2px dashed var(--accent); border-radius: 14px; padding: 26px 44px; text-align: center; font-size: 16px; font-weight: 600; color: var(--accent); background: var(--surface); box-shadow: 0 8px 30px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 6px; }
+.drop-overlay-box small { font-size: 12px; font-weight: 400; color: var(--text-muted); }
 .file-meta .ib {
   width: 22px; height: 22px; font-size: 11px; padding: 0;
 }

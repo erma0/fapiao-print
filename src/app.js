@@ -3672,6 +3672,29 @@ document.body.addEventListener('drop', function(e) {
   if (_slotUploadActive || _loadingBatchActive) { toast('当前仍在加载发票，请稍候再添加'); return; }
   if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files));
 });
+
+// 拖入提示浮层 — 桌面版由 Rust DragDropEvent::Enter/Leave 调 _tauriDragHover，
+// 浏览器版 HTML5 drag 事件不触发（WebView2 原生接管），走 dragenter/dragleave 计数。
+window._tauriDragHover = function(show) {
+  var el = document.getElementById('dropOverlay');
+  if (el) el.classList.toggle('on', !!show);
+};
+var _dragDepth = 0;
+window.addEventListener('dragenter', function(e) {
+  var types = e.dataTransfer && e.dataTransfer.types;
+  if (types && Array.prototype.indexOf.call(types, 'Files') >= 0) {
+    _dragDepth++;
+    window._tauriDragHover(true);
+  }
+});
+window.addEventListener('dragleave', function() {
+  if (_dragDepth > 0) _dragDepth--;
+  if (_dragDepth === 0) window._tauriDragHover(false);
+});
+window.addEventListener('drop', function() {
+  _dragDepth = 0;
+  window._tauriDragHover(false);
+});
 window.addEventListener('resize', function() { if (S.files.length) updatePreview(); });
 
 // beforeunload safety net — stop all work if the window is being destroyed
