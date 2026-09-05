@@ -167,8 +167,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   content: '⇅ 对调';
   position: absolute; inset: 0; z-index: 11; border-radius: inherit;
   display: flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  font-size: 11px; font-weight: 700; color: var(--accent);
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 12px; font-weight: 700; color: #fff;
   pointer-events: none;
   animation: dropFade 0.15s ease;
 }
@@ -191,6 +191,7 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .file-item.drop-insert.drop-at-start::after { top: 8px; }
 .file-item.drop-insert.drop-at-end::after { bottom: 8px; }
+.file-item.drop-insert.drop-tail::after { content: '⇥ 移到末尾'; }
 @keyframes dropFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes insertPulse {
   0%, 100% { box-shadow: 0 0 3px var(--accent); }
@@ -458,6 +459,7 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .invoice-slot.drop-axis-h.drop-at-end::after { right: 8px; top: 50%; transform: translateY(-50%); }
 .invoice-slot.drop-axis-v.drop-at-start::after { top: 8px; left: 50%; transform: translateX(-50%); }
 .invoice-slot.drop-axis-v.drop-at-end::after { bottom: 8px; left: 50%; transform: translateX(-50%); }
+.invoice-slot.drop-insert.drop-tail::after { content: '⇥ 移到末尾'; }
 .invoice-slot.selected::after,
 .invoice-slot.dragging::after {
   content: ''; position: absolute; inset: 0;
@@ -469,11 +471,12 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   content: '⇅ 对调';
   position: absolute; inset: 0; z-index: 11;
   display: flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  font-size: 12px; font-weight: 700; color: var(--accent);
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 12px; font-weight: 700; color: #fff;
   pointer-events: none;
   animation: dropFade 0.15s ease;
 }
+/* 「移到末尾」徽章文案覆盖：指示线复用 drop-insert + drop-at-end 组合，无需额外样式 */
 
 .slot-handle {
   position: absolute; width: 10px; height: 10px; background: var(--accent);
