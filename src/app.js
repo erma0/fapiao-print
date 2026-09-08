@@ -1865,8 +1865,8 @@ function loadFileFast(file) {
 // =====================================================
 // File list management
 // =====================================================
-var TYPE_FILTER_LABELS = { vat: '发票', ticket: '车票', toll: '通行费', nontax: '财政', xml: 'XML' };
-var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片' };
+var TYPE_FILTER_LABELS = { vat: '发票', ticket: '车票', toll: '通行费', nontax: '财政' };
+var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片', xml: 'XML' };
 
 // 筛选区折叠：默认收起节省侧边栏垂直空间，摘要行仍实时反映激活的筛选
 function toggleFilterPanel() {
@@ -1954,8 +1954,7 @@ function isTypeMatch(f) {
     case 'ticket': return !!f._isTicket;
     case 'toll': return !!f._isToll;
     case 'nontax': return !!f._isNonTax;
-    case 'xml': return !!f._xmlInvoice;
-    case 'vat': return !f._isTicket && !f._isToll && !f._isNonTax && !f._xmlInvoice;
+    case 'vat': return !f._isTicket && !f._isToll && !f._isNonTax;
     default: return true;
   }
 }
@@ -1976,12 +1975,13 @@ function syncFormatFilterButtons() {
   });
 }
 
-// 格式判定基于 fileObj.type（扩展名）：pdf/ofd 为专属值，xml 归类型行，
+// 格式判定基于 fileObj.type（扩展名）：pdf/ofd/xml 为专属值，
 // 其余非空扩展名（jpeg/png/webp/heic/bmp...）均视为图片
 function isFormatMatch(f) {
   switch (S.formatFilter) {
     case 'pdf': return f.type === 'pdf';
     case 'ofd': return f.type === 'ofd';
+    case 'xml': return f.type === 'xml' || !!f._xmlInvoice;
     case 'image': return !!f.type && f.type !== 'pdf' && f.type !== 'ofd' && f.type !== 'xml';
     default: return true;
   }
