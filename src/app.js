@@ -67,6 +67,7 @@ var S = {
   fileFilter: 'all',
   typeFilter: 'all',
   formatFilter: 'all',
+  filterCollapsed: true,
   fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
@@ -1282,6 +1283,18 @@ var _listDragBound = false;    // 列表拖拽事件只绑定一次
 var _listDragSuppressClick = false; // 拖拽松手后吞掉浏览器派发的 click
 var _listDragHintShown = false; // 本次会话是否已提示过列表拖拽手势
 
+// 单色 stroke 图标（16 基准，currentColor 跟随按钮色）——JS 动态按钮用
+var ICONS = (function() {
+  var a = 'viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+  return {
+    search: '<svg ' + a + '><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/></svg>',
+    grid: '<svg ' + a + '><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+    list: '<svg ' + a + '><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><path d="M2 4h.01M2 8h.01M2 12h.01"/></svg>',
+    square: '<svg ' + a + '><rect x="2" y="2" width="12" height="12" rx="2"/></svg>',
+    checkSquare: '<svg ' + a + '><rect x="2" y="2" width="12" height="12" rx="2"/><path d="m5.2 8.2 2 2 3.6-4"/></svg>'
+  };
+})();
+
 function _onOcrTaskDone() {
   _ocrRunning--;
   var remaining = _ocrQueue.length + _ocrRunning;
@@ -1339,7 +1352,7 @@ function updateOcrAllBtn() {
     btn.disabled = true;
     btn.title = '识别中 ' + (_ocrBatchTotal > 0 ? done + '/' + _ocrBatchTotal : '剩余' + remaining);
   } else {
-    btn.textContent = '\uD83D\uDD0D';
+    btn.innerHTML = ICONS.search;
     btn.disabled = false;
     btn.title = '一键识别';
   }
@@ -1852,10 +1865,52 @@ function loadFileFast(file) {
 // =====================================================
 // File list management
 // =====================================================
+var TYPE_FILTER_LABELS = { vat: '发票', ticket: '车票', toll: '通行费', nontax: '财政', xml: 'XML' };
+var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片' };
+
+// 筛选区折叠：默认收起节省侧边栏垂直空间，摘要行仍实时反映激活的筛选
+function toggleFilterPanel() {
+  S.filterCollapsed = !S.filterCollapsed;
+  syncFilterPanel();
+  saveSettings();
+}
+
+function syncFilterPanel() {
+  var sec = document.getElementById('filterSection');
+  if (sec) sec.classList.toggle('open', !S.filterCollapsed);
+}
+
+function updateFilterSummary() {
+  var parts = [];
+  if (S.fileFilter === 'duplicates') parts.push('重复');
+  else if (S.printedFilter === 'unprinted') parts.push('未打印');
+  else if (S.printedFilter === 'printed') parts.push('已打印');
+  if (S.typeFilter !== 'all') parts.push(TYPE_FILTER_LABELS[S.typeFilter] || S.typeFilter);
+  if (S.formatFilter !== 'all') parts.push(FORMAT_FILTER_LABELS[S.formatFilter] || S.formatFilter);
+  var el = document.getElementById('filterSummary');
+  if (el) el.textContent = parts.join(' · ');
+  var clearBtn = document.getElementById('filterClearBtn');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !parts.length);
+}
+
+function clearAllFilters(e) {
+  e.stopPropagation();
+  S.fileFilter = 'all';
+  S.printedFilter = 'all';
+  S.typeFilter = 'all';
+  S.formatFilter = 'all';
+  syncFilterButtons();
+  syncTypeFilterButtons();
+  syncFormatFilterButtons();
+  updateFilterSummary();
+  renderFileList();
+}
+
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
   S.fileFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
@@ -1863,6 +1918,7 @@ function setFileFilter(filter) {
   if (filter === 'duplicates') { selectDuplicateExtras(); return; }
   S.fileFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
@@ -1882,6 +1938,7 @@ function setTypeFilter(t) {
   S.typeFilter = t;
   clearInvisibleChecks();
   syncTypeFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
@@ -1908,6 +1965,7 @@ function setFormatFilter(t) {
   S.formatFilter = t;
   clearInvisibleChecks();
   syncFormatFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
@@ -1967,6 +2025,7 @@ function selectDuplicateExtras() {
   S.fileFilter = 'duplicates';
   S.printedFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
   if (selected) {
     toast('已覆盖原有勾选：选中 ' + selected + ' 个重复项（每组保留第一份），点击删除按钮即可去重' +
@@ -2037,6 +2096,7 @@ function removeDuplicates(silent) {
     S.fileFilter = 'all';
     S.printedFilter = 'all';
     syncFilterButtons();
+    updateFilterSummary();
     renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
     toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
   } else if (removed) {
@@ -2174,7 +2234,7 @@ function syncFileViewBtn() {
   var btn = document.getElementById('fileViewBtn');
   if (!btn) return;
   var grid = S.fileView === 'grid';
-  btn.textContent = grid ? '\uD83D\uDCCB' : '\uD83D\uDDBC';
+  btn.innerHTML = grid ? ICONS.list : ICONS.grid;
   btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
@@ -2236,7 +2296,7 @@ function syncSelectAllBtn() {
   if (!btn) return;
   var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
-  btn.textContent = all ? '\u2705' : '\u2B1C';
+  btn.innerHTML = all ? ICONS.checkSquare : ICONS.square;
   btn.title = all ? '取消全选（仅当前筛选可见项）' : '全选（仅当前筛选可见项）';
 }
 function syncDeleteBtn() {
@@ -3438,6 +3498,7 @@ function saveSettings() {
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
+  o.filterCollapsed = S.filterCollapsed;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3515,7 +3576,10 @@ function loadSettings() {
   if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   if (o.fileView === 'grid') S.fileView = 'grid';
+  if (o.filterCollapsed === false) S.filterCollapsed = false;
   syncFileViewBtn();
+  syncFilterPanel();
+  updateFilterSummary();
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
@@ -3798,6 +3862,7 @@ function resetSettings() {
   syncFilterButtons();
   syncTypeFilterButtons();
   syncFormatFilterButtons();
+  updateFilterSummary();
   renderFileList();
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
