@@ -2152,17 +2152,21 @@ function setAllCopies(e, n) {
   updatePreview();
 }
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
-function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+// 当前筛选条件下可勾选的文件（全选/取消全选只作用于可见项，issue #27）
+function getSelectableInView() {
+  return getFilteredFiles().filter(function(f) { return !f._placeholder; });
+}
+function selectAll() { getSelectableInView().forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function deselectAll() { getSelectableInView().forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function toggleSelectAll() {
-  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
   if (all) deselectAll(); else selectAll();
 }
 function syncSelectAllBtn() {
   var btn = document.getElementById('selectAllBtn');
   if (!btn) return;
-  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
   btn.textContent = all ? '\u25FB' : '\u2611';
   btn.title = all ? '取消全选' : '全选';
