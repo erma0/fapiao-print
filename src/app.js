@@ -1510,6 +1510,8 @@ function updateFileItem(fileObj) {
       ocrBtn.onclick = (function(i) { return function() { ocrFile(i); }; })(idx);
     }
   }
+  // 识别/提取完成后类型标记可能刚出现（如 _isTicket），重算该项筛选可见性
+  items[idx].style.display = isFileHidden(f) ? 'none' : '';
 }
 
 /**
@@ -1940,6 +1942,8 @@ function setTypeFilter(t) {
   syncTypeFilterButtons();
   updateFilterSummary();
   renderFileList();
+  updatePrintBtn();
+  updateSummaryBtn();
 }
 
 function syncTypeFilterButtons() {
@@ -1966,6 +1970,8 @@ function setFormatFilter(t) {
   syncFormatFilterButtons();
   updateFilterSummary();
   renderFileList();
+  updatePrintBtn();
+  updateSummaryBtn();
 }
 
 function syncFormatFilterButtons() {
@@ -1985,6 +1991,16 @@ function isFormatMatch(f) {
     case 'image': return !!f.type && f.type !== 'pdf' && f.type !== 'ofd' && f.type !== 'xml';
     default: return true;
   }
+}
+
+// 文件在列表中是否隐藏（类型/格式/状态三维筛选合并判定）：
+// renderFileList 全量渲染与 updateFileItem 单项更新共用，识别完成改写类型标记后可见性即时重算
+function isFileHidden(f) {
+  if (!isTypeMatch(f) || !isFormatMatch(f)) return true;
+  if (S.fileFilter === 'duplicates') return !f._dup;
+  if (S.printedFilter === 'printed') return !f._printed;
+  if (S.printedFilter === 'unprinted') return f._printed;
+  return false;
 }
 
 // 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮（仅状态行）
@@ -2131,9 +2147,7 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = !isTypeMatch(f) || !isFormatMatch(f) ||
-      (S.fileFilter === 'duplicates' && !f._dup) ||
-      (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
+    var hidden = isFileHidden(f);
     var hideStyle = hidden ? ' style="display:none"' : '';
     if (grid) {
       if (f._placeholder) {
@@ -3457,6 +3471,8 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest('.copy-ctrl')) {
     var cm = document.getElementById('copyMenu');
     if (cm) cm.classList.add('hidden');
+    var sm = document.getElementById('sortMenu');
+    if (sm) sm.classList.add('hidden');
   }
   if (!e.target.closest('.zoom-ctrl')) {
     var zm = document.getElementById('zoomMenu');
