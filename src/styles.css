@@ -134,8 +134,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   display: flex; gap: 4px; padding: 6px 8px;
   border-bottom: 1px solid var(--border); background: var(--surface2);
 }
-/* 类型筛选行：紧贴打印状态筛选条，视觉上作为同一筛选区 */
-.type-filter-bar { padding: 4px 8px 6px; }
+/* 类型/格式筛选行：与打印状态行组成连续筛选区，中间行去分隔线由末行收尾 */
+.type-filter-bar { padding: 4px 8px 6px; border-bottom: none; }
 .pf-btn {
   flex: 1; padding: 3px 0; font-size: 11px; border: 1px solid var(--border);
   border-radius: 4px; background: transparent; color: var(--text-secondary);

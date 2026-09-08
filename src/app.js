@@ -66,6 +66,7 @@ var S = {
   printedFilter: 'all',
   fileFilter: 'all',
   typeFilter: 'all',
+  formatFilter: 'all',
   fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
@@ -1865,19 +1866,23 @@ function setFileFilter(filter) {
   renderFileList();
 }
 
-// 按发票类型筛选（独立于打印状态维度，可组合）：分类型分批排版打印的工作流基础
-// 切换类型 = 切换工作批次：清除不可见项的勾选，保证打印集合 = 当前可见勾选集合，
+// 类型/格式筛选 = 分批打印工作流维度：切换即切换工作批次，
+// 清除不可见项的勾选保证打印集合 = 当前可见勾选集合，
 // 避免筛选车票打完后切到发票时残留勾选把车票再打一遍
+function clearInvisibleChecks() {
+  var cleared = 0;
+  S.files.forEach(function(f) {
+    if (f.checked && !isTypeMatch(f) || f.checked && !isFormatMatch(f)) { f.checked = false; cleared++; }
+  });
+  if (cleared) toast('已清除 ' + cleared + ' 张不可见发票的勾选');
+}
+
 function setTypeFilter(t) {
   if (S.typeFilter === t) return;
   S.typeFilter = t;
-  var cleared = 0;
-  S.files.forEach(function(f) {
-    if (f.checked && !isTypeMatch(f)) { f.checked = false; cleared++; }
-  });
+  clearInvisibleChecks();
   syncTypeFilterButtons();
   renderFileList();
-  if (cleared) toast('已清除 ' + cleared + ' 张不可见发票的勾选');
 }
 
 function syncTypeFilterButtons() {
@@ -1898,10 +1903,36 @@ function isTypeMatch(f) {
   }
 }
 
-// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮
+function setFormatFilter(t) {
+  if (S.formatFilter === t) return;
+  S.formatFilter = t;
+  clearInvisibleChecks();
+  syncFormatFilterButtons();
+  renderFileList();
+}
+
+function syncFormatFilterButtons() {
+  var active = S.formatFilter;
+  document.querySelectorAll('#formatFilterBar .pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.format === active);
+  });
+}
+
+// 格式判定基于 fileObj.type（扩展名）：pdf/ofd 为专属值，xml 归类型行，
+// 其余非空扩展名（jpeg/png/webp/heic/bmp...）均视为图片
+function isFormatMatch(f) {
+  switch (S.formatFilter) {
+    case 'pdf': return f.type === 'pdf';
+    case 'ofd': return f.type === 'ofd';
+    case 'image': return !!f.type && f.type !== 'pdf' && f.type !== 'ofd' && f.type !== 'xml';
+    default: return true;
+  }
+}
+
+// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮（仅状态行）
 function syncFilterButtons() {
   var active = S.fileFilter === 'duplicates' ? 'duplicates' : S.printedFilter;
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
+  document.querySelectorAll('#printFilterBar .pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === active);
   });
 }
@@ -1949,6 +1980,7 @@ function selectDuplicateExtras() {
 function getFilteredFiles() {
   var files = S.files;
   if (S.typeFilter !== 'all') files = files.filter(isTypeMatch);
+  if (S.formatFilter !== 'all') files = files.filter(isFormatMatch);
   if (S.fileFilter === 'duplicates') return files.filter(function(f) { return f._dup; });
   if (S.printedFilter === 'all') return files;
   return files.filter(function(f) {
@@ -2039,7 +2071,7 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = !isTypeMatch(f) ||
+    var hidden = !isTypeMatch(f) || !isFormatMatch(f) ||
       (S.fileFilter === 'duplicates' && !f._dup) ||
       (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
@@ -2383,7 +2415,7 @@ function scrollToListItem(idx) {
 
 // 列表拖拽排序仅在无筛选时启用：筛选态显示序 ≠ 底层序，拖拽会乱序
 function canListDrag() {
-  return S.fileFilter === 'all' && S.printedFilter === 'all' && S.typeFilter === 'all';
+  return S.fileFilter === 'all' && S.printedFilter === 'all' && S.typeFilter === 'all' && S.formatFilter === 'all';
 }
 
 function initListDrag() {
@@ -3762,8 +3794,10 @@ function resetSettings() {
   S.printedFilter = 'all';
   S.fileFilter = 'all';
   S.typeFilter = 'all';
+  S.formatFilter = 'all';
   syncFilterButtons();
   syncTypeFilterButtons();
+  syncFormatFilterButtons();
   renderFileList();
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
