@@ -32,7 +32,7 @@
           <div class="file-actions">
             <button class="ib add" onclick="triggerUpload()" title="添加发票文件（PDF/OFD/XML/图片）">➕</button>
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">②</button>
+              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">🔢</button>
               <div class="copy-menu hidden" id="copyMenu">
                 <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
                 <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2 ⭐</div>
@@ -49,8 +49,8 @@
                 <div class="copy-menu-item" onclick="sortByDate(-1)">📅↓ 新→旧</div>
               </div>
             </div>
-            <button class="ib" id="selectAllBtn" onclick="toggleSelectAll()" title="全选">☑</button>
-            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图">▦</button>
+            <button class="ib" id="selectAllBtn" onclick="toggleSelectAll()" title="全选">✅</button>
+            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图">🖼</button>
             <button class="ib danger" id="deleteBtn" onclick="deleteSelected()" title="删除选中">🗑</button>
           </div>
         </div>
@@ -59,6 +59,14 @@
           <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
           <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
           <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项并勾选可安全删除的重复（按发票号判定，会覆盖原有勾选）；同销售方+金额+日期的疑似重复仅标记不勾选">重复 <span id="duplicateCount"></span></button>
+        </div>
+        <div class="print-filter-bar type-filter-bar" id="typeFilterBar" title="按发票类型筛选列表（配合全选可分类型分批排版打印，需先完成识别）">
+          <button class="pf-btn pf-active" data-type="all" onclick="setTypeFilter('all')">全部</button>
+          <button class="pf-btn" data-type="vat" onclick="setTypeFilter('vat')">发票</button>
+          <button class="pf-btn" data-type="ticket" onclick="setTypeFilter('ticket')">车票</button>
+          <button class="pf-btn" data-type="toll" onclick="setTypeFilter('toll')">通行费</button>
+          <button class="pf-btn" data-type="nontax" onclick="setTypeFilter('nontax')">财政</button>
+          <button class="pf-btn" data-type="xml" onclick="setTypeFilter('xml')">XML</button>
         </div>
         <div id="fileList"></div>
       </div>

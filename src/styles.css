@@ -134,6 +134,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
   display: flex; gap: 4px; padding: 6px 8px;
   border-bottom: 1px solid var(--border); background: var(--surface2);
 }
+/* 类型筛选行：紧贴打印状态筛选条，视觉上作为同一筛选区 */
+.type-filter-bar { padding: 4px 8px 6px; }
 .pf-btn {
   flex: 1; padding: 3px 0; font-size: 11px; border: 1px solid var(--border);
   border-radius: 4px; background: transparent; color: var(--text-secondary);
@@ -288,7 +290,7 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .ib {
   width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
   border-radius: 5px; display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: var(--text-muted); transition: all 0.15s;
+  font-size: 13px; line-height: 1; color: var(--text-muted); transition: all 0.15s;
 }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }

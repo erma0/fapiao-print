@@ -65,6 +65,7 @@ var S = {
   amtMode: 'tax',
   printedFilter: 'all',
   fileFilter: 'all',
+  typeFilter: 'all',
   fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
@@ -1864,6 +1865,39 @@ function setFileFilter(filter) {
   renderFileList();
 }
 
+// 按发票类型筛选（独立于打印状态维度，可组合）：分类型分批排版打印的工作流基础
+// 切换类型 = 切换工作批次：清除不可见项的勾选，保证打印集合 = 当前可见勾选集合，
+// 避免筛选车票打完后切到发票时残留勾选把车票再打一遍
+function setTypeFilter(t) {
+  if (S.typeFilter === t) return;
+  S.typeFilter = t;
+  var cleared = 0;
+  S.files.forEach(function(f) {
+    if (f.checked && !isTypeMatch(f)) { f.checked = false; cleared++; }
+  });
+  syncTypeFilterButtons();
+  renderFileList();
+  if (cleared) toast('已清除 ' + cleared + ' 张不可见发票的勾选');
+}
+
+function syncTypeFilterButtons() {
+  var active = S.typeFilter;
+  document.querySelectorAll('#typeFilterBar .pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.type === active);
+  });
+}
+
+function isTypeMatch(f) {
+  switch (S.typeFilter) {
+    case 'ticket': return !!f._isTicket;
+    case 'toll': return !!f._isToll;
+    case 'nontax': return !!f._isNonTax;
+    case 'xml': return !!f._xmlInvoice;
+    case 'vat': return !f._isTicket && !f._isToll && !f._isNonTax && !f._xmlInvoice;
+    default: return true;
+  }
+}
+
 // 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮
 function syncFilterButtons() {
   var active = S.fileFilter === 'duplicates' ? 'duplicates' : S.printedFilter;
@@ -1914,6 +1948,7 @@ function selectDuplicateExtras() {
 
 function getFilteredFiles() {
   var files = S.files;
+  if (S.typeFilter !== 'all') files = files.filter(isTypeMatch);
   if (S.fileFilter === 'duplicates') return files.filter(function(f) { return f._dup; });
   if (S.printedFilter === 'all') return files;
   return files.filter(function(f) {
@@ -2004,7 +2039,8 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
+    var hidden = !isTypeMatch(f) ||
+      (S.fileFilter === 'duplicates' && !f._dup) ||
       (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
     var hideStyle = hidden ? ' style="display:none"' : '';
     if (grid) {
@@ -2106,7 +2142,7 @@ function syncFileViewBtn() {
   var btn = document.getElementById('fileViewBtn');
   if (!btn) return;
   var grid = S.fileView === 'grid';
-  btn.textContent = grid ? '\u2630' : '\u25A6';
+  btn.textContent = grid ? '\uD83D\uDCCB' : '\uD83D\uDDBC';
   btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
@@ -2168,8 +2204,8 @@ function syncSelectAllBtn() {
   if (!btn) return;
   var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
-  btn.textContent = all ? '\u25FB' : '\u2611';
-  btn.title = all ? '取消全选' : '全选';
+  btn.textContent = all ? '\u2705' : '\u2B1C';
+  btn.title = all ? '取消全选（仅当前筛选可见项）' : '全选（仅当前筛选可见项）';
 }
 function syncDeleteBtn() {
   var btn = document.getElementById('deleteBtn');
@@ -2347,7 +2383,7 @@ function scrollToListItem(idx) {
 
 // 列表拖拽排序仅在无筛选时启用：筛选态显示序 ≠ 底层序，拖拽会乱序
 function canListDrag() {
-  return S.fileFilter === 'all' && S.printedFilter === 'all';
+  return S.fileFilter === 'all' && S.printedFilter === 'all' && S.typeFilter === 'all';
 }
 
 function initListDrag() {
@@ -3725,7 +3761,9 @@ function resetSettings() {
   S._notesMap = {};
   S.printedFilter = 'all';
   S.fileFilter = 'all';
+  S.typeFilter = 'all';
   syncFilterButtons();
+  syncTypeFilterButtons();
   renderFileList();
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
