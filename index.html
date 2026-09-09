@@ -35,33 +35,58 @@
           <div class="file-count" id="fileCount">0 张，已选 0</div>
           <div class="file-actions">
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数">②</button>
+              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.5A1.5 1.5 0 0 1 4.5 2h7"/></svg></button>
               <div class="copy-menu hidden" id="copyMenu">
                 <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
-                <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2 ⭐</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2</div>
                 <div class="copy-menu-item" onclick="setAllCopies(event,3)">选中项 ×3</div>
                 <div class="copy-menu-sep"></div>
                 <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
               </div>
             </div>
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleSortMenu()" title="按日期排序">📅</button>
+              <button class="ib" onclick="toggleSortMenu()" title="按日期排序"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button>
               <div class="copy-menu hidden" id="sortMenu">
-                <div class="copy-menu-item" onclick="sortByDate(1)">📅↑ 旧→新</div>
-                <div class="copy-menu-item" onclick="sortByDate(-1)">📅↓ 新→旧</div>
+                <div class="copy-menu-item" onclick="sortByDate(1)">↑ 旧→新</div>
+                <div class="copy-menu-item" onclick="sortByDate(-1)">↓ 新→旧</div>
               </div>
             </div>
-            <button class="ib" onclick="selectAll()" title="全选">☑</button>
-            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图">▦</button>
-            <button class="ib" onclick="deselectAll()" title="取消全选">◻</button>
-            <button class="ib danger" onclick="deleteSelected()" title="删除">🗑</button>
+            <button class="ib" id="selectAllBtn" onclick="toggleSelectAll()" title="全选"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/></svg></button>
+            <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
+            <button class="ib danger" onclick="deleteSelected()" title="删除选中"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11"/><path d="M5.5 4.5v-1A1.5 1.5 0 0 1 7 2h2a1.5 1.5 0 0 1 1.5 1.5v1"/><path d="m4 4.5.6 8.6a1.5 1.5 0 0 0 1.5 1.4h3.8a1.5 1.5 0 0 0 1.5-1.4l.6-8.6"/><path d="M6.7 7.5v4M9.3 7.5v4"/></svg></button>
           </div>
         </div>
-        <div class="print-filter-bar" id="printFilterBar">
-          <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
-          <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
-          <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
-          <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项并勾选可安全删除的重复（按发票号判定，会覆盖原有勾选）；同销售方+金额+日期的疑似重复仅标记不勾选">重复 <span id="duplicateCount"></span></button>
+        <div class="filter-section" id="filterSection">
+          <div class="filter-head" id="filterHead" onclick="toggleFilterPanel()" title="展开/收起筛选">
+            <span class="filter-head-label">筛选</span>
+            <span class="filter-summary" id="filterSummary"></span>
+            <button class="filter-clear hidden" id="filterClearBtn" onclick="clearAllFilters(event)" title="清除全部筛选"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+            <svg class="filter-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 4 4 4-4 4"/></svg>
+          </div>
+          <div class="filter-body">
+            <div class="filter-body-inner">
+              <div class="print-filter-bar type-filter-bar" id="typeFilterBar" title="按发票类型筛选列表（配合全选可分类型分批排版打印，需先完成识别）">
+                <button class="pf-btn pf-active" data-type="all" onclick="setTypeFilter('all')">全部</button>
+                <button class="pf-btn" data-type="vat" onclick="setTypeFilter('vat')">发票</button>
+                <button class="pf-btn" data-type="ticket" onclick="setTypeFilter('ticket')">车票</button>
+                <button class="pf-btn" data-type="toll" onclick="setTypeFilter('toll')">通行费</button>
+                <button class="pf-btn" data-type="nontax" onclick="setTypeFilter('nontax')">财政</button>
+              </div>
+              <div class="print-filter-bar type-filter-bar" id="formatFilterBar" title="按文件格式筛选列表（配合全选可分格式分批排版打印）">
+                <button class="pf-btn pf-active" data-format="all" onclick="setFormatFilter('all')">全部</button>
+                <button class="pf-btn" data-format="pdf" onclick="setFormatFilter('pdf')">PDF</button>
+                <button class="pf-btn" data-format="ofd" onclick="setFormatFilter('ofd')">OFD</button>
+                <button class="pf-btn" data-format="image" onclick="setFormatFilter('image')">图片</button>
+                <button class="pf-btn" data-format="xml" onclick="setFormatFilter('xml')">XML</button>
+              </div>
+              <div class="print-filter-bar" id="printFilterBar">
+                <button class="pf-btn pf-active" data-filter="all" onclick="setPrintedFilter('all')">全部</button>
+                <button class="pf-btn" data-filter="unprinted" onclick="setPrintedFilter('unprinted')">未打印</button>
+                <button class="pf-btn" data-filter="printed" onclick="setPrintedFilter('printed')">已打印</button>
+                <button class="pf-btn pf-dup" data-filter="duplicates" onclick="setFileFilter('duplicates')" title="筛选重复项并勾选可安全删除的重复（按发票号判定，会覆盖原有勾选）；同销售方+金额+日期的疑似重复仅标记不勾选">重复 <span id="duplicateCount"></span></button>
+              </div>
+            </div>
+          </div>
         </div>
         <div id="fileList"></div>
       </div>
@@ -265,8 +290,6 @@
       </div>
       <div style="flex:1"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票">🗑</button>
-        <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置">⚙</button>
         <button class="btn btn-sm" id="pdfBtn" onclick="savePdf()" disabled title="保存矢量PDF">📥 PDF</button>
         <button class="btn btn-sm" id="rasterPdfBtn" onclick="saveRasterPdf()" disabled title="保存图片PDF">📄 图片PDF</button>
       </div>
