@@ -376,24 +376,37 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
       objH = (f.oh || embedResult.height) * 72 / imgDpi;
     }
 
-    var fitScale = Math.min(slot.w / objW, slot.h / objH);
-    if (settings.fitMode === 'fill') fitScale = Math.max(slot.w / objW, slot.h / objH);
+    // 先旋转后适配（与预览/桌面端一致）：90°/270° 按旋转后视觉宽高 fit 槽位
+    var isRot90 = (rot === 90 || rot === 270);
+    var fitW = isRot90 ? objH : objW;
+    var fitH = isRot90 ? objW : objH;
+
+    var fitScale = Math.min(slot.w / fitW, slot.h / fitH);
+    if (settings.fitMode === 'fill') fitScale = Math.max(slot.w / fitW, slot.h / fitH);
     else if (settings.fitMode === 'original') fitScale = 1;
     if (settings.fitMode === 'custom' && settings.customScale) fitScale *= settings.customScale;
     fitScale *= perScale;
 
-    var drawW = objW * fitScale;
-    var drawH = objH * fitScale;
+    var visW = fitW * fitScale;
+    var visH = fitH * fitScale;
     var cx = slot.x + slot.w / 2 + perOffX * ptPerMm;
     var cy = ph - (slot.y + slot.h / 2 + perOffY * ptPerMm);
 
-    var drawOpts = {
-      x: cx - drawW / 2,
-      y: cy - drawH / 2,
-      width: drawW,
-      height: drawH,
-      rotate: pdfLib.degrees(rot)
-    };
+    // pdf-lib drawImage/drawPage 的 rotate 绕 (x,y) 锚点（未旋转盒左下角）且正角度为逆时针，
+    // 与 CSS 旋转（绕中心、顺时针为正）不同。这里换算锚点使旋转后视觉盒以 (cx,cy) 为中心：
+    //   anchor = (cx,cy) - R_θ·(unrotW/2, unrotH/2)，方向取 degrees(-rot)
+    var unrotW = objW * fitScale;
+    var unrotH = objH * fitScale;
+    var drawOpts;
+    if (rot === 90) {
+      drawOpts = { x: cx - visW / 2, y: cy + visH / 2, width: unrotW, height: unrotH, rotate: pdfLib.degrees(-90) };
+    } else if (rot === 180) {
+      drawOpts = { x: cx + visW / 2, y: cy + visH / 2, width: unrotW, height: unrotH, rotate: pdfLib.degrees(180) };
+    } else if (rot === 270) {
+      drawOpts = { x: cx + visW / 2, y: cy - visH / 2, width: unrotW, height: unrotH, rotate: pdfLib.degrees(90) };
+    } else {
+      drawOpts = { x: cx - visW / 2, y: cy - visH / 2, width: unrotW, height: unrotH };
+    }
 
     if (embedResult.type === 'pdfPage') {
       page.drawPage(embedResult.embedded, drawOpts);
@@ -403,10 +416,10 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
 
     if (settings.border) {
       page.drawRectangle({
-        x: cx - drawW / 2,
-        y: cy - drawH / 2,
-        width: drawW,
-        height: drawH,
+        x: cx - visW / 2,
+        y: cy - visH / 2,
+        width: visW,
+        height: visH,
         borderColor: pdfLib.rgb(0, 0, 0),
         borderWidth: 0.2
       });
@@ -459,7 +472,8 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
           font: settings._fontBold,
           color: pdfLib.rgb(wmR, wmG, wmB),
           opacity: wmOpacity,
-          rotate: pdfLib.degrees(wmAngle)
+          // pdf-lib 正角度为逆时针，预览 CSS rotate 为顺时针，取负保持一致
+          rotate: pdfLib.degrees(-(wmAngle || 0))
         });
       }
     }

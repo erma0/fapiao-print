@@ -161,18 +161,25 @@ function renderPage(pageFiles, pi, total, s) {
       // Calculate contained image dimensions for border to follow invoice
       var imgObjW = f.ow || 1;
       var imgObjH = f.oh || 1;
+      // 旋转 90°/270°：与 PDF 导出一致，按旋转后的视觉宽高适配槽位（先旋转后适配）。
+      // wrapper 是旋转前的盒子，取视觉盒的转置，CSS 旋转后正好落在视觉盒上。
+      var isRot90 = (rot === 90 || rot === 270);
+      var fitW = isRot90 ? imgObjH : imgObjW;
+      var fitH = isRot90 ? imgObjW : imgObjH;
       var containedW, containedH;
       if (s.fitMode === 'original') {
         containedW = imgObjW;
         containedH = imgObjH;
       } else if (s.fitMode === 'fill') {
-        containedW = imgW;
-        containedH = imgH;
+        containedW = isRot90 ? imgH : imgW;
+        containedH = isRot90 ? imgW : imgH;
       } else {
-        // contain / custom: image fits in slot maintaining aspect ratio
-        var fitScale = Math.min(imgW / imgObjW, imgH / imgObjH);
-        containedW = imgObjW * fitScale;
-        containedH = imgObjH * fitScale;
+        // contain / custom: 旋转后视觉宽高 contain-fit 槽位，wrapper 转置
+        var fitScale = Math.min(imgW / fitW, imgH / fitH);
+        var visW = fitW * fitScale;
+        var visH = fitH * fitScale;
+        containedW = isRot90 ? visH : visW;
+        containedH = isRot90 ? visW : visH;
       }
       // Image wrapper: explicit dimensions, same transforms, optional border
       var wrapperStyle = 'width:' + containedW.toFixed(1) + 'px;height:' + containedH.toFixed(1) + 'px;';
@@ -400,18 +407,23 @@ function onSlotMouseMove(e) {
     var imgW = f.ow || 1;
     var imgH = f.oh || 1;
     var s = _slotDrag.cachedSettings;
+    // 旋转 90°/270° 时约束范围按旋转后的视觉尺寸计算（与 renderPage 一致）
+    var clampRot = getRotation(f, slot, s);
+    var clampRot90 = (clampRot === 90 || clampRot === 270);
+    var fitW = clampRot90 ? imgH : imgW;
+    var fitH = clampRot90 ? imgW : imgH;
     var displayW, displayH;
     if (s.fitMode === 'fill') {
-      displayW = slot.w * (f.slotScale || 1);
-      displayH = slot.h * (f.slotScale || 1);
+      displayW = (clampRot90 ? slot.h : slot.w) * (f.slotScale || 1);
+      displayH = (clampRot90 ? slot.w : slot.h) * (f.slotScale || 1);
     } else if (s.fitMode === 'original') {
-      displayW = imgW * (f.slotScale || 1);
-      displayH = imgH * (f.slotScale || 1);
+      displayW = fitW * (f.slotScale || 1);
+      displayH = fitH * (f.slotScale || 1);
     } else {
-      var fitScale = Math.min(slot.w / imgW, slot.h / imgH);
+      var fitScale = Math.min(slot.w / fitW, slot.h / fitH);
       var perScale = f.slotScale || 1;
-      displayW = imgW * fitScale * perScale;
-      displayH = imgH * fitScale * perScale;
+      displayW = fitW * fitScale * perScale;
+      displayH = fitH * fitScale * perScale;
       if (s.fitMode === 'custom' && s.customScale !== 1) {
         displayW *= s.customScale;
         displayH *= s.customScale;
