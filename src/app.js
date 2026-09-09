@@ -2952,16 +2952,20 @@ function setSlotAlignment(alignH, alignV) {
   var slot = layout.slots[S.selectedSlot];
   if (!slot) return;
 
-  // Use unrotated image dimensions — same as renderPage.
-  // renderPage computes wrapper box size from f.ow/f.oh (unrotated),
-  // then applies rotation as a CSS transform. Alignment must match.
+  // Use rotated visual dimensions — same as renderPage/PDF export (rotate-then-fit).
+  // renderPage computes the wrapper from rotated visual dims; offsets move the
+  // visual (post-rotation) box, so alignment gaps must use visual dims too.
   var imgObjW = f.ow || 1;
   var imgObjH = f.oh || 1;
+  var alignRot = getRotation(f, slot, settings);
+  var alignRot90 = (alignRot === 90 || alignRot === 270);
+  var fitW = alignRot90 ? imgObjH : imgObjW;
+  var fitH = alignRot90 ? imgObjW : imgObjH;
 
   var slotW_mm = slot.w / MM2PX;
   var slotH_mm = slot.h / MM2PX;
 
-  // Calculate contained wrapper dimensions in mm (mirrors renderPage)
+  // Calculate visual (post-rotation) wrapper dimensions in mm (mirrors renderPage)
   var containedW_mm, containedH_mm;
   if (settings.fitMode === 'original') {
     // original mode: image displays at native resolution; for alignment
@@ -2969,17 +2973,17 @@ function setSlotAlignment(alignH, alignV) {
     // If renderDpi is not set, fall back to PDF_PREVIEW_DPI (150).
     var rDpi = f.renderDpi || 150;
     var oPxPerMm = rDpi / 25.4;
-    containedW_mm = imgObjW / oPxPerMm;
-    containedH_mm = imgObjH / oPxPerMm;
+    containedW_mm = fitW / oPxPerMm;
+    containedH_mm = fitH / oPxPerMm;
   } else if (settings.fitMode === 'fill') {
     containedW_mm = slotW_mm;
     containedH_mm = slotH_mm;
   } else {
-    // contain / custom: aspect-ratio fit inside slot
-    // Both slot.w and imgObjW are in CSS coordinate space; ratio is correct.
-    var fitScale = Math.min(slot.w / imgObjW, slot.h / imgObjH);
-    containedW_mm = (imgObjW * fitScale) / MM2PX;
-    containedH_mm = (imgObjH * fitScale) / MM2PX;
+    // contain / custom: aspect-ratio fit of rotated visual dims inside slot
+    // Both slot.w and fitW are in CSS coordinate space; ratio is correct.
+    var fitScale = Math.min(slot.w / fitW, slot.h / fitH);
+    containedW_mm = (fitW * fitScale) / MM2PX;
+    containedH_mm = (fitH * fitScale) / MM2PX;
   }
 
   // Effective visual size = contained wrapper size × per-slot scale × custom scale.
