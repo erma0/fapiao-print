@@ -65,6 +65,9 @@ var S = {
   amtMode: 'tax',
   printedFilter: 'all',
   fileFilter: 'all',
+  typeFilter: 'all',
+  formatFilter: 'all',
+  filterCollapsed: true,
   fileView: 'list',
   ocrPrecision: 'standard',
   feat: {
@@ -1280,6 +1283,18 @@ var _listDragBound = false;    // 列表拖拽事件只绑定一次
 var _listDragSuppressClick = false; // 拖拽松手后吞掉浏览器派发的 click
 var _listDragHintShown = false; // 本次会话是否已提示过列表拖拽手势
 
+// 单色 stroke 图标（16 基准，currentColor 跟随按钮色）——JS 动态按钮用
+var ICONS = (function() {
+  var a = 'viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+  return {
+    search: '<svg ' + a + '><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/></svg>',
+    grid: '<svg ' + a + '><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+    list: '<svg ' + a + '><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><path d="M2 4h.01M2 8h.01M2 12h.01"/></svg>',
+    square: '<svg ' + a + '><rect x="2" y="2" width="12" height="12" rx="2"/></svg>',
+    checkSquare: '<svg ' + a + '><rect x="2" y="2" width="12" height="12" rx="2"/><path d="m5.2 8.2 2 2 3.6-4"/></svg>'
+  };
+})();
+
 function _onOcrTaskDone() {
   _ocrRunning--;
   var remaining = _ocrQueue.length + _ocrRunning;
@@ -1337,7 +1352,7 @@ function updateOcrAllBtn() {
     btn.disabled = true;
     btn.title = '识别中 ' + (_ocrBatchTotal > 0 ? done + '/' + _ocrBatchTotal : '剩余' + remaining);
   } else {
-    btn.textContent = '\uD83D\uDD0D';
+    btn.innerHTML = ICONS.search;
     btn.disabled = false;
     btn.title = '一键识别';
   }
@@ -1495,6 +1510,8 @@ function updateFileItem(fileObj) {
       ocrBtn.onclick = (function(i) { return function() { ocrFile(i); }; })(idx);
     }
   }
+  // 识别/提取完成后类型标记可能刚出现（如 _isTicket），重算该项筛选可见性
+  items[idx].style.display = isFileHidden(f) ? 'none' : '';
 }
 
 /**
@@ -1850,10 +1867,52 @@ function loadFileFast(file) {
 // =====================================================
 // File list management
 // =====================================================
+var TYPE_FILTER_LABELS = { vat: '发票', ticket: '车票', toll: '通行费', nontax: '财政' };
+var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片', xml: 'XML' };
+
+// 筛选区折叠：默认收起节省侧边栏垂直空间，摘要行仍实时反映激活的筛选
+function toggleFilterPanel() {
+  S.filterCollapsed = !S.filterCollapsed;
+  syncFilterPanel();
+  saveSettings();
+}
+
+function syncFilterPanel() {
+  var sec = document.getElementById('filterSection');
+  if (sec) sec.classList.toggle('open', !S.filterCollapsed);
+}
+
+function updateFilterSummary() {
+  var parts = [];
+  if (S.fileFilter === 'duplicates') parts.push('重复');
+  else if (S.printedFilter === 'unprinted') parts.push('未打印');
+  else if (S.printedFilter === 'printed') parts.push('已打印');
+  if (S.typeFilter !== 'all') parts.push(TYPE_FILTER_LABELS[S.typeFilter] || S.typeFilter);
+  if (S.formatFilter !== 'all') parts.push(FORMAT_FILTER_LABELS[S.formatFilter] || S.formatFilter);
+  var el = document.getElementById('filterSummary');
+  if (el) el.textContent = parts.join(' · ');
+  var clearBtn = document.getElementById('filterClearBtn');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !parts.length);
+}
+
+function clearAllFilters(e) {
+  e.stopPropagation();
+  S.fileFilter = 'all';
+  S.printedFilter = 'all';
+  S.typeFilter = 'all';
+  S.formatFilter = 'all';
+  syncFilterButtons();
+  syncTypeFilterButtons();
+  syncFormatFilterButtons();
+  updateFilterSummary();
+  renderFileList();
+}
+
 function setPrintedFilter(filter) {
   S.printedFilter = filter;
   S.fileFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
@@ -1861,13 +1920,93 @@ function setFileFilter(filter) {
   if (filter === 'duplicates') { selectDuplicateExtras(); return; }
   S.fileFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
 }
 
-// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮
+// 类型/格式筛选 = 分批打印工作流维度：切换即切换工作批次，
+// 清除不可见项的勾选保证打印集合 = 当前可见勾选集合，
+// 避免筛选车票打完后切到发票时残留勾选把车票再打一遍
+function clearInvisibleChecks() {
+  var cleared = 0;
+  S.files.forEach(function(f) {
+    if (f.checked && !isTypeMatch(f) || f.checked && !isFormatMatch(f)) { f.checked = false; cleared++; }
+  });
+  if (cleared) toast('已清除 ' + cleared + ' 张不可见发票的勾选');
+}
+
+function setTypeFilter(t) {
+  if (S.typeFilter === t) return;
+  S.typeFilter = t;
+  clearInvisibleChecks();
+  syncTypeFilterButtons();
+  updateFilterSummary();
+  renderFileList();
+  updatePrintBtn();
+  updateSummaryBtn();
+}
+
+function syncTypeFilterButtons() {
+  var active = S.typeFilter;
+  document.querySelectorAll('#typeFilterBar .pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.type === active);
+  });
+}
+
+function isTypeMatch(f) {
+  switch (S.typeFilter) {
+    case 'ticket': return !!f._isTicket;
+    case 'toll': return !!f._isToll;
+    case 'nontax': return !!f._isNonTax;
+    case 'vat': return !f._isTicket && !f._isToll && !f._isNonTax;
+    default: return true;
+  }
+}
+
+function setFormatFilter(t) {
+  if (S.formatFilter === t) return;
+  S.formatFilter = t;
+  clearInvisibleChecks();
+  syncFormatFilterButtons();
+  updateFilterSummary();
+  renderFileList();
+  updatePrintBtn();
+  updateSummaryBtn();
+}
+
+function syncFormatFilterButtons() {
+  var active = S.formatFilter;
+  document.querySelectorAll('#formatFilterBar .pf-btn').forEach(function(b) {
+    b.classList.toggle('pf-active', b.dataset.format === active);
+  });
+}
+
+// 格式判定基于 fileObj.type（扩展名）：pdf/ofd/xml 为专属值，
+// 其余非空扩展名（jpeg/png/webp/heic/bmp...）均视为图片
+function isFormatMatch(f) {
+  switch (S.formatFilter) {
+    case 'pdf': return f.type === 'pdf';
+    case 'ofd': return f.type === 'ofd';
+    case 'xml': return f.type === 'xml' || !!f._xmlInvoice;
+    case 'image': return !!f.type && f.type !== 'pdf' && f.type !== 'ofd' && f.type !== 'xml';
+    default: return true;
+  }
+}
+
+// 文件在列表中是否隐藏（类型/格式/状态三维筛选合并判定）：
+// renderFileList 全量渲染与 updateFileItem 单项更新共用，识别完成改写类型标记后可见性即时重算
+function isFileHidden(f) {
+  if (!isTypeMatch(f) || !isFormatMatch(f)) return true;
+  if (S.fileFilter === 'duplicates') return !f._dup;
+  if (S.printedFilter === 'printed') return !f._printed;
+  if (S.printedFilter === 'unprinted') return f._printed;
+  return false;
+}
+
+// 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮（仅状态行）
 function syncFilterButtons() {
   var active = S.fileFilter === 'duplicates' ? 'duplicates' : S.printedFilter;
-  document.querySelectorAll('.pf-btn').forEach(function(b) {
+  document.querySelectorAll('#printFilterBar .pf-btn').forEach(function(b) {
     b.classList.toggle('pf-active', b.dataset.filter === active);
   });
 }
@@ -1902,6 +2041,7 @@ function selectDuplicateExtras() {
   S.fileFilter = 'duplicates';
   S.printedFilter = 'all';
   syncFilterButtons();
+  updateFilterSummary();
   renderFileList();
   if (selected) {
     toast('已覆盖原有勾选：选中 ' + selected + ' 个重复项（每组保留第一份），点击删除按钮即可去重' +
@@ -1914,6 +2054,8 @@ function selectDuplicateExtras() {
 
 function getFilteredFiles() {
   var files = S.files;
+  if (S.typeFilter !== 'all') files = files.filter(isTypeMatch);
+  if (S.formatFilter !== 'all') files = files.filter(isFormatMatch);
   if (S.fileFilter === 'duplicates') return files.filter(function(f) { return f._dup; });
   if (S.printedFilter === 'all') return files;
   return files.filter(function(f) {
@@ -1970,6 +2112,7 @@ function removeDuplicates(silent) {
     S.fileFilter = 'all';
     S.printedFilter = 'all';
     syncFilterButtons();
+    updateFilterSummary();
     renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
     toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
   } else if (removed) {
@@ -2004,8 +2147,7 @@ function renderFileList() {
     if (currentNewIds[f.id]) cls += ' entering';
     if (f._loading) cls += ' loading-item';
     if (i === _activeFileIdx) cls += ' active-item';
-    var hidden = (S.fileFilter === 'duplicates' && !f._dup) ||
-      (S.fileFilter !== 'duplicates' && ((S.printedFilter === 'printed' && !f._printed) || (S.printedFilter === 'unprinted' && f._printed)));
+    var hidden = isFileHidden(f);
     var hideStyle = hidden ? ' style="display:none"' : '';
     if (grid) {
       if (f._placeholder) {
@@ -2106,7 +2248,7 @@ function syncFileViewBtn() {
   var btn = document.getElementById('fileViewBtn');
   if (!btn) return;
   var grid = S.fileView === 'grid';
-  btn.textContent = grid ? '\u2630' : '\u25A6';
+  btn.innerHTML = grid ? ICONS.list : ICONS.grid;
   btn.title = grid ? '切换列表视图' : '切换缩略图视图';
 }
 function toggleCopyMenu() {
@@ -2152,20 +2294,24 @@ function setAllCopies(e, n) {
   updatePreview();
 }
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
-function selectAll() { S.files.forEach(function(f) { if (!f._placeholder) f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deselectAll() { S.files.forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+// 当前筛选条件下可勾选的文件（全选/取消全选只作用于可见项，issue #27）
+function getSelectableInView() {
+  return getFilteredFiles().filter(function(f) { return !f._placeholder; });
+}
+function selectAll() { getSelectableInView().forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function deselectAll() { getSelectableInView().forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
 function toggleSelectAll() {
-  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
   if (all) deselectAll(); else selectAll();
 }
 function syncSelectAllBtn() {
   var btn = document.getElementById('selectAllBtn');
   if (!btn) return;
-  var selectable = S.files.filter(function(f) { return !f._placeholder; });
+  var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
-  btn.textContent = all ? '\u25FB' : '\u2611';
-  btn.title = all ? '取消全选' : '全选';
+  btn.innerHTML = all ? ICONS.checkSquare : ICONS.square;
+  btn.title = all ? '取消全选（仅当前筛选可见项）' : '全选（仅当前筛选可见项）';
 }
 function syncDeleteBtn() {
   var btn = document.getElementById('deleteBtn');
@@ -2215,19 +2361,6 @@ function ocrAll() {
   toastLoading('识别中，共 ' + targets.length + ' 张...');
   targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
 }
-function clearAll() {
-  if (!S.files.length) return;
-  if (!confirm('确认清除所有发票？')) return;
-  S.files = [];
-  _activeFileIdx = -1;
-  _printedMap = {};
-  saveSettings();
-  renderFileList();
-  updatePreview();
-  updatePrintBtn();
-  updateSummaryBtn();
-}
-
 // Click file item → navigate preview to the page containing this invoice
 function clickFileItem(idx, event) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
@@ -2343,7 +2476,7 @@ function scrollToListItem(idx) {
 
 // 列表拖拽排序仅在无筛选时启用：筛选态显示序 ≠ 底层序，拖拽会乱序
 function canListDrag() {
-  return S.fileFilter === 'all' && S.printedFilter === 'all';
+  return S.fileFilter === 'all' && S.printedFilter === 'all' && S.typeFilter === 'all' && S.formatFilter === 'all';
 }
 
 function initListDrag() {
@@ -2819,16 +2952,20 @@ function setSlotAlignment(alignH, alignV) {
   var slot = layout.slots[S.selectedSlot];
   if (!slot) return;
 
-  // Use unrotated image dimensions — same as renderPage.
-  // renderPage computes wrapper box size from f.ow/f.oh (unrotated),
-  // then applies rotation as a CSS transform. Alignment must match.
+  // Use rotated visual dimensions — same as renderPage/PDF export (rotate-then-fit).
+  // renderPage computes the wrapper from rotated visual dims; offsets move the
+  // visual (post-rotation) box, so alignment gaps must use visual dims too.
   var imgObjW = f.ow || 1;
   var imgObjH = f.oh || 1;
+  var alignRot = getRotation(f, slot, settings);
+  var alignRot90 = (alignRot === 90 || alignRot === 270);
+  var fitW = alignRot90 ? imgObjH : imgObjW;
+  var fitH = alignRot90 ? imgObjW : imgObjH;
 
   var slotW_mm = slot.w / MM2PX;
   var slotH_mm = slot.h / MM2PX;
 
-  // Calculate contained wrapper dimensions in mm (mirrors renderPage)
+  // Calculate visual (post-rotation) wrapper dimensions in mm (mirrors renderPage)
   var containedW_mm, containedH_mm;
   if (settings.fitMode === 'original') {
     // original mode: image displays at native resolution; for alignment
@@ -2836,17 +2973,17 @@ function setSlotAlignment(alignH, alignV) {
     // If renderDpi is not set, fall back to PDF_PREVIEW_DPI (150).
     var rDpi = f.renderDpi || 150;
     var oPxPerMm = rDpi / 25.4;
-    containedW_mm = imgObjW / oPxPerMm;
-    containedH_mm = imgObjH / oPxPerMm;
+    containedW_mm = fitW / oPxPerMm;
+    containedH_mm = fitH / oPxPerMm;
   } else if (settings.fitMode === 'fill') {
     containedW_mm = slotW_mm;
     containedH_mm = slotH_mm;
   } else {
-    // contain / custom: aspect-ratio fit inside slot
-    // Both slot.w and imgObjW are in CSS coordinate space; ratio is correct.
-    var fitScale = Math.min(slot.w / imgObjW, slot.h / imgObjH);
-    containedW_mm = (imgObjW * fitScale) / MM2PX;
-    containedH_mm = (imgObjH * fitScale) / MM2PX;
+    // contain / custom: aspect-ratio fit of rotated visual dims inside slot
+    // Both slot.w and fitW are in CSS coordinate space; ratio is correct.
+    var fitScale = Math.min(slot.w / fitW, slot.h / fitH);
+    containedW_mm = (fitW * fitScale) / MM2PX;
+    containedH_mm = (fitH * fitScale) / MM2PX;
   }
 
   // Effective visual size = contained wrapper size × per-slot scale × custom scale.
@@ -3325,6 +3462,8 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest('.copy-ctrl')) {
     var cm = document.getElementById('copyMenu');
     if (cm) cm.classList.add('hidden');
+    var sm = document.getElementById('sortMenu');
+    if (sm) sm.classList.add('hidden');
   }
   if (!e.target.closest('.zoom-ctrl')) {
     var zm = document.getElementById('zoomMenu');
@@ -3366,6 +3505,7 @@ function saveSettings() {
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
+  o.filterCollapsed = S.filterCollapsed;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3443,7 +3583,10 @@ function loadSettings() {
   if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   if (o.fileView === 'grid') S.fileView = 'grid';
+  if (o.filterCollapsed === false) S.filterCollapsed = false;
   syncFileViewBtn();
+  syncFilterPanel();
+  updateFilterSummary();
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
@@ -3721,7 +3864,12 @@ function resetSettings() {
   S._notesMap = {};
   S.printedFilter = 'all';
   S.fileFilter = 'all';
+  S.typeFilter = 'all';
+  S.formatFilter = 'all';
   syncFilterButtons();
+  syncTypeFilterButtons();
+  syncFormatFilterButtons();
+  updateFilterSummary();
   renderFileList();
   document.getElementById('saveDir').value = '';
   document.getElementById('amtMode').value = 'tax';
@@ -4088,7 +4236,19 @@ renderQuickLayoutList();
 
 var _UPDATE_CACHE_KEY = 'ticketchan-update-cache';
 var _UPDATE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
 var _updateChecking = false;
+var _lastUpdateInfo = null;
+
+function getIgnoredUpdateVersion() {
+  try { return localStorage.getItem(_UPDATE_IGNORE_KEY) || ''; } catch(e) { return ''; }
+}
+
+// 静默检查弹窗条件：有更新且该版本未被用户忽略
+function shouldAutoShowUpdate(info) {
+  if (!info || !info.has_update) return false;
+  return info.latest_version !== getIgnoredUpdateVersion();
+}
 
 /**
  * Check for updates via GitHub Releases API.
@@ -4101,15 +4261,17 @@ function checkForUpdates(silent) {
   if (_updateChecking) return;
   _updateChecking = true;
 
-  // Silent auto-check: respect cache TTL to avoid rate limits
+  // Silent auto-check: respect cache TTL to avoid rate limits.
+  // 缓存必须属于当前版本（data.ver）：升级后旧缓存的 has_update 是对旧版本算的，
+  // 沿用会导致已升级用户被误弹"发现新版本"（issue #30）
   if (silent) {
     try {
       var cached = localStorage.getItem(_UPDATE_CACHE_KEY);
       if (cached) {
         var data = JSON.parse(cached);
-        if (Date.now() - data.ts < _UPDATE_CACHE_TTL) {
+        if (data.ver === APP_VERSION && Date.now() - data.ts < _UPDATE_CACHE_TTL) {
           _updateChecking = false;
-          if (data.info && data.info.has_update) {
+          if (shouldAutoShowUpdate(data.info)) {
             showUpdateModal(data.info);
           }
           return;
@@ -4124,11 +4286,14 @@ function checkForUpdates(silent) {
     _updateChecking = false;
     // Cache result for silent auto-check
     try {
-      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), info: info }));
+      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: APP_VERSION, info: info }));
     } catch(e) {}
 
     if (info.has_update) {
-      showUpdateModal(info);
+      // 手动检查始终弹窗（用户主动行为）；静默检查过滤被忽略的版本
+      if (!silent || shouldAutoShowUpdate(info)) {
+        showUpdateModal(info);
+      }
     } else if (!silent) {
       toast('已是最新版本 v' + info.current_version, 2500);
     }
@@ -4140,11 +4305,25 @@ function checkForUpdates(silent) {
 }
 
 /**
+ * 忽略当前提示的新版本：静默检查不再弹该版本，直到更新的版本发布。
+ * 手动点击"检查更新"仍会正常提示。
+ */
+function ignoreUpdateVersion() {
+  var v = (_lastUpdateInfo && _lastUpdateInfo.latest_version) || '';
+  if (v) {
+    try { localStorage.setItem(_UPDATE_IGNORE_KEY, v); } catch(e) {}
+    toast('已忽略 v' + v + '，发布更新版本后会再次提醒', 3000);
+  }
+  closeUpdateModal();
+}
+
+/**
  * Render the update modal with release info.
  */
 function showUpdateModal(info) {
   var modal = document.getElementById('updateModal');
   if (!modal) return;
+  _lastUpdateInfo = info;
 
   document.getElementById('updateCurrentVersion').textContent = 'v' + info.current_version;
   document.getElementById('updateLatestVersion').textContent = 'v' + info.latest_version;

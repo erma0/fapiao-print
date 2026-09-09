@@ -129,13 +129,38 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .file-count { font-size: 12px; color: var(--text-muted); }
 .file-actions { display: flex; gap: 4px; }
-/* === 打印过滤条 === */
-.print-filter-bar {
-  display: flex; gap: 4px; padding: 6px 8px;
-  border-bottom: 1px solid var(--border); background: var(--surface2);
+/* === 筛选区（可折叠） === */
+.filter-section { background: var(--surface2); border-bottom: 1px solid var(--border); }
+.filter-head {
+  display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 27px;
+  cursor: pointer; user-select: none;
 }
+.filter-head:hover .filter-head-label { color: var(--text-primary); }
+.filter-head-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; transition: color 0.15s; }
+.filter-summary {
+  flex: 1; font-size: 11px; color: var(--accent); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.filter-clear {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 4px;
+  background: transparent; color: var(--text-muted); cursor: pointer; flex-shrink: 0; transition: all 0.15s;
+}
+.filter-clear:hover { background: var(--danger-light); color: var(--danger); }
+.filter-clear.hidden { display: none; }
+.filter-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform 0.2s; }
+.filter-section.open .filter-chevron { transform: rotate(90deg); }
+.filter-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.25s ease; }
+.filter-body > .filter-body-inner { overflow: hidden; }
+.filter-section.open .filter-body { grid-template-rows: 1fr; }
+/* === 筛选按钮行（紧凑） === */
+.print-filter-bar {
+  display: flex; gap: 4px; padding: 3px 8px 5px;
+}
+/* 类型/格式行与状态行组成连续筛选区，中间行去分隔线 */
+.type-filter-bar { padding: 3px 8px; }
 .pf-btn {
-  flex: 1; padding: 3px 0; font-size: 11px; border: 1px solid var(--border);
+  flex: 1; padding: 2px 0; font-size: 11px; border: 1px solid var(--border);
   border-radius: 4px; background: transparent; color: var(--text-secondary);
   cursor: pointer; transition: all 0.15s;
 }
@@ -288,11 +313,11 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .ib {
   width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
   border-radius: 5px; display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: var(--text-muted); transition: all 0.15s;
+  font-size: 13px; line-height: 1; color: var(--text-muted); transition: all 0.15s;
 }
+.ib svg { display: block; flex-shrink: 0; }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
-.ib.add:hover { background: var(--success-light, #e6f7ef); color: var(--success); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* 拖入提示浮层 — 纯视觉（pointer-events:none），桌面版由 Rust Enter/Leave 驱动，浏览器版由 dragenter 计数驱动 */
