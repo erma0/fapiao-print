@@ -4236,7 +4236,19 @@ renderQuickLayoutList();
 
 var _UPDATE_CACHE_KEY = 'ticketchan-update-cache';
 var _UPDATE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
 var _updateChecking = false;
+var _lastUpdateInfo = null;
+
+function getIgnoredUpdateVersion() {
+  try { return localStorage.getItem(_UPDATE_IGNORE_KEY) || ''; } catch(e) { return ''; }
+}
+
+// 静默检查弹窗条件：有更新且该版本未被用户忽略
+function shouldAutoShowUpdate(info) {
+  if (!info || !info.has_update) return false;
+  return info.latest_version !== getIgnoredUpdateVersion();
+}
 
 /**
  * Check for updates via GitHub Releases API.
@@ -4249,15 +4261,17 @@ function checkForUpdates(silent) {
   if (_updateChecking) return;
   _updateChecking = true;
 
-  // Silent auto-check: respect cache TTL to avoid rate limits
+  // Silent auto-check: respect cache TTL to avoid rate limits.
+  // 缓存必须属于当前版本（data.ver）：升级后旧缓存的 has_update 是对旧版本算的，
+  // 沿用会导致已升级用户被误弹"发现新版本"（issue #30）
   if (silent) {
     try {
       var cached = localStorage.getItem(_UPDATE_CACHE_KEY);
       if (cached) {
         var data = JSON.parse(cached);
-        if (Date.now() - data.ts < _UPDATE_CACHE_TTL) {
+        if (data.ver === APP_VERSION && Date.now() - data.ts < _UPDATE_CACHE_TTL) {
           _updateChecking = false;
-          if (data.info && data.info.has_update) {
+          if (shouldAutoShowUpdate(data.info)) {
             showUpdateModal(data.info);
           }
           return;
@@ -4272,11 +4286,14 @@ function checkForUpdates(silent) {
     _updateChecking = false;
     // Cache result for silent auto-check
     try {
-      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), info: info }));
+      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: APP_VERSION, info: info }));
     } catch(e) {}
 
     if (info.has_update) {
-      showUpdateModal(info);
+      // 手动检查始终弹窗（用户主动行为）；静默检查过滤被忽略的版本
+      if (!silent || shouldAutoShowUpdate(info)) {
+        showUpdateModal(info);
+      }
     } else if (!silent) {
       toast('已是最新版本 v' + info.current_version, 2500);
     }
@@ -4288,11 +4305,25 @@ function checkForUpdates(silent) {
 }
 
 /**
+ * 忽略当前提示的新版本：静默检查不再弹该版本，直到更新的版本发布。
+ * 手动点击"检查更新"仍会正常提示。
+ */
+function ignoreUpdateVersion() {
+  var v = (_lastUpdateInfo && _lastUpdateInfo.latest_version) || '';
+  if (v) {
+    try { localStorage.setItem(_UPDATE_IGNORE_KEY, v); } catch(e) {}
+    toast('已忽略 v' + v + '，发布更新版本后会再次提醒', 3000);
+  }
+  closeUpdateModal();
+}
+
+/**
  * Render the update modal with release info.
  */
 function showUpdateModal(info) {
   var modal = document.getElementById('updateModal');
   if (!modal) return;
+  _lastUpdateInfo = info;
 
   document.getElementById('updateCurrentVersion').textContent = 'v' + info.current_version;
   document.getElementById('updateLatestVersion').textContent = 'v' + info.latest_version;
