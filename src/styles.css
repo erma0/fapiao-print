@@ -318,7 +318,6 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .ib svg { display: block; flex-shrink: 0; }
 .ib:hover { background: var(--border); color: var(--text-primary); }
 .ib.danger:hover { background: var(--danger-light); color: var(--danger); }
-.ib.add:hover { background: var(--success-light, #e6f7ef); color: var(--success); }
 .ib:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* 拖入提示浮层 — 纯视觉（pointer-events:none），桌面版由 Rust Enter/Leave 驱动，浏览器版由 dragenter 计数驱动 */

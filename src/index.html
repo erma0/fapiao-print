@@ -30,7 +30,6 @@
         <div class="file-header">
           <div class="file-count" id="fileCount">0 张，已选 0</div>
           <div class="file-actions">
-            <button class="ib add" onclick="triggerUpload()" title="添加发票文件（PDF/OFD/XML/图片）"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg></button>
             <div class="copy-ctrl">
               <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.5A1.5 1.5 0 0 1 4.5 2h7"/></svg></button>
               <div class="copy-menu hidden" id="copyMenu">
@@ -366,8 +365,6 @@
       </div>
       <div style="flex:1"></div>
       <div class="toolbar-group">
-        <button class="btn btn-sm btn-icon" onclick="clearAll()" title="清空所有发票">🗑</button>
-        <button class="btn btn-sm btn-icon" onclick="switchTab('settings',document.querySelectorAll('.sidebar-tab')[1])" title="排版设置">⚙</button>
         <button class="btn btn-sm" onclick="savePdf()" title="保存为PDF">📥 PDF</button>
         <button class="btn btn-sm btn-success" id="printBtn" onclick="doPrint()" disabled title="开始打印">🖨 打印</button>
       </div>

@@ -2361,19 +2361,6 @@ function ocrAll() {
   toastLoading('识别中，共 ' + targets.length + ' 张...');
   targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
 }
-function clearAll() {
-  if (!S.files.length) return;
-  if (!confirm('确认清除所有发票？')) return;
-  S.files = [];
-  _activeFileIdx = -1;
-  _printedMap = {};
-  saveSettings();
-  renderFileList();
-  updatePreview();
-  updatePrintBtn();
-  updateSummaryBtn();
-}
-
 // Click file item → navigate preview to the page containing this invoice
 function clickFileItem(idx, event) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
