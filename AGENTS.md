@@ -695,6 +695,8 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 
 - **Rust lopdf (build_nup_content_stream)**：图片走像素烘焙（image_to_lopdf_xobject）+ adjustment.rotation=0；PDF 页面走 cm 矩阵（SlotAdjustment.rotation 保留），两路径语义等价
 
+- **printpdf 回退管道 (build_page_ops)**：rotate_op（PDF 层 180° 旋转）仅限 JpegPassthrough（像素未烘焙）；Decoded 路径已在 get_cached_xobj 像素级烘焙，再叠加会双重旋转抵消（等于没转，#29 复核时修复）
+
 - **/Rotate 属性烘焙 (extract_page_as_form_xobject)**：PDF spec 规定显示时顺时针旋转 N°，正确矩阵 90=`[0 -1 1 0 0 w]`、270=`[0 1 -1 0 h 0]`（旧代码 90/270 方向与平移均错，内容会落在 BBox 外被裁掉；180 一直是对的）
 
 - **web 分支 (pdf-lib)**：`drawImage/drawPage` 的 `rotate` 绕 **(x,y) 锚点**（未旋转盒左下角）而非中心、正角度为逆时针——须传 `degrees(-rot)` 并换算锚点 `(cx,cy) - R·(w/2,h/2)`，fit 需按旋转后视觉宽高计算

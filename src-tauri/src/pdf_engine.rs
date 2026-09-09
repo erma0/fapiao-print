@@ -4332,10 +4332,16 @@ fn build_page_ops(
         let offset_y_pt = offset_y_mm * MM_TO_PT;
 
         // For JPEG passthrough with 180° rotation, use PDF transform matrix
-        // instead of pixel-level rotation (which would require decode)
+        // instead of pixel-level rotation (which would require decode).
+        // 仅限 JpegPassthrough（像素未烘焙旋转）；Decoded 路径已在
+        // get_cached_xobj 像素级烘焙，此处再转一次会双重旋转抵消（等于没转）
         let rotate_op = {
             let rot = ((rotation % 360) + 360) % 360;
-            if rot == 180 {
+            let is_unbaked_jpeg = matches!(
+                sources.get(file_idx),
+                Some(Some(ImageSource::JpegPassthrough { .. }))
+            );
+            if rot == 180 && is_unbaked_jpeg {
                 // Rotate 180° around the center of the drawn image
                 Some(printpdf::XObjectRotation {
                     angle_ccw_degrees: 180.0,
