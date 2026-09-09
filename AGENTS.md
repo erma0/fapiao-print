@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.5.1（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json）
+- **版本**: v2.5.2（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
