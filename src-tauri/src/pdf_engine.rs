@@ -4904,23 +4904,25 @@ fn extract_page_as_form_xobject(
     prefix.extend_from_slice(b"q\n");
 
     // Apply rotation transform (before CropBox shift, so rotation is in page coords)
+    // /Rotate 语义（PDF spec）：页面显示时顺时针旋转 N°。烘焙矩阵将原始内容
+    // 映射到旋转后的显示坐标系（BBox = effective 尺寸）：
+    //   90:  (x,y) → (y, page_w - x)          顺时针，角点 BL→TL→TR→BR→BL
+    //   180: (x,y) → (page_w - x, page_h - y)
+    //   270: (x,y) → (page_h - y, x)          逆时针
     match rot {
         90 => {
-            // Rotate 90° CW: (x,y) → (y, -x) then translate to fit
             prefix.extend_from_slice(
-                format!("0 1 -1 0 {:.4} 0 cm\n", page_w_pt).as_bytes()
+                format!("0 -1 1 0 0 {:.4} cm\n", page_w_pt).as_bytes()
             );
         }
         180 => {
-            // Rotate 180°: (x,y) → (-x, -y) then translate to fit
             prefix.extend_from_slice(
                 format!("-1 0 0 -1 {:.4} {:.4} cm\n", page_w_pt, page_h_pt).as_bytes()
             );
         }
         270 => {
-            // Rotate 270° CW (= 90° CCW): (x,y) → (-y, x) then translate to fit
             prefix.extend_from_slice(
-                format!("0 -1 1 0 0 {:.4} cm\n", page_h_pt).as_bytes()
+                format!("0 1 -1 0 {:.4} 0 cm\n", page_h_pt).as_bytes()
             );
         }
         _ => {} // 0°: no rotation needed
@@ -5301,11 +5303,13 @@ fn build_nup_content_stream(
         // For Image XObjects (OFD/images): coordinate space is (0,0)-(1,1).
         //   sx = draw_w, sy = draw_h
         //
-        // Rotation matrices derived from the desired mapping:
+        // 旋转方向约定：与前端预览 CSS rotate(N deg) 一致（正值=顺时针）。
+        // PDF 坐标系 y 向上，顺时针矩阵将内容 +x 轴映到页面 -y（向下）。
+        // 矩阵推导（角点映射，盒内四角落在 draw box 四角）：
         //   rot=0:   (x,y) → (sx*x+ox, sy*y+oy)
-        //   rot=90:  (x,y) → (sx*(src_h-y)+ox, sy*x+oy)
+        //   rot=90:  (x,y) → (sx*y+ox, sy*(src_w-x)+oy)        顺时针
         //   rot=180: (x,y) → (sx*(src_w-x)+ox, sy*(src_h-y)+oy)
-        //   rot=270: (x,y) → (sx*y+ox, sy*(src_w-x)+oy)
+        //   rot=270: (x,y) → (sx*(src_h-y)+ox, sy*x+oy)        逆时针
         let (sx, sy) = if adj.is_image {
             // Image XObject: unit square → direct pixel dimensions
             (draw_w, draw_h)
@@ -5327,11 +5331,11 @@ fn build_nup_content_stream(
                 ]
             }
             90 => {
-                // [0 sy -sx 0 offset_x+draw_w offset_y]
+                // 顺时针 90°: [0 -sy sx 0 offset_x offset_y+draw_h]
                 vec![
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(sy),
-                    lopdf::Object::Real(-sx), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(offset_x + draw_w), lopdf::Object::Real(offset_y),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(-sy),
+                    lopdf::Object::Real(sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(offset_x), lopdf::Object::Real(offset_y + draw_h),
                 ]
             }
             180 => {
@@ -5343,11 +5347,11 @@ fn build_nup_content_stream(
                 ]
             }
             270 => {
-                // [0 -sy sx 0 offset_x offset_y+draw_h]
+                // 逆时针 90°（=CSS 270 顺时针）: [0 sy -sx 0 offset_x+draw_w offset_y]
                 vec![
-                    lopdf::Object::Real(0.0), lopdf::Object::Real(-sy),
-                    lopdf::Object::Real(sx), lopdf::Object::Real(0.0),
-                    lopdf::Object::Real(offset_x), lopdf::Object::Real(offset_y + draw_h),
+                    lopdf::Object::Real(0.0), lopdf::Object::Real(sy),
+                    lopdf::Object::Real(-sx), lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(offset_x + draw_w), lopdf::Object::Real(offset_y),
                 ]
             }
             _ => {

@@ -685,6 +685,22 @@ PDFium 打印失败时自动 fallback 到 SumatraPDF，提升容错性。
 
 - `loadFileFromDataUrlFast()` 中 PDF 渲染调用必须传递 `useJpeg: true`, `dpi: PDF_PREVIEW_DPI`
 
+### 旋转方向与适配语义 (issue #29)
+
+全链路统一约定：**正值 = 顺时针**（与 CSS `rotate(N deg)` 一致），**先旋转后适配**（旋转后的视觉宽高 contain-fit 槽位）。
+
+- **PDF 坐标系 y 向上**：`cm` 矩阵 `[0 sy -sx 0 ...]` 是逆时针、`[0 -sy sx 0 ...]` 是顺时针——「CCW in PDF = CW visually」是错误推断，勿再犯；图片像素路径 `image crate rotate90()` 恰好是顺时针，与 CSS 天然一致
+
+- **预览 (layout.js renderPage)**：90°/270° 时 wrapper 按旋转后视觉宽高的**转置**取尺寸，CSS 旋转落位后即视觉盒；同步点共三处——renderPage、拖拽偏移约束 (onSlotMouseMove)、setSlotAlignment（九宫格对齐），改动必须三处同步
+
+- **Rust lopdf (build_nup_content_stream)**：图片走像素烘焙（image_to_lopdf_xobject）+ adjustment.rotation=0；PDF 页面走 cm 矩阵（SlotAdjustment.rotation 保留），两路径语义等价
+
+- **/Rotate 属性烘焙 (extract_page_as_form_xobject)**：PDF spec 规定显示时顺时针旋转 N°，正确矩阵 90=`[0 -1 1 0 0 w]`、270=`[0 1 -1 0 h 0]`（旧代码 90/270 方向与平移均错，内容会落在 BBox 外被裁掉；180 一直是对的）
+
+- **web 分支 (pdf-lib)**：`drawImage/drawPage` 的 `rotate` 绕 **(x,y) 锚点**（未旋转盒左下角）而非中心、正角度为逆时针——须传 `degrees(-rot)` 并换算锚点 `(cx,cy) - R·(w/2,h/2)`，fit 需按旋转后视觉宽高计算
+
+- **验证方法**：红色象限测试源（图片 TL 红 / PDF 页面 TL 红）+ WinRT `render_pdf_pages` 渲染输出找红色质心，断言落点象限即方向是否正确
+
 ### 批量文字提取
 
 - 多 PDF 文件场景下必须按 `pdfPath` 分组调用 `extract_pdf_texts`，不能用跨 PDF 的 pageIdx 请求
