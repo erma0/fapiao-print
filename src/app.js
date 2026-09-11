@@ -4172,6 +4172,7 @@ renderQuickLayoutList();
 // =====================================================
 (function() {
   function showApp() {
+    syncAutoUpdateCheckUI();
     if (isTauri && invoke) {
       // Check OCR availability at startup
       invoke('check_ocr_available').then(function(available) {
@@ -4240,6 +4241,7 @@ renderQuickLayoutList();
 var _UPDATE_CACHE_KEY = 'ticketchan-update-cache';
 var _UPDATE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
+var _UPDATE_IGNORE_ALL_KEY = 'ticketchan-update-ignore-all';
 var _updateChecking = false;
 var _lastUpdateInfo = null;
 
@@ -4247,9 +4249,15 @@ function getIgnoredUpdateVersion() {
   try { return localStorage.getItem(_UPDATE_IGNORE_KEY) || ''; } catch(e) { return ''; }
 }
 
-// 静默检查弹窗条件：有更新且该版本未被用户忽略
+// 忽略所有更新：静默自动检查不再弹窗，手动「检查更新」不受影响
+function isIgnoreAllUpdates() {
+  try { return localStorage.getItem(_UPDATE_IGNORE_ALL_KEY) === '1'; } catch(e) { return false; }
+}
+
+// 静默检查弹窗条件：有更新、未被忽略所有、该版本未被单独忽略
 function shouldAutoShowUpdate(info) {
   if (!info || !info.has_update) return false;
+  if (isIgnoreAllUpdates()) return false;
   return info.latest_version !== getIgnoredUpdateVersion();
 }
 
@@ -4318,6 +4326,30 @@ function ignoreUpdateVersion() {
     toast('已忽略 v' + v + '，发布更新版本后会再次提醒', 3000);
   }
   closeUpdateModal();
+}
+
+/**
+ * 忽略所有更新提醒（弹窗按钮）：启动时不再自动弹窗。
+ * 设置「关于」中可重新开启；手动检查更新不受影响。
+ */
+function ignoreAllUpdates() {
+  try { localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, '1'); } catch(e) {}
+  syncAutoUpdateCheckUI();
+  closeUpdateModal();
+  toast('已忽略所有更新提醒，可在「设置 → 关于」重新开启', 3500);
+}
+
+// 「自动检查更新」开关（设置→关于）：开 = 正常自动弹窗，关 = 忽略所有更新
+function toggleAutoUpdateCheck(btn) {
+  var enable = !btn.classList.contains('on');
+  try { localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, enable ? '' : '1'); } catch(e) {}
+  btn.classList.toggle('on', enable);
+  toast(enable ? '已开启自动检查更新' : '已忽略所有更新提醒，可手动点击「检查更新」', 3000);
+}
+
+function syncAutoUpdateCheckUI() {
+  var btn = document.getElementById('toggleAutoUpdate');
+  if (btn) btn.classList.toggle('on', !isIgnoreAllUpdates());
 }
 
 /**
