@@ -2331,6 +2331,33 @@ function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
 function ctxOcr() { if (_ctxIdx >= 0) ocrFile(_ctxIdx); closeCtxMenu(); }
 function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
 
+// 复制识别到的发票信息（非空字段逐行拼接）
+function ctxCopyInfo() {
+  if (_ctxIdx < 0) return;
+  var f = S.files[_ctxIdx];
+  closeCtxMenu();
+  if (!f) return;
+  var lines = [];
+  function add(label, val) {
+    if (val !== undefined && val !== null && String(val).trim() !== '') lines.push(label + '：' + String(val).trim());
+  }
+  add('发票类型', f.invoiceType);
+  add('发票号码', f.invoiceNo);
+  add('开票日期', f.invoiceDate);
+  add('购买方', f.buyerName);
+  add('销售方', f.sellerName);
+  add('金额（含税）', f.amountTax > 0 ? '¥' + f.amountTax.toFixed(2) : '');
+  add('金额（不含税）', f.amountNoTax > 0 ? '¥' + f.amountNoTax.toFixed(2) : '');
+  add('税额', f.taxAmount > 0 ? '¥' + f.taxAmount.toFixed(2) : '');
+  if (!lines.length) { toast('该发票暂无识别信息，请先 OCR 或双击填写'); return; }
+  var text = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() { toast('已复制发票信息', 2000); }).catch(function() { fallbackCopy(text, null); });
+  } else {
+    fallbackCopy(text, null);
+  }
+}
+
 // 右键分发：列表项弹自定义菜单；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽 webview 默认菜单
 document.addEventListener('contextmenu', function(e) {
   var item = e.target.closest('.file-item, .file-card');
@@ -2805,7 +2832,7 @@ function fallbackCopy(text, btn) {
   var ta = document.createElement('textarea');
   ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
   document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); }
+  try { document.execCommand('copy'); if (btn) { btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); } else { toast('已复制', 2000); } }
   catch(e) { toast('复制失败'); }
   document.body.removeChild(ta);
 }
