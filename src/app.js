@@ -2905,6 +2905,29 @@ function selectSlot(idx) {
   }
 }
 
+// 选中槽位浮动工具条：锚定槽位上方居中，随内容滚动（issue #33）
+function syncSlotToolbar() {
+  var tb = document.getElementById('slotToolbar');
+  if (!tb) return;
+  // 拖拽/缩放进行中（layout.js _slotDrag）先隐藏，松手经 updateAdjPanel 恢复
+  var slotEl = (!_slotDrag && S.selectedSlot >= 0) ? document.querySelector('.invoice-slot[data-slot-idx="' + S.selectedSlot + '"]') : null;
+  var f = getSelectedFileObj();
+  var wrap = document.getElementById('previewWrap');
+  if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
+  var wr = wrap.getBoundingClientRect();
+  var sr = slotEl.getBoundingClientRect();
+  // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
+  var left = sr.left - wr.left + wrap.scrollLeft + sr.width / 2;
+  var slotTop = sr.top - wr.top + wrap.scrollTop;
+  var top = slotTop - 36;
+  if (top < wrap.scrollTop + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
+  tb.style.left = Math.round(left) + 'px';
+  tb.style.top = Math.round(top) + 'px';
+  tb.classList.remove('hidden');
+}
+document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
+window.addEventListener('resize', syncSlotToolbar);
+
 // 右侧选中版面槽位时，左侧文件列表同步高亮并滚动到对应发票
 function syncSidebarToSelectedSlot() {
   var f = getSelectedFileObj();
@@ -2936,6 +2959,7 @@ function updateAdjPanel() {
   if (!f) {
     empty.style.display = '';
     content.style.display = 'none';
+    syncSlotToolbar();
     return;
   }
   empty.style.display = 'none';
@@ -2948,6 +2972,7 @@ function updateAdjPanel() {
   document.getElementById('adjOffY').value = f.slotOffsetY || 0;
   document.getElementById('adjOffYN').value = f.slotOffsetY || 0;
   syncEnhanceBtn(f);
+  syncSlotToolbar();
 }
 
 function onAdjScaleChange() {

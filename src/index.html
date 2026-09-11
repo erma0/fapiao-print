@@ -380,6 +380,12 @@
         <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
+      <!-- 选中槽位浮动工具条（issue #33）：随槽位定位，随内容滚动 -->
+      <div class="slot-toolbar hidden" id="slotToolbar">
+        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移">↩ 重置</button>
+        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中">⊙ 居中</button>
+        <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票">⧉ 应用到全部</button>
+      </div>
     </div>
 
     <div class="page-nav" id="pageNav" style="display:none">
