@@ -150,6 +150,16 @@ function renderPage(pageFiles, pi, total, s) {
   var dh = Math.round(layout.ph * scale);
 
   var html = '';
+  // 副本标记：按全局展开序列预计算 每槽位第几份 / 总份数（仅预览显示，不进打印/PDF）
+  var copySeq = null, copyTotal = null;
+  if (s.copyBadge) {
+    copySeq = [];
+    copyTotal = {};
+    getActiveFiles().forEach(function(af) {
+      copyTotal[af.id] = (copyTotal[af.id] || 0) + 1;
+      copySeq.push(copyTotal[af.id]);
+    });
+  }
   for (var i = 0; i < layout.slots.length; i++) {
     var slot = layout.slots[i];
     var f = pageFiles ? pageFiles[i] : null;
@@ -232,6 +242,10 @@ function renderPage(pageFiles, pi, total, s) {
       var imgStyle = 'width:100%;height:100%;object-fit:' + fit + ';' + filt;
       inner = '<div style="' + wrapperStyle + '"><img src="' + src + '" style="' + imgStyle + '"></div>';
       if (s.number) inner += '<div class="slot-num">' + (pi * getPerPage(s) + i + 1) + '</div>';
+      if (s.copyBadge && f.copies > 1 && copySeq && copyTotal[f.id]) {
+        var gIdx = pi * getPerPage(s) + i;
+        inner += '<div class="slot-copy-badge">' + copySeq[gIdx] + '/' + copyTotal[f.id] + '</div>';
+      }
       if (s.watermark && s.watermarkText) {
         var ws = s.watermarkSize * MM2PX * scale;
         inner += '<div class="watermark" style="color:' + s.watermarkColor + ';opacity:' + s.watermarkOpacity + ';font-size:' + ws + 'px;transform:translate(-50%,-50%) rotate(' + s.watermarkAngle + 'deg);top:50%;left:50%">' + s.watermarkText + '</div>';
@@ -371,6 +385,7 @@ function insertTempPlaceholder() {
 }
 
 function onSlotMouseDown(e) {
+  if (e.button !== 0) return;
   var slotEl = e.target.closest('.invoice-slot');
   if (!slotEl) return;
 

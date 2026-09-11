@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.5.2（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json）
+- **版本**: v2.6.0（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -127,7 +127,11 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **槽位精准上传与留白**：空槽点击上传精准落位（`prepareSlotInsertion()` 返回 `{insertAt, blankCount, replaceIdx, reverse}`）；空白占位 `fileObj._placeholder` 只占槽位不打印不统计，`getActiveFiles()` 过滤条件 `(f.checked || f._placeholder)`，其余消费点全部排除；占位无 `_filePath` 不持久化。三条加载路径（`processFileDataList`/`processFiles`/`processFilesIncremental`）同步支持插入替换；`_slotUploadActive` + `_loadingBatchActive` 并发锁。
 
-**列表与版面双向联动**：`clickFileItem()` 正向（activeIdx → 翻页+选槽），`syncSidebarToSelectedSlot()` 反向（高亮+滚动定位）。
+**列表与版面双向联动**：`clickFileItem()` 正向（activeIdx → 翻页+选槽），`syncSidebarToSelectedSlot()` 反向（高亮+滚动定位）。`clickFileItem` 第三参 `opts.autoCheck:false` 供右键联动复用（只同步选中态不改勾选）。
+
+**右键菜单**（v2.6.0，`_ctxIdx` 状态机）：全局 `contextmenu` 分发——`.file-item/.file-card` 命中则 preventDefault 并弹 `#ctxMenu`（份数 ×1/×2/×3、旋转、OCR（`hasOcr` 显隐）、复制发票信息、删除，作用于被右键单项）；`input/textarea/contenteditable` 放行系统菜单；其余区域仅屏蔽。联动经 `clickFileItem(idx, null, {autoCheck:false})`，右键不改勾选。菜单定位防溢出翻转，click 外点与 fileList scroll 关闭。`ctxCopyInfo()` 非空字段逐行拼接（`label：value`），无信息时 toast 不复制。
+
+**预览副本标记**（v2.6.0，`S.feat.copyBadge` 默认关）：layout.js `renderPage` 按全局展开序列预计算 `copySeq[n]/copyTotal`，同发票副本槽位显示 `n/N`（左上角，仅预览 DOM，不进打印 PDF）；新增 feat 开关必须四处同步——`S.feat` 默认值、`saveSettings` featKeys、`loadSettings` featMap、`getSettings` 显式传递，纯预览参数须加入 print.js `_cacheExclude` 防缓存误失效，`resetSettings` 的 `S.feat` 字面量与按钮 `.on` 重置同步。
 
 **快捷布局**：工具栏由 `S.quickLayouts` 动态生成；默认值必须经 `defaultQuickLayouts()` 深拷贝（禁止 `slice()` 共享）；`normalizeQuickLayoutValue()` 限 1-10；允许空列表（`loadSettings` 按 `Array.isArray` 恢复）；不得按内容强制迁移旧配置（无法区分用户自定义）。
 
@@ -180,7 +184,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **设置持久化**：`saveSettings()`/`loadSettings()` — `ticketchan-settings` JSON，覆盖排版/纸张/边距/缩放/旋转/水印/页脚/筛选/视图等；`updatePreview()` 500ms 防抖自动保存；恢复默认清空全部。⚠️ **var 提升坑**：被 `loadSettings()` 恢复的 JS 变量的 `var x = 默认值` 声明必须在调用点之前（声明提升、赋值不提升，曾致 issue #7）。
 
-**更新检查**：`check_for_updates`（reqwest 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal`。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
+**更新检查**：`check_for_updates`（reqwest 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal`。**忽略体系**（v2.6.0）：`shouldAutoShowUpdate()` 只拦静默弹窗——`ticketchan-update-ignore`（忽略此版本，弹窗按钮）+ `ticketchan-update-ignore-all`（忽略所有，弹窗按钮 + 设置→关于「自动检查更新」开关 `toggleAutoUpdateCheck`，`showApp` 里 `syncAutoUpdateCheckUI()` 同步）；手动检查不受忽略影响。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
 
 ## 前端模块
 

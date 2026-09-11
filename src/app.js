@@ -74,6 +74,7 @@ var S = {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, collate: true, duplex: false, pageNum: false,
     printDate: false, footer: false,
+    copyBadge: false,
     autoOpenPdf: true,
     ocrEnabled: false,
     pdfTextEnabled: true,
@@ -2294,6 +2295,91 @@ function setAllCopies(e, n) {
   updatePreview();
 }
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+
+// =====================================================
+// 文件列表右键菜单 — 作用于被右键的单项，无需先勾选
+// =====================================================
+var _ctxIdx = -1;
+
+function closeCtxMenu() {
+  var m = document.getElementById('ctxMenu');
+  if (m) m.classList.add('hidden');
+}
+
+function openFileContextMenu(e, idx) {
+  _ctxIdx = idx;
+  // 同步选中态：列表高亮 + 预览翻页定位到该项（不改变勾选状态）
+  clickFileItem(idx, null, { autoCheck: false });
+  var menu = document.getElementById('ctxMenu');
+  var ocrItem = document.getElementById('ctxOcrItem');
+  if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
+  // 先显示再测尺寸，右/下溢出时向内翻转
+  menu.classList.remove('hidden');
+  var rect = menu.getBoundingClientRect();
+  var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
+  var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(0, x) + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
+}
+
+function ctxSetCopies(n) {
+  if (_ctxIdx < 0) return;
+  S.files[_ctxIdx].copies = n;
+  renderFileList();
+  updatePreview();
+  closeCtxMenu();
+}
+function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
+function ctxOcr() { if (_ctxIdx >= 0) ocrFile(_ctxIdx); closeCtxMenu(); }
+function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
+
+// 复制识别到的发票信息（非空字段逐行拼接）
+function ctxCopyInfo() {
+  if (_ctxIdx < 0) return;
+  var f = S.files[_ctxIdx];
+  closeCtxMenu();
+  if (!f) return;
+  var lines = [];
+  function add(label, val) {
+    if (val !== undefined && val !== null && String(val).trim() !== '') lines.push(label + '：' + String(val).trim());
+  }
+  add('发票类型', f.invoiceType);
+  add('发票号码', f.invoiceNo);
+  add('开票日期', f.invoiceDate);
+  add('购买方', f.buyerName);
+  add('销售方', f.sellerName);
+  add('金额（含税）', f.amountTax > 0 ? '¥' + f.amountTax.toFixed(2) : '');
+  add('金额（不含税）', f.amountNoTax > 0 ? '¥' + f.amountNoTax.toFixed(2) : '');
+  add('税额', f.taxAmount > 0 ? '¥' + f.taxAmount.toFixed(2) : '');
+  if (!lines.length) { toast('该发票暂无识别信息，请先 OCR 或双击填写'); return; }
+  var text = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() { toast('已复制发票信息', 2000); }).catch(function() { fallbackCopy(text, null); });
+  } else {
+    fallbackCopy(text, null);
+  }
+}
+
+// 右键分发：列表项弹自定义菜单；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽 webview 默认菜单
+document.addEventListener('contextmenu', function(e) {
+  var item = e.target.closest('.file-item, .file-card');
+  if (item) {
+    var idx = parseInt(item.dataset.idx);
+    var f = S.files[idx];
+    if (f && !f._loading && !f._placeholder) {
+      e.preventDefault();
+      openFileContextMenu(e, idx);
+      return;
+    }
+  }
+  var tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  e.preventDefault();
+  closeCtxMenu();
+});
+var _fileListEl = document.getElementById('fileList');
+if (_fileListEl) _fileListEl.addEventListener('scroll', closeCtxMenu);
+
 // 当前筛选条件下可勾选的文件（全选/取消全选只作用于可见项，issue #27）
 function getSelectableInView() {
   return getFilteredFiles().filter(function(f) { return !f._placeholder; });
@@ -2362,7 +2448,7 @@ function ocrAll() {
   targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
 }
 // Click file item → navigate preview to the page containing this invoice
-function clickFileItem(idx, event) {
+function clickFileItem(idx, event, opts) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
   if (event && (event.target.closest('.file-check') || event.target.closest('.sort-btn') || event.target.closest('button'))) return;
   var f = S.files[idx];
@@ -2371,7 +2457,8 @@ function clickFileItem(idx, event) {
   _activeFileIdx = idx;
 
   // Auto-check if unchecked so the file appears in preview
-  if (!f.checked) {
+  // （opts.autoCheck=false：右键联动等场景只同步选中态，不改变勾选）
+  if (!f.checked && (!opts || opts.autoCheck !== false)) {
     f.checked = true;
   }
 
@@ -2748,7 +2835,7 @@ function fallbackCopy(text, btn) {
   var ta = document.createElement('textarea');
   ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
   document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); }
+  try { document.execCommand('copy'); if (btn) { btn.textContent = '✓ 已复制'; setTimeout(function() { btn.innerHTML = '📋 复制'; }, 1500); } else { toast('已复制', 2000); } }
   catch(e) { toast('复制失败'); }
   document.body.removeChild(ta);
 }
@@ -3314,6 +3401,7 @@ function getSettings() {
     globalRotation: document.getElementById('globalRotation').value,
     cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
     borderWidth: 1, borderColor: '#000000', trimWhite: S.feat.trimWhite,
+    copyBadge: S.feat.copyBadge,
     watermark: S.feat.watermark,
     watermarkText: document.getElementById('wmText').value,
     watermarkOpacity: parseFloat(document.getElementById('wmOpacity').value) / 100,
@@ -3469,6 +3557,8 @@ document.addEventListener('click', function(e) {
     var zm = document.getElementById('zoomMenu');
     if (zm) zm.classList.add('hidden');
   }
+  var xm = document.getElementById('ctxMenu');
+  if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
 });
 function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
@@ -3499,7 +3589,7 @@ function saveSettings() {
     printerName: document.getElementById('printerSel').value || null,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse','copyBadge'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
@@ -3618,7 +3708,8 @@ function loadSettings() {
       slotAdjMemory: 'toggleSlotAdjMemory',
       fileListMemory: 'toggleFileListMemory',
       autoDedup: 'toggleAutoDedup',
-      reimburse: 'toggleReimburse'
+      reimburse: 'toggleReimburse',
+      copyBadge: 'toggleCopyBadge'
     };
     Object.keys(featMap).forEach(function(k) {
       if (o.feat[k] != null) {
@@ -3786,7 +3877,7 @@ function exportSettings() {
 function resetSettings() {
   if (!confirm('确认恢复所有默认设置？')) return;
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false };
+  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false, copyBadge: false };
   S.ocrPrecision = 'standard';
   S.viewZoom = 0;
   S.quickLayouts = defaultQuickLayouts();
@@ -3824,6 +3915,7 @@ function resetSettings() {
   updateZoomDisplay();
   document.getElementById('toggleCutline').classList.add('on');
   document.getElementById('toggleNumber').classList.remove('on');
+  document.getElementById('toggleCopyBadge').classList.remove('on');
   document.getElementById('toggleBorder').classList.remove('on');
   document.getElementById('toggleTrimWhite').classList.remove('on');
   document.getElementById('toggleWatermark').classList.remove('on');
@@ -4169,6 +4261,7 @@ renderQuickLayoutList();
 // =====================================================
 (function() {
   function showApp() {
+    syncAutoUpdateCheckUI();
     if (isTauri && invoke) {
       // Check OCR availability at startup
       invoke('check_ocr_available').then(function(available) {
@@ -4237,6 +4330,7 @@ renderQuickLayoutList();
 var _UPDATE_CACHE_KEY = 'ticketchan-update-cache';
 var _UPDATE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
+var _UPDATE_IGNORE_ALL_KEY = 'ticketchan-update-ignore-all';
 var _updateChecking = false;
 var _lastUpdateInfo = null;
 
@@ -4244,9 +4338,15 @@ function getIgnoredUpdateVersion() {
   try { return localStorage.getItem(_UPDATE_IGNORE_KEY) || ''; } catch(e) { return ''; }
 }
 
-// 静默检查弹窗条件：有更新且该版本未被用户忽略
+// 忽略所有更新：静默自动检查不再弹窗，手动「检查更新」不受影响
+function isIgnoreAllUpdates() {
+  try { return localStorage.getItem(_UPDATE_IGNORE_ALL_KEY) === '1'; } catch(e) { return false; }
+}
+
+// 静默检查弹窗条件：有更新、未被忽略所有、该版本未被单独忽略
 function shouldAutoShowUpdate(info) {
   if (!info || !info.has_update) return false;
+  if (isIgnoreAllUpdates()) return false;
   return info.latest_version !== getIgnoredUpdateVersion();
 }
 
@@ -4315,6 +4415,30 @@ function ignoreUpdateVersion() {
     toast('已忽略 v' + v + '，发布更新版本后会再次提醒', 3000);
   }
   closeUpdateModal();
+}
+
+/**
+ * 忽略所有更新提醒（弹窗按钮）：启动时不再自动弹窗。
+ * 设置「关于」中可重新开启；手动检查更新不受影响。
+ */
+function ignoreAllUpdates() {
+  try { localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, '1'); } catch(e) {}
+  syncAutoUpdateCheckUI();
+  closeUpdateModal();
+  toast('已忽略所有更新提醒，可在「设置 → 关于」重新开启', 3500);
+}
+
+// 「自动检查更新」开关（设置→关于）：开 = 正常自动弹窗，关 = 忽略所有更新
+function toggleAutoUpdateCheck(btn) {
+  var enable = !btn.classList.contains('on');
+  try { localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, enable ? '' : '1'); } catch(e) {}
+  btn.classList.toggle('on', enable);
+  toast(enable ? '已开启自动检查更新' : '已忽略所有更新提醒，可手动点击「检查更新」', 3000);
+}
+
+function syncAutoUpdateCheckUI() {
+  var btn = document.getElementById('toggleAutoUpdate');
+  if (btn) btn.classList.toggle('on', !isIgnoreAllUpdates());
 }
 
 /**
