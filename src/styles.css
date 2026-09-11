@@ -449,6 +449,7 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .blank-badge { font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px; background: var(--surface2); }
 .file-check.disabled { opacity: 0.4; pointer-events: none; }
 .slot-num { position: absolute; top: 3px; right: 3px; background: rgba(0,0,0,0.55); color: white; font-size: 9px; padding: 2px 5px; border-radius: 3px; }
+.slot-copy-badge { position: absolute; top: 3px; left: 3px; background: rgba(37,99,235,0.75); color: white; font-size: 9px; padding: 2px 5px; border-radius: 3px; pointer-events: none; }
 .cut-line { position: absolute; left: 0; right: 0; border-top: 1px dashed #94a3b8; pointer-events: none; }
 .cut-line-v { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #94a3b8; pointer-events: none; }
 .watermark { position: absolute; pointer-events: none; z-index: 10; font-weight: 900; white-space: nowrap; user-select: none; }

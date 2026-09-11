@@ -74,6 +74,7 @@ var S = {
     cutline: true, number: false, border: false, trimWhite: false,
     watermark: false, collate: true, duplex: false, pageNum: false,
     printDate: false, footer: false,
+    copyBadge: false,
     autoOpenPdf: true,
     ocrEnabled: false,
     pdfTextEnabled: true,
@@ -3314,6 +3315,7 @@ function getSettings() {
     globalRotation: document.getElementById('globalRotation').value,
     cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
     borderWidth: 1, borderColor: '#000000', trimWhite: S.feat.trimWhite,
+    copyBadge: S.feat.copyBadge,
     watermark: S.feat.watermark,
     watermarkText: document.getElementById('wmText').value,
     watermarkOpacity: parseFloat(document.getElementById('wmOpacity').value) / 100,
@@ -3499,7 +3501,7 @@ function saveSettings() {
     printerName: document.getElementById('printerSel').value || null,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse'];
+  var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse','copyBadge'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
@@ -3618,7 +3620,8 @@ function loadSettings() {
       slotAdjMemory: 'toggleSlotAdjMemory',
       fileListMemory: 'toggleFileListMemory',
       autoDedup: 'toggleAutoDedup',
-      reimburse: 'toggleReimburse'
+      reimburse: 'toggleReimburse',
+      copyBadge: 'toggleCopyBadge'
     };
     Object.keys(featMap).forEach(function(k) {
       if (o.feat[k] != null) {
