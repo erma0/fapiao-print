@@ -2575,7 +2575,7 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.3.0';
+    APP_VERSION = '3.4.0';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);
