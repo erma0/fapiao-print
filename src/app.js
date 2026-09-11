@@ -2316,6 +2316,7 @@ function openFileContextMenu(e, idx) {
   var menu = document.getElementById('ctxMenu');
   var ocrItem = document.getElementById('ctxOcrItem');
   if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
+  _showCtxMenuGroup('file');
   // 先显示再测尺寸，右/下溢出时向内翻转
   menu.classList.remove('hidden');
   var rect = menu.getBoundingClientRect();
@@ -2323,6 +2324,35 @@ function openFileContextMenu(e, idx) {
   var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
   menu.style.left = Math.max(0, x) + 'px';
   menu.style.top = Math.max(0, y) + 'px';
+}
+
+// 预览区槽位右键：右键即选中该槽位（与列表右键同步选中态的体验一致）
+function openSlotContextMenu(e) {
+  var slotEl = e.target.closest('.invoice-slot');
+  var idx = parseInt(slotEl.dataset.slotIdx);
+  if (isNaN(idx)) return false;
+  var files = getActiveFiles();
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var f = files[S.currentPage * perPage + idx];
+  if (!f || f._placeholder) return false;
+  selectSlot(idx);
+  _showCtxMenuGroup('slot');
+  var menu = document.getElementById('ctxMenu');
+  menu.classList.remove('hidden');
+  var rect = menu.getBoundingClientRect();
+  var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
+  var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(0, x) + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
+  return true;
+}
+
+function _showCtxMenuGroup(group) {
+  var fileGroup = document.getElementById('ctxFileGroup');
+  var slotGroup = document.getElementById('ctxSlotGroup');
+  if (fileGroup) fileGroup.style.display = group === 'file' ? '' : 'none';
+  if (slotGroup) slotGroup.style.display = group === 'slot' ? '' : 'none';
 }
 
 function ctxSetCopies(n) {
@@ -2335,6 +2365,19 @@ function ctxSetCopies(n) {
 function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
 function ctxOcr() { if (_ctxIdx >= 0) ocrFile(_ctxIdx); closeCtxMenu(); }
 function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
+
+// 预览区槽位右键动作（单票调整，issue #33）
+function ctxSlotReset() { closeCtxMenu(); resetSlotAdj(); }
+function ctxSlotCenter() { closeCtxMenu(); setSlotAlignment('center', 'center'); }
+function ctxSlotApplyAll() { closeCtxMenu(); applySlotAdjToAll(); }
+function ctxSlotResetAll() { closeCtxMenu(); resetAllSlotAdj(); }
+function ctxSlotRotate() {
+  closeCtxMenu();
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var i = S.files.indexOf(f);
+  if (i >= 0) rotFile(i);
+}
 
 // 复制识别到的发票信息（非空字段逐行拼接）
 function ctxCopyInfo() {
@@ -2363,7 +2406,7 @@ function ctxCopyInfo() {
   }
 }
 
-// 右键分发：列表项弹自定义菜单；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽 webview 默认菜单
+// 右键分发：列表项/预览槽位弹自定义菜单（内容不同）；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽 webview 默认菜单
 document.addEventListener('contextmenu', function(e) {
   var item = e.target.closest('.file-item, .file-card');
   if (item) {
@@ -2374,6 +2417,10 @@ document.addEventListener('contextmenu', function(e) {
       openFileContextMenu(e, idx);
       return;
     }
+  }
+  if (e.target.closest('.invoice-slot')) {
+    e.preventDefault();
+    if (openSlotContextMenu(e)) return;
   }
   var tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
@@ -2926,6 +2973,19 @@ function resetSlotAdj() {
   f.slotOffsetY = 0;
   updateAdjPanel();
   updatePreview();
+}
+
+// 重置全部单票调整（issue #33：与「应用到全部」对应的反向批量入口）
+function resetAllSlotAdj() {
+  if (!S.files.length) return;
+  S.files.forEach(function(f) {
+    f.slotScale = 1;
+    f.slotOffsetX = 0;
+    f.slotOffsetY = 0;
+  });
+  updateAdjPanel();
+  updatePreview();
+  toast('已重置全部单票调整');
 }
 
 function applySlotAdjToAll() {
