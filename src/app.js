@@ -2308,6 +2308,8 @@ function closeCtxMenu() {
 
 function openFileContextMenu(e, idx) {
   _ctxIdx = idx;
+  // 同步选中态：列表高亮 + 预览翻页定位到该项（不改变勾选状态）
+  clickFileItem(idx, null, { autoCheck: false });
   var menu = document.getElementById('ctxMenu');
   var ocrItem = document.getElementById('ctxOcrItem');
   if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
@@ -2446,7 +2448,7 @@ function ocrAll() {
   targets.forEach(function(f) { applyOcrAsync(f, f.previewUrl); });
 }
 // Click file item → navigate preview to the page containing this invoice
-function clickFileItem(idx, event) {
+function clickFileItem(idx, event, opts) {
   // Ignore clicks on checkbox, sort buttons, and action buttons
   if (event && (event.target.closest('.file-check') || event.target.closest('.sort-btn') || event.target.closest('button'))) return;
   var f = S.files[idx];
@@ -2455,7 +2457,8 @@ function clickFileItem(idx, event) {
   _activeFileIdx = idx;
 
   // Auto-check if unchecked so the file appears in preview
-  if (!f.checked) {
+  // （opts.autoCheck=false：右键联动等场景只同步选中态，不改变勾选）
+  if (!f.checked && (!opts || opts.autoCheck !== false)) {
     f.checked = true;
   }
 
