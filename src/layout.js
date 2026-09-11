@@ -385,6 +385,7 @@ function insertTempPlaceholder() {
 }
 
 function onSlotMouseDown(e) {
+  if (e.button !== 0) return;
   var slotEl = e.target.closest('.invoice-slot');
   if (!slotEl) return;
 

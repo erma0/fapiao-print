@@ -346,6 +346,15 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .copy-ctrl { position: relative; }
 
+/* ===== 右键菜单 ===== */
+.ctx-menu {
+  position: fixed; left: 0; top: 0; z-index: 1000;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); min-width: 120px; padding: 4px 0;
+}
+.copy-menu-label { padding: 4px 12px 2px; font-size: 10px; color: var(--text-muted); }
+.copy-menu-item.danger:hover { background: var(--danger-light); color: var(--danger); }
+
 /* ===== Settings ===== */
 .sec { padding: 12px; border-bottom: 1px solid var(--border); }
 .sec-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }

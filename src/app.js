@@ -2295,6 +2295,62 @@ function setAllCopies(e, n) {
   updatePreview();
 }
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+
+// =====================================================
+// 文件列表右键菜单 — 作用于被右键的单项，无需先勾选
+// =====================================================
+var _ctxIdx = -1;
+
+function closeCtxMenu() {
+  var m = document.getElementById('ctxMenu');
+  if (m) m.classList.add('hidden');
+}
+
+function openFileContextMenu(e, idx) {
+  _ctxIdx = idx;
+  var menu = document.getElementById('ctxMenu');
+  var ocrItem = document.getElementById('ctxOcrItem');
+  if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
+  // 先显示再测尺寸，右/下溢出时向内翻转
+  menu.classList.remove('hidden');
+  var rect = menu.getBoundingClientRect();
+  var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
+  var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(0, x) + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
+}
+
+function ctxSetCopies(n) {
+  if (_ctxIdx < 0) return;
+  S.files[_ctxIdx].copies = n;
+  renderFileList();
+  updatePreview();
+  closeCtxMenu();
+}
+function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
+function ctxOcr() { if (_ctxIdx >= 0) ocrFile(_ctxIdx); closeCtxMenu(); }
+function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
+
+// 右键分发：列表项弹自定义菜单；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽 webview 默认菜单
+document.addEventListener('contextmenu', function(e) {
+  var item = e.target.closest('.file-item, .file-card');
+  if (item) {
+    var idx = parseInt(item.dataset.idx);
+    var f = S.files[idx];
+    if (f && !f._loading && !f._placeholder) {
+      e.preventDefault();
+      openFileContextMenu(e, idx);
+      return;
+    }
+  }
+  var tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  e.preventDefault();
+  closeCtxMenu();
+});
+var _fileListEl = document.getElementById('fileList');
+if (_fileListEl) _fileListEl.addEventListener('scroll', closeCtxMenu);
+
 // 当前筛选条件下可勾选的文件（全选/取消全选只作用于可见项，issue #27）
 function getSelectableInView() {
   return getFilteredFiles().filter(function(f) { return !f._placeholder; });
@@ -3471,6 +3527,8 @@ document.addEventListener('click', function(e) {
     var zm = document.getElementById('zoomMenu');
     if (zm) zm.classList.add('hidden');
   }
+  var xm = document.getElementById('ctxMenu');
+  if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
 });
 function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }

@@ -400,6 +400,19 @@
   </main>
 </div>
 
+<!-- File context menu (right-click) -->
+<div class="ctx-menu hidden" id="ctxMenu">
+  <div class="copy-menu-label">排版份数</div>
+  <div class="copy-menu-item" onclick="ctxSetCopies(1)">×1</div>
+  <div class="copy-menu-item" onclick="ctxSetCopies(2)">×2</div>
+  <div class="copy-menu-item" onclick="ctxSetCopies(3)">×3</div>
+  <div class="copy-menu-sep"></div>
+  <div class="copy-menu-item" onclick="ctxRotate()">↻ 旋转 90°</div>
+  <div class="copy-menu-item" id="ctxOcrItem" onclick="ctxOcr()" style="display:none">🔍 OCR 识别</div>
+  <div class="copy-menu-sep"></div>
+  <div class="copy-menu-item danger" onclick="ctxDelete()">✕ 删除</div>
+</div>
+
 <!-- Invoice options modal -->
 <div class="modal-bg hidden" id="invModal" onclick="closeInvModal()"><div class="modal" onclick="event.stopPropagation()"><div class="modal-title">📝 发票选项</div><div class="modal-body" id="invModalBody"></div><div class="modal-actions"><button class="btn" onclick="closeInvModal()">取消</button><button class="btn btn-primary" onclick="confirmInvModal()">确认</button></div></div></div>
 
