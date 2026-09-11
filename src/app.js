@@ -195,6 +195,8 @@ function syncRange(n, s) { document.getElementById(s).value = n.value; }
 /**
  * Enable mouse wheel to increment/decrement number inputs and range sliders.
  * Delegated to the sidebar; covers all settings panel inputs and adj panel inputs.
+ * Focus-gated (issue #33): only responds after the input is clicked into focus,
+ * so plain scrolling over the sidebar never mutates values or swallows the scroll.
  */
 function setupInputWheelSupport() {
   var sidebar = document.querySelector('.sidebar');
@@ -203,6 +205,7 @@ function setupInputWheelSupport() {
     var t = e.target;
     if (t.tagName !== 'INPUT') return;
     if (t.type !== 'number' && t.type !== 'range') return;
+    if (document.activeElement !== t) return;
     e.preventDefault();
 
     var step = parseFloat(t.step) || 1;
