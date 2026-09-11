@@ -2902,6 +2902,16 @@ function selectSlot(idx) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
     syncSidebarToSelectedSlot();
+    // 首次选中提示隐藏手势（issue #33）：双击重置 / 右键菜单，跨会话仅提示一次
+    if (!window._dblclickHintShown) {
+      window._dblclickHintShown = true;
+      try {
+        if (localStorage.getItem('ticketchan-dblclick-hint') !== '1') {
+          localStorage.setItem('ticketchan-dblclick-hint', '1');
+          toast('提示：双击票面可重置单票调整，右键票面有更多操作', 3500);
+        }
+      } catch(e) {}
+    }
   }
 }
 
@@ -3962,11 +3972,17 @@ function exportSettings() {
   toast('设置已导出');
 }
 
-function resetSettings() {
-  if (!confirm('确认恢复所有默认设置？')) return;
+function resetSettings(scope) {
+  // scope='layout'：仅恢复「排版」页（纸张/行列/边距/间距/水印等），不动打印与偏好（issue #33）
+  var layoutOnly = scope === 'layout';
+  if (!confirm(layoutOnly ? '仅恢复「排版」页默认设置（纸张/行列/边距/间距/水印等），不影响打印、OCR、主题等偏好？' : '确认恢复所有默认设置？')) return;
+  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false, copyBadge: false };
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, collate: true, duplex: false, pageNum: false, printDate: false, autoOpenPdf: true, ocrEnabled: false, pdfTextEnabled: true, slotAdjMemory: false, fileListMemory: false, autoDedup: false, reimburse: false, copyBadge: false };
-  S.ocrPrecision = 'standard';
+  if (layoutOnly) {
+    ['cutline','number','border','trimWhite','watermark','reimburse','copyBadge'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
+  } else {
+    S.feat = featDefaults;
+  }
   S.viewZoom = 0;
   S.quickLayouts = defaultQuickLayouts();
   S.quickLayoutMax = 0;
@@ -3985,12 +4001,9 @@ function resetSettings() {
   document.getElementById('gapV').value = 3; document.getElementById('gapVN').value = 3;
   document.getElementById('fitMode').value = 'fit';
   document.getElementById('globalRotation').value = '0';
-  document.getElementById('copies').value = 1;
-  document.getElementById('colorMode').value = 'color';
   document.getElementById('customW').value = 210;
   document.getElementById('customH').value = 297;
   document.getElementById('customScale').value = 100; document.getElementById('customScaleN').value = 100;
-  document.getElementById('pageOrder').value = 'normal';
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
@@ -3999,7 +4012,6 @@ function resetSettings() {
   document.getElementById('wmColor').value = '#ff0000';
   document.getElementById('wmAngle').value = -30; document.getElementById('wmAngleN').value = -30;
   document.getElementById('wmSize').value = 15; document.getElementById('wmSizeN').value = 15;
-  document.getElementById('footerText').value = '';
   updateZoomDisplay();
   document.getElementById('toggleCutline').classList.add('on');
   document.getElementById('toggleNumber').classList.remove('on');
@@ -4007,6 +4019,19 @@ function resetSettings() {
   document.getElementById('toggleBorder').classList.remove('on');
   document.getElementById('toggleTrimWhite').classList.remove('on');
   document.getElementById('toggleWatermark').classList.remove('on');
+  document.getElementById('toggleReimburse').classList.remove('on');
+  document.getElementById('reimburseHeight').value = 120;
+  syncReimburseUI();
+  if (layoutOnly) {
+    syncLayoutHighlight();
+    updatePreview();
+    toast('已恢复默认版面设置');
+    return;
+  }
+  document.getElementById('copies').value = 1;
+  document.getElementById('colorMode').value = 'color';
+  document.getElementById('pageOrder').value = 'normal';
+  document.getElementById('footerText').value = '';
   document.getElementById('toggleCollate').classList.add('on');
   document.getElementById('toggleDuplex').classList.remove('on');
   document.getElementById('togglePageNum').classList.remove('on');
@@ -4016,14 +4041,12 @@ function resetSettings() {
   document.getElementById('togglePdfText').classList.add('on');
   document.getElementById('toggleFooter').classList.remove('on');
   document.getElementById('toggleCustomFM').classList.remove('on');
-  document.getElementById('toggleReimburse').classList.remove('on');
-  document.getElementById('reimburseHeight').value = 120;
-  syncReimburseUI();
   document.getElementById('footerOpts').style.display = 'none';
   document.getElementById('customFMRow').style.display = 'none';
   document.getElementById('footerMarginRow').style.display = 'none';
   document.getElementById('footerMargin').value = 8; document.getElementById('footerMarginN').value = 8;
   document.getElementById('ocrPrecision').value = 'standard';
+  S.ocrPrecision = 'standard';
   document.getElementById('printMode').value = 'pdfium';
   document.getElementById('themeMode').value = 'light';
   document.documentElement.classList.remove('dark');
