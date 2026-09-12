@@ -430,9 +430,18 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .zoom-menu.hidden { display: none; }
 
 /* ===== Preview ===== */
-.preview-wrap { flex: 1; overflow: auto; padding: 20px; display: flex; }
+.preview-wrap { flex: 1; overflow: auto; padding: 20px; display: flex; position: relative; }
 #previewPages { margin: 0 auto; align-self: flex-start; }
 .preview-container { background: var(--surface); box-shadow: var(--shadow-lg); position: relative; flex-shrink: 0; }
+
+/* 选中槽位浮动工具条（同步桌面版 #33） */
+.slot-toolbar {
+  position: absolute; z-index: 20; display: flex; gap: 4px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); transform: translateX(-50%); white-space: nowrap;
+}
+.slot-toolbar .btn { padding: 3px 8px; font-size: 11px; font-weight: 600; }
+.slot-toolbar.hidden { display: none; }
 .invoice-slot { overflow: hidden; position: absolute; display: flex; align-items: center; justify-content: center; background: white; }
 .invoice-slot img { display: block; }
 .slot-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: #f8fafc; color: var(--text-muted); font-size: 13px; flex-direction: column; gap: 3px; border: 1px dashed var(--border); }

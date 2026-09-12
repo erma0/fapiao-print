@@ -297,9 +297,9 @@ function initSlotInteraction() {
   if (_slotInteractionBound) return;
   _slotInteractionBound = true;
   container.addEventListener('mousedown', onSlotMouseDown);
-  // Click on empty area deselects
+  // Click on empty area deselects (floating slot toolbar excluded, 同步桌面版 #33)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle')) {
+    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar')) {
       selectSlot(-1);
     }
   });

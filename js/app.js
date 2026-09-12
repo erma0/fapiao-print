@@ -151,6 +151,8 @@ function syncRange(n, s) { document.getElementById(s).value = n.value; }
 /**
  * Enable mouse wheel to increment/decrement number inputs and range sliders.
  * Delegated to the sidebar; covers all settings panel inputs and adj panel inputs.
+ * Focus-gated (issue #33): only responds after the input is clicked into focus,
+ * so plain scrolling over the sidebar never mutates values or swallows the scroll.
  */
 function setupInputWheelSupport() {
   var sidebar = document.querySelector('.sidebar');
@@ -159,6 +161,7 @@ function setupInputWheelSupport() {
     var t = e.target;
     if (t.tagName !== 'INPUT') return;
     if (t.type !== 'number' && t.type !== 'range') return;
+    if (document.activeElement !== t) return;
     e.preventDefault();
 
     var step = parseFloat(t.step) || 1;
@@ -1088,6 +1091,8 @@ function openFileContextMenu(e, idx) {
   // 同步选中态：列表高亮 + 预览翻页定位到该项（不改变勾选状态）
   clickFileItem(idx, null, { autoCheck: false });
   var menu = document.getElementById('ctxMenu');
+  // 单票调整组仅当该文件参与排版时可用（clickFileItem 已把 selectedSlot 定位到其首个槽位）
+  _showSlotAdjGroup(S.selectedSlot >= 0 && !!getSelectedFileObj());
   // 先显示再测尺寸，右/下溢出时向内翻转
   menu.classList.remove('hidden');
   var rect = menu.getBoundingClientRect();
@@ -1095,6 +1100,34 @@ function openFileContextMenu(e, idx) {
   var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
   menu.style.left = Math.max(0, x) + 'px';
   menu.style.top = Math.max(0, y) + 'px';
+}
+
+// 预览区槽位右键：右键即选中该槽位（与列表右键同步选中态的体验一致）
+function openSlotContextMenu(e) {
+  var slotEl = e.target.closest('.invoice-slot');
+  var idx = parseInt(slotEl.dataset.slotIdx);
+  if (isNaN(idx)) return false;
+  var files = getActiveFiles();
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var f = files[S.currentPage * perPage + idx];
+  if (!f || f._placeholder) return false;
+  selectSlot(idx);
+  _ctxIdx = S.files.indexOf(f); // 统一菜单：份数/旋转/删除/复制同样按此文件操作
+  _showSlotAdjGroup(true);
+  var menu = document.getElementById('ctxMenu');
+  menu.classList.remove('hidden');
+  var rect = menu.getBoundingClientRect();
+  var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
+  var y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(0, x) + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
+  return true;
+}
+
+function _showSlotAdjGroup(show) {
+  var g = document.getElementById('ctxSlotAdjGroup');
+  if (g) g.style.display = show ? '' : 'none';
 }
 
 function ctxSetCopies(n) {
@@ -1106,6 +1139,12 @@ function ctxSetCopies(n) {
 }
 function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
 function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
+
+// 预览区槽位右键动作（单票调整，同步桌面版 #33；菜单与列表右键统一，目标文件由 selectSlot/_ctxIdx 指向）
+function ctxSlotReset() { closeCtxMenu(); resetSlotAdj(); }
+function ctxSlotCenter() { closeCtxMenu(); setSlotAlignment('center', 'center'); }
+function ctxSlotApplyAll() { closeCtxMenu(); applySlotAdjToAll(); }
+function ctxSlotResetAll() { closeCtxMenu(); resetAllSlotAdj(); }
 
 // 复制识别到的发票信息（非空字段逐行拼接）
 function ctxCopyInfo() {
@@ -1134,7 +1173,7 @@ function ctxCopyInfo() {
   }
 }
 
-// 右键分发：列表项弹自定义菜单；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽浏览器默认菜单
+// 右键分发：列表项/预览槽位弹自定义菜单（内容不同）；输入框保留原生菜单（复制/粘贴）；其余区域屏蔽浏览器默认菜单
 document.addEventListener('contextmenu', function(e) {
   var item = e.target.closest('.file-item, .file-card');
   if (item) {
@@ -1145,6 +1184,10 @@ document.addEventListener('contextmenu', function(e) {
       openFileContextMenu(e, idx);
       return;
     }
+  }
+  if (e.target.closest('.invoice-slot')) {
+    e.preventDefault();
+    if (openSlotContextMenu(e)) return;
   }
   var tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
@@ -1592,9 +1635,42 @@ function selectSlot(idx) {
   if (idx >= 0) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
+    // 首次选中提示隐藏手势（同步桌面版 #33）：双击重置 / 右键菜单，跨会话仅提示一次
+    if (!window._dblclickHintShown) {
+      window._dblclickHintShown = true;
+      try {
+        if (localStorage.getItem('ticketchan-dblclick-hint') !== '1') {
+          localStorage.setItem('ticketchan-dblclick-hint', '1');
+          toast('提示：双击票面可重置单票调整，右键票面有更多操作', 3500);
+        }
+      } catch(e) {}
+    }
   }
   syncSidebarToSelectedSlot();
 }
+
+// 选中槽位浮动工具条：锚定槽位上方居中，随内容滚动（同步桌面版 #33）
+function syncSlotToolbar() {
+  var tb = document.getElementById('slotToolbar');
+  if (!tb) return;
+  // 拖拽/缩放进行中（layout.js _slotDrag）先隐藏，松手经 updateAdjPanel 恢复
+  var slotEl = (!_slotDrag && S.selectedSlot >= 0) ? document.querySelector('.invoice-slot[data-slot-idx="' + S.selectedSlot + '"]') : null;
+  var f = getSelectedFileObj();
+  var wrap = document.getElementById('previewWrap');
+  if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
+  var wr = wrap.getBoundingClientRect();
+  var sr = slotEl.getBoundingClientRect();
+  // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
+  var left = sr.left - wr.left + wrap.scrollLeft + sr.width / 2;
+  var slotTop = sr.top - wr.top + wrap.scrollTop;
+  var top = slotTop - 36;
+  if (top < wrap.scrollTop + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
+  tb.style.left = Math.round(left) + 'px';
+  tb.style.top = Math.round(top) + 'px';
+  tb.classList.remove('hidden');
+}
+document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
+window.addEventListener('resize', syncSlotToolbar);
 
 // 选中槽位 → 同步左侧列表高亮并滚动定位（列表与版面双向联动）
 function syncSidebarToSelectedSlot() {
@@ -1627,6 +1703,7 @@ function updateAdjPanel() {
   if (!f) {
     empty.style.display = '';
     content.style.display = 'none';
+    syncSlotToolbar();
     return;
   }
   empty.style.display = 'none';
@@ -1638,6 +1715,7 @@ function updateAdjPanel() {
   document.getElementById('adjOffXN').value = f.slotOffsetX || 0;
   document.getElementById('adjOffY').value = f.slotOffsetY || 0;
   document.getElementById('adjOffYN').value = f.slotOffsetY || 0;
+  syncSlotToolbar();
 }
 
 function onAdjScaleChange() {
@@ -1663,6 +1741,19 @@ function resetSlotAdj() {
   f.slotOffsetY = 0;
   updateAdjPanel();
   updatePreview();
+}
+
+// 重置全部单票调整（同步桌面版 #33：与「应用到全部」对应的反向批量入口）
+function resetAllSlotAdj() {
+  if (!S.files.length) return;
+  S.files.forEach(function(f) {
+    f.slotScale = 1;
+    f.slotOffsetX = 0;
+    f.slotOffsetY = 0;
+  });
+  updateAdjPanel();
+  updatePreview();
+  toast('已重置全部单票调整');
 }
 
 function applySlotAdjToAll() {
@@ -2337,21 +2428,18 @@ function exportSettings() {
   toast('设置已导出');
 }
 
-function resetSettings() {
-  if (!confirm('确认恢复所有默认设置？')) return;
+function resetSettings(scope) {
+  // scope='layout'：仅恢复「排版」页（纸张/行列/边距/间距/水印等），不动偏好（同步桌面版 #33）
+  var layoutOnly = scope === 'layout';
+  if (!confirm(layoutOnly ? '仅恢复「排版」页默认设置（纸张/行列/边距/间距/水印等），不影响主题等偏好？' : '确认恢复所有默认设置？')) return;
+  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false };
   S.layout = { cols: 1, rows: 1 };
-  S.feat = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false };
+  if (layoutOnly) {
+    ['cutline','number','border','trimWhite','watermark','copyBadge'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
+  } else {
+    S.feat = featDefaults;
+  }
   S.viewZoom = 0;
-  S.fileView = 'list';
-  S.fileFilter = 'all';
-  S.printedFilter = 'all';
-  S.typeFilter = 'all';
-  S.formatFilter = 'all';
-  syncFileViewBtn();
-  syncFilterButtons();
-  syncTypeFilterButtons();
-  syncFormatFilterButtons();
-  updateFilterSummary();
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
   document.getElementById('customRows').value = 1;
@@ -2364,7 +2452,6 @@ function resetSettings() {
   document.getElementById('gapV').value = 3; document.getElementById('gapVN').value = 3;
   document.getElementById('fitMode').value = 'fit';
   document.getElementById('globalRotation').value = '0';
-  document.getElementById('copies').value = 1;
   document.getElementById('customW').value = 210;
   document.getElementById('customH').value = 297;
   document.getElementById('customScale').value = 100; document.getElementById('customScaleN').value = 100;
@@ -2376,7 +2463,6 @@ function resetSettings() {
   document.getElementById('wmColor').value = '#ff0000';
   document.getElementById('wmAngle').value = -30; document.getElementById('wmAngleN').value = -30;
   document.getElementById('wmSize').value = 15; document.getElementById('wmSizeN').value = 15;
-  document.getElementById('footerText').value = '';
   updateZoomDisplay();
   document.getElementById('toggleCutline').classList.add('on');
   document.getElementById('toggleNumber').classList.remove('on');
@@ -2384,6 +2470,24 @@ function resetSettings() {
   document.getElementById('toggleBorder').classList.remove('on');
   document.getElementById('toggleTrimWhite').classList.remove('on');
   document.getElementById('toggleWatermark').classList.remove('on');
+  if (layoutOnly) {
+    syncLayoutHighlight();
+    updatePreview();
+    toast('已恢复默认版面设置');
+    return;
+  }
+  S.fileView = 'list';
+  S.fileFilter = 'all';
+  S.printedFilter = 'all';
+  S.typeFilter = 'all';
+  S.formatFilter = 'all';
+  syncFileViewBtn();
+  syncFilterButtons();
+  syncTypeFilterButtons();
+  syncFormatFilterButtons();
+  updateFilterSummary();
+  document.getElementById('copies').value = 1;
+  document.getElementById('footerText').value = '';
   document.getElementById('togglePageNum').classList.remove('on');
   document.getElementById('toggleDate').classList.remove('on');
   document.getElementById('togglePdfText').classList.add('on');
@@ -2575,7 +2679,7 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.4.0';
+    APP_VERSION = '3.4.1';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);
