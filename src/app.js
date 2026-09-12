@@ -2316,7 +2316,8 @@ function openFileContextMenu(e, idx) {
   var menu = document.getElementById('ctxMenu');
   var ocrItem = document.getElementById('ctxOcrItem');
   if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
-  _showCtxMenuGroup('file');
+  // 单票调整组仅当该文件参与排版时可用（clickFileItem 已把 selectedSlot 定位到其首个槽位）
+  _showSlotAdjGroup(S.selectedSlot >= 0 && !!getSelectedFileObj());
   // 先显示再测尺寸，右/下溢出时向内翻转
   menu.classList.remove('hidden');
   var rect = menu.getBoundingClientRect();
@@ -2337,8 +2338,11 @@ function openSlotContextMenu(e) {
   var f = files[S.currentPage * perPage + idx];
   if (!f || f._placeholder) return false;
   selectSlot(idx);
-  _showCtxMenuGroup('slot');
+  _ctxIdx = S.files.indexOf(f); // 统一菜单：份数/旋转/OCR/删除/复制同样按此文件操作
+  _showSlotAdjGroup(true);
   var menu = document.getElementById('ctxMenu');
+  var ocrItem = document.getElementById('ctxOcrItem');
+  if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
   menu.classList.remove('hidden');
   var rect = menu.getBoundingClientRect();
   var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
@@ -2348,11 +2352,9 @@ function openSlotContextMenu(e) {
   return true;
 }
 
-function _showCtxMenuGroup(group) {
-  var fileGroup = document.getElementById('ctxFileGroup');
-  var slotGroup = document.getElementById('ctxSlotGroup');
-  if (fileGroup) fileGroup.style.display = group === 'file' ? '' : 'none';
-  if (slotGroup) slotGroup.style.display = group === 'slot' ? '' : 'none';
+function _showSlotAdjGroup(show) {
+  var g = document.getElementById('ctxSlotAdjGroup');
+  if (g) g.style.display = show ? '' : 'none';
 }
 
 function ctxSetCopies(n) {
@@ -2366,18 +2368,11 @@ function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
 function ctxOcr() { if (_ctxIdx >= 0) ocrFile(_ctxIdx); closeCtxMenu(); }
 function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
 
-// 预览区槽位右键动作（单票调整，issue #33）
+// 预览区槽位右键动作（单票调整，issue #33；菜单与列表右键统一，目标文件由 selectSlot/_ctxIdx 指向）
 function ctxSlotReset() { closeCtxMenu(); resetSlotAdj(); }
 function ctxSlotCenter() { closeCtxMenu(); setSlotAlignment('center', 'center'); }
 function ctxSlotApplyAll() { closeCtxMenu(); applySlotAdjToAll(); }
 function ctxSlotResetAll() { closeCtxMenu(); resetAllSlotAdj(); }
-function ctxSlotRotate() {
-  closeCtxMenu();
-  var f = getSelectedFileObj();
-  if (!f) return;
-  var i = S.files.indexOf(f);
-  if (i >= 0) rotFile(i);
-}
 
 // 复制识别到的发票信息（非空字段逐行拼接）
 function ctxCopyInfo() {
