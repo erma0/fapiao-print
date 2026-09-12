@@ -332,7 +332,8 @@
       <div class="sidebar-panel-footer">
         <div class="sec" style="border-bottom:0">
           <button class="btn" style="width:100%" onclick="exportSettings()">💾 导出设置</button>
-          <button class="btn" style="width:100%;margin-top:6px" onclick="resetSettings()">🔄 恢复默认</button>
+          <button class="btn" style="width:100%;margin-top:6px" onclick="resetSettings('layout')" title="仅恢复排版页：纸张/行列/边距/间距/水印等">↩️ 仅恢复版面</button>
+          <button class="btn" style="width:100%;margin-top:6px" onclick="resetSettings()" title="恢复全部默认设置，包括打印、OCR、主题与偏好">🔄 恢复默认</button>
         </div>
       </div>
     </div>
@@ -380,6 +381,12 @@
         <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
+      <!-- 选中槽位浮动工具条（issue #33）：随槽位定位，随内容滚动 -->
+      <div class="slot-toolbar hidden" id="slotToolbar">
+        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移">↩ 重置</button>
+        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中">⊙ 居中</button>
+        <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票">⧉ 应用到全部</button>
+      </div>
     </div>
 
     <div class="page-nav" id="pageNav" style="display:none">
@@ -400,7 +407,7 @@
   </main>
 </div>
 
-<!-- File context menu (right-click) -->
+<!-- Context menu (right-click): 列表项与预览槽位共用同一份完整菜单（issue #33） -->
 <div class="ctx-menu hidden" id="ctxMenu">
   <div class="copy-menu-label">排版份数</div>
   <div class="copy-menu-item" onclick="ctxSetCopies(1)">×1</div>
@@ -411,6 +418,14 @@
   <div class="copy-menu-item" id="ctxOcrItem" onclick="ctxOcr()" style="display:none">🔍 OCR 识别</div>
   <div class="copy-menu-item" onclick="ctxCopyInfo()">📋 复制发票信息</div>
   <div class="copy-menu-sep"></div>
+  <div id="ctxSlotAdjGroup">
+    <div class="copy-menu-label">单票调整</div>
+    <div class="copy-menu-item" onclick="ctxSlotReset()">↩ 重置此票</div>
+    <div class="copy-menu-item" onclick="ctxSlotCenter()">⊙ 居中</div>
+    <div class="copy-menu-item" onclick="ctxSlotApplyAll()">⧉ 应用到全部</div>
+    <div class="copy-menu-item" onclick="ctxSlotResetAll()">↩ 重置全部调整</div>
+    <div class="copy-menu-sep"></div>
+  </div>
   <div class="copy-menu-item danger" onclick="ctxDelete()">✕ 删除</div>
 </div>
 
