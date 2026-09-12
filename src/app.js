@@ -1736,10 +1736,7 @@ function loadFileFromDataUrlFast(fd) {
           _ofdPage: true
         });
         resolve(fileObj);
-        // Fallback OCR: OFD XML 未提取到有效数据时，以 OCR 作补充
-        if (S.feat.ocrEnabled && !info.amountTax && !info.amountNoTax && !info.sellerName) {
-          applyOcrAsync(fileObj, payload.pngUrl);
-        }
+        // XML/OFD 为结构化数据，不做 OCR 兜底（字段缺失时可在发票弹窗手动补录）
       }).catch(function(err) {
         // Fallback: call open_ofd_images for bitmap extraction
         console.warn('[OFD] parse_ofd failed, falling back to bitmap:', err);
@@ -2173,7 +2170,7 @@ function renderFileList() {
       if (!f._loading) {
         gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
           '<button class="ib card-ib' + (i === S.files.length - 1 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',1)" title="下移">\u25BC</button>' +
-          (hasOcr ? (f._ocrPending
+          (hasOcr && canOcrFile(f) ? (f._ocrPending
             ? '<button class="ib card-ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
             : '<button class="ib card-ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>') : '') +
           '<button class="ib card-ib" onclick="rotFile(' + i + ')" title="旋转90°">\u21BB</button>' +
@@ -2212,7 +2209,7 @@ function renderFileList() {
     var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
     var typeBadgeText = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : safeType;
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
-    var ocrBtnHtml = hasOcr
+    var ocrBtnHtml = hasOcr && canOcrFile(f)
       ? (f._ocrPending
         ? '<button class="ib ocr-btn" disabled title="识别中"><span class="ocr-spinner"></span></button>'
         : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>')
@@ -2315,7 +2312,7 @@ function openFileContextMenu(e, idx) {
   clickFileItem(idx, null, { autoCheck: false });
   var menu = document.getElementById('ctxMenu');
   var ocrItem = document.getElementById('ctxOcrItem');
-  if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
+  if (ocrItem) ocrItem.style.display = (hasOcr && canOcrFile(S.files[idx])) ? '' : 'none';
   // 单票调整组仅当该文件参与排版时可用（clickFileItem 已把 selectedSlot 定位到其首个槽位）
   _showSlotAdjGroup(S.selectedSlot >= 0 && !!getSelectedFileObj());
   // 先显示再测尺寸，右/下溢出时向内翻转
@@ -2342,7 +2339,7 @@ function openSlotContextMenu(e) {
   _showSlotAdjGroup(true);
   var menu = document.getElementById('ctxMenu');
   var ocrItem = document.getElementById('ctxOcrItem');
-  if (ocrItem) ocrItem.style.display = hasOcr ? '' : 'none';
+  if (ocrItem) ocrItem.style.display = (hasOcr && canOcrFile(f)) ? '' : 'none';
   menu.classList.remove('hidden');
   var rect = menu.getBoundingClientRect();
   var x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
@@ -2467,9 +2464,14 @@ function rotateSelected() {
   if (i < 0) return;
   rotFile(i);
 }
+// OCR 仅对图像与 PDF 有意义；XML/OFD 为结构化数据，字段直接解析，无需 OCR（用户要求禁用入口）
+function canOcrFile(f) {
+  return !!f && !f._loading && !f._placeholder && (f.type === 'pdf' || ENHANCE_IMAGE_TYPES.indexOf(f.type) >= 0);
+}
 function ocrFile(i) {
   var f = S.files[i];
   if (f._loading || f._ocrPending) return;
+  if (!canOcrFile(f)) { toast('XML/OFD 为结构化格式，字段自动解析，无需 OCR'); return; }
   if (!hasOcr) { toast('此版本不支持 OCR 识别'); return; }
   if (!isTauri || !invoke) { toast('OCR 识别需要桌面版'); return; }
   // Mark as single-file OCR from button click so per-file result toast shows correctly
@@ -2484,7 +2486,7 @@ function ocrAll() {
   var running = _ocrQueue.length + _ocrRunning;
   if (running > 0) { toast('正在识别中，请稍候'); return; }
   var targets = S.files.filter(function(f) {
-    return !f._placeholder && !f._loading && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
+    return canOcrFile(f) && !f._ocrPending && !(f.amountTax > 0 || f.amountNoTax > 0);
   });
   if (targets.length === 0) { toast('没有需要识别的发票'); return; }
   _ocrBatchTotal = targets.length;
