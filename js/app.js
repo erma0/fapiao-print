@@ -110,7 +110,13 @@ function createFileObj(opts) {
     srcPdfBytes: opts.srcPdfBytes || null,
     srcPageIndex: opts.srcPageIndex != null ? opts.srcPageIndex : -1,
     srcPageWidthPt: opts.srcPageWidthPt || 0,
-    srcPageHeightPt: opts.srcPageHeightPt || 0
+    srcPageHeightPt: opts.srcPageHeightPt || 0,
+    // 裁剪白边缓存：trimmedBox 为内容在原图中的像素范围（供矢量裁切换算），
+    // trimmedW/trimmedH 为裁剪后尺寸，未裁剪时为 0（回退到 ow/oh）
+    trimmedUrl: null,
+    trimmedBox: null,
+    trimmedW: 0,
+    trimmedH: 0
   };
 
   // Apply saved per-file adjustments if memory is enabled
@@ -1786,8 +1792,9 @@ function setSlotAlignment(alignH, alignV) {
   // Use rotated visual dimensions — same as renderPage/PDF export (rotate-then-fit).
   // renderPage computes the wrapper from rotated visual dims; offsets move the
   // visual (post-rotation) box, so alignment gaps must use visual dims too.
-  var imgObjW = f.ow || 1;
-  var imgObjH = f.oh || 1;
+  var _alignDims = getObjDims(f, settings);
+  var imgObjW = _alignDims.w;
+  var imgObjH = _alignDims.h;
   var alignRot = getRotation(f, slot, settings);
   var alignRot90 = (alignRot === 90 || alignRot === 270);
   var fitW = alignRot90 ? imgObjH : imgObjW;
@@ -1985,6 +1992,8 @@ function setMP(t, b, l, r) {
 function changeCopies(d) { var e = document.getElementById('copies'); e.value = Math.max(1, Math.min(99, parseInt(e.value) + d)); updatePreview(); }
 
 // Trim whitespace — client-side canvas implementation
+// 返回 { url, box }：box 为裁剪后内容在原图中的像素范围（供 PDF 矢量裁切换算），
+// 未发生裁剪（全白/失败）时 box 为 null，调用方按原图处理。
 async function trimOneImage(dataUrl) {
   return new Promise(function(resolve) {
     var img = new Image();
@@ -1997,7 +2006,7 @@ async function trimOneImage(dataUrl) {
       try {
         var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         var top = 0, bottom = canvas.height - 1, left = 0, right = canvas.width - 1;
-        var threshold = 245;
+        var threshold = WHITE_THRESHOLD;
         function rowBlank(y) {
           for (var x = 0; x < canvas.width; x++) {
             var i = (y * canvas.width + x) * 4;
@@ -2016,7 +2025,7 @@ async function trimOneImage(dataUrl) {
         while (bottom > top && rowBlank(bottom)) bottom--;
         while (left < canvas.width && colBlank(left)) left++;
         while (right > left && colBlank(right)) right--;
-        if (top >= bottom || left >= right) { resolve(dataUrl); return; }
+        if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
         var pad = 4;
         top = Math.max(0, top - pad); bottom = Math.min(canvas.height - 1, bottom + pad);
         left = Math.max(0, left - pad); right = Math.min(canvas.width - 1, right + pad);
@@ -2025,12 +2034,12 @@ async function trimOneImage(dataUrl) {
         out.width = w; out.height = h;
         var octx = out.getContext('2d');
         octx.drawImage(canvas, left, top, w, h, 0, 0, w, h);
-        resolve(out.toDataURL('image/jpeg', 0.9));
+        resolve({ url: out.toDataURL('image/jpeg', 0.9), box: { x: left, y: top, w: w, h: h } });
       } catch (e) {
-        resolve(dataUrl);
+        resolve({ url: dataUrl, box: null });
       }
     };
-    img.onerror = function() { resolve(dataUrl); };
+    img.onerror = function() { resolve({ url: dataUrl, box: null }); };
     img.src = dataUrl;
   });
 }
@@ -2041,7 +2050,12 @@ async function processTrim() {
     for (var i = 0; i < S.files.length; i++) {
       var f = S.files[i];
       if (f.previewUrl && !f.trimmedUrl) {
-        f.trimmedUrl = await trimOneImage(f.previewUrl);
+        var trimmed = await trimOneImage(f.previewUrl);
+        if (!trimmed || !trimmed.url) continue;
+        f.trimmedUrl = trimmed.url;
+        f.trimmedBox = trimmed.box;
+        f.trimmedW = trimmed.box ? trimmed.box.w : 0;
+        f.trimmedH = trimmed.box ? trimmed.box.h : 0;
       }
     }
     hideLoading();
@@ -2679,7 +2693,7 @@ loadSettings();
 // =====================================================
 (function() {
   function showApp() {
-    APP_VERSION = '3.4.1';
+    APP_VERSION = '3.4.2';
     var el = document.getElementById('stVersion');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);

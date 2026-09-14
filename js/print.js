@@ -247,6 +247,7 @@ function _settingsKey(s) {
     paperW: s.paperW, paperH: s.paperH, paperSize: s.paperSize, orientation: s.orientation,
     marginTop: s.marginTop, marginBottom: s.marginBottom, marginLeft: s.marginLeft, marginRight: s.marginRight,
     gapH: s.gapH, gapV: s.gapV, colorMode: s.colorMode, cutline: s.cutline, border: s.border, number: s.number,
+    trimWhite: s.trimWhite,
     watermark: s.watermark, watermarkText: s.watermarkText, watermarkSize: s.watermarkSize, watermarkOpacity: s.watermarkOpacity,
     watermarkColor: s.watermarkColor, watermarkAngle: s.watermarkAngle,
     globalRotation: s.globalRotation, footerText: s.footerText, pageNum: s.pageNum, customFM: s.customFM,
@@ -282,10 +283,38 @@ async function _getOrLoadSrcPdf(fileObj) {
 }
 
 // Embed a file into the output PDF.
-// For PDF sources: returns { type:'pdfPage', embedded, width(pt), height(pt) }
+// For PDF sources: returns { type:'pdfPage', embedded, width(pt), height(pt), ptW, ptH }
 // For image sources: returns { type:'image', embedded, width(px), height(px) }
 // On failure or unsupported type: returns null.
-// When rasterOnly=true, skip vector embedding and always use raster image.
+// settings._rasterOnly=true → skip vector embedding, always use raster image.
+// settings.trimWhite + fileObj.trimmedBox → 源 PDF 走 embedPage 裁剪框矢量裁切，
+// 无法安全换算坐标时退回裁剪后的位图，保证与预览一致。
+// ptW/ptH: 实际绘制尺寸（点）。仅在裁剪时给出，裁剪后与 srcPageWidthPt 不同。
+function _trimBBoxPt(srcPage, fileObj, box) {
+  // 预览位图 → 源页面用户空间（PDF 点）的裁剪框换算。
+  // 只有当预览渲染范围与 MediaBox 完全对应时才成立，否则返回 null 交由位图路径。
+  var dpi = fileObj.renderDpi || 300;
+  var mb;
+  try { mb = srcPage.getMediaBox(); } catch (e) { return null; }
+  if (!mb || !mb.width || !mb.height) return null;
+  // getRotation() 返回 Rotation 对象 { type, angle }（非数值），radians 需换算
+  var rot;
+  try { rot = srcPage.getRotation(); } catch (e) { return null; }
+  var angle = 0;
+  if (typeof rot === 'number') angle = rot;
+  else if (rot) angle = rot.type === 'radians' ? (rot.angle || 0) * 180 / Math.PI : (rot.angle || 0);
+  if (angle % 360 !== 0) return null; // /Rotate 页面预览为旋转后视图，坐标不可直接换算
+  if (Math.abs(mb.width - fileObj.srcPageWidthPt) > 1.5) return null;  // CropBox ≠ MediaBox
+  if (Math.abs(mb.height - fileObj.srcPageHeightPt) > 1.5) return null;
+  var ptPerPx = 72 / dpi;
+  return {
+    left: mb.x + box.x * ptPerPx,
+    right: mb.x + (box.x + box.w) * ptPerPx,
+    bottom: mb.y + mb.height - (box.y + box.h) * ptPerPx,
+    top: mb.y + mb.height - box.y * ptPerPx
+  };
+}
+
 // Convert a dataURL image to grayscale or B&W via canvas
 function _convertImageDataUrl(dataUrl, colorMode) {
   if (!colorMode || colorMode === 'color') return dataUrl;
@@ -310,29 +339,49 @@ function _convertImageDataUrl(dataUrl, colorMode) {
   });
 }
 
-async function _embedForFile(pdfDoc, fileObj, rasterOnly, colorMode) {
+async function _embedForFile(pdfDoc, fileObj, settings) {
   if (!fileObj) return null;
   if (fileObj._xmlInvoice) return null;
 
+  var colorMode = settings.colorMode || 'color';
+  var trimBox = settings.trimWhite ? fileObj.trimmedBox : null;
+
   // Vector path: embed original PDF page (skip if rasterOnly or colorMode needs conversion)
-  if (!rasterOnly && colorMode === 'color' && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
+  if (!settings._rasterOnly && colorMode === 'color'
+      && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
     try {
       var srcDoc = await _getOrLoadSrcPdf(fileObj);
       var srcPage = srcDoc.getPage(fileObj.srcPageIndex);
-      var embedded = await pdfDoc.embedPage(srcPage);
-      return {
-        type: 'pdfPage',
-        embedded: embedded,
-        width: srcPage.getWidth(),
-        height: srcPage.getHeight()
-      };
+      if (trimBox) {
+        var bbox = _trimBBoxPt(srcPage, fileObj, trimBox);
+        if (bbox) {
+          var cropped = await pdfDoc.embedPage(srcPage, bbox);
+          return {
+            type: 'pdfPage',
+            embedded: cropped,
+            width: cropped.width,
+            height: cropped.height,
+            ptW: cropped.width,
+            ptH: cropped.height
+          };
+        }
+        // 坐标无法安全换算 → 不裁切的矢量图会与预览不一致，改为走裁剪后的位图
+      } else {
+        var embedded = await pdfDoc.embedPage(srcPage);
+        return {
+          type: 'pdfPage',
+          embedded: embedded,
+          width: srcPage.getWidth(),
+          height: srcPage.getHeight()
+        };
+      }
     } catch (e) {
       console.warn('embedPage failed, falling back to raster:', e);
     }
   }
 
   // Raster path: embed as image
-  var srcUrl = fileObj.trimmedUrl || fileObj.previewUrl;
+  var srcUrl = (settings.trimWhite && fileObj.trimmedUrl) ? fileObj.trimmedUrl : fileObj.previewUrl;
   if (!srcUrl) return null;
   // Apply color mode conversion
   if (colorMode && colorMode !== 'color') {
@@ -357,7 +406,7 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
     var slot = layout.slots[i];
     var f = pageFiles ? pageFiles[i] : null;
     if (!f) continue;
-    var embedResult = await _embedForFile(pdfDoc, f, settings._rasterOnly, settings.colorMode || 'color');
+    var embedResult = await _embedForFile(pdfDoc, f, settings);
     if (!embedResult) continue;
 
     var rot = getRotation(f, slot, settings);
@@ -366,14 +415,16 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
     var perOffY = f.slotOffsetY || 0;
 
     // Use pt dimensions for PDF pages, convert pixel→pt for images.
+    // 裁剪白边时统一用裁剪后的尺寸（getObjDims），与预览适配保持一致。
     var objW, objH;
     if (embedResult.type === 'pdfPage') {
-      objW = f.srcPageWidthPt || embedResult.width;
-      objH = f.srcPageHeightPt || embedResult.height;
+      objW = embedResult.ptW || f.srcPageWidthPt || embedResult.width;
+      objH = embedResult.ptH || f.srcPageHeightPt || embedResult.height;
     } else {
       var imgDpi = f.renderDpi || 300;
-      objW = (f.ow || embedResult.width) * 72 / imgDpi;
-      objH = (f.oh || embedResult.height) * 72 / imgDpi;
+      var objDims = getObjDims(f, settings);
+      objW = objDims.w * 72 / imgDpi;
+      objH = objDims.h * 72 / imgDpi;
     }
 
     // 先旋转后适配（与预览/桌面端一致）：90°/270° 按旋转后视觉宽高 fit 槽位
@@ -551,7 +602,11 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
 async function _composePdfBlob(files, settings, onProgress) {
   _srcPdfDocs = {};
   var rasterKey = settings._rasterOnly ? 'R' : 'V';
-  var key = _settingsKey(settings) + '|' + rasterKey + '|' + files.map(function(f) { return f.id + ':' + f.copies + ':' + f.rotation; }).join(',');
+  // 裁剪白边是异步生成的，打印时可能尚未就绪；把每票的裁剪状态纳入缓存键，
+  // 避免裁剪完成前的旧结果被复用。
+  var key = _settingsKey(settings) + '|' + rasterKey + '|' + files.map(function(f) {
+    return f.id + ':' + f.copies + ':' + f.rotation + ':' + (f.trimmedBox ? 'T' : 'n');
+  }).join(',');
   if (_printCacheKey === key && _printCacheBlob) {
     return _printCacheBlob;
   }

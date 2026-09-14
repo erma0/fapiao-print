@@ -91,6 +91,22 @@ function calculateLayout(settings, pxPerMm) {
 }
 
 /**
+ * 有效显示尺寸（px）。开启「裁剪白边」且已生成裁剪缓存时用裁剪后的尺寸，
+ * 否则用文件原始尺寸（ow/oh）。预览适配、拖拽约束、九宫格对齐与 PDF 导出
+ * 必须统一走这里，否则四处算出的适配比例会不一致。
+ * @param {Object} fileObj - File object with ow, oh, trimmedW, trimmedH
+ * @param {Object} settings - Settings with trimWhite
+ * @returns {{w:number,h:number}}
+ */
+function getObjDims(fileObj, settings) {
+  if (!fileObj) return { w: 1, h: 1 };
+  if (settings && settings.trimWhite && fileObj.trimmedW > 0 && fileObj.trimmedH > 0) {
+    return { w: fileObj.trimmedW, h: fileObj.trimmedH };
+  }
+  return { w: fileObj.ow || 1, h: fileObj.oh || 1 };
+}
+
+/**
  * Calculate rotation for a file in a slot.
  * @param {Object} fileObj - File object with ow, oh, rotation
  * @param {Object} slot - Slot with w, h
@@ -100,7 +116,8 @@ function calculateLayout(settings, pxPerMm) {
 function getRotation(fileObj, slot, settings) {
   if (settings.globalRotation === 'auto') {
     var isSlotL = slot.w > slot.h;
-    var isImgL = (fileObj.ow || 1) > (fileObj.oh || 1);
+    var dims = getObjDims(fileObj, settings);
+    var isImgL = dims.w > dims.h;
     return (isSlotL !== isImgL) ? (fileObj.rotation + 90) % 360 : fileObj.rotation;
   }
   return ((parseInt(settings.globalRotation) || 0) + fileObj.rotation) % 360;
@@ -169,8 +186,9 @@ function renderPage(pageFiles, pi, total, s) {
         transforms = 'translate(' + txPx.toFixed(1) + 'px, ' + tyPx.toFixed(1) + 'px) ' + transforms;
       }
       // Calculate contained image dimensions for border to follow invoice
-      var imgObjW = f.ow || 1;
-      var imgObjH = f.oh || 1;
+      var _dispDims = getObjDims(f, s);
+      var imgObjW = _dispDims.w;
+      var imgObjH = _dispDims.h;
       // 旋转 90°/270°：与 PDF 导出一致，按旋转后的视觉宽高适配槽位（先旋转后适配）。
       // wrapper 是旋转前的盒子，取视觉盒的转置，CSS 旋转后正好落在视觉盒上。
       var isRot90 = (rot === 90 || rot === 270);
@@ -419,9 +437,10 @@ function onSlotMouseMove(e) {
     // Clamp: limit offset so invoice doesn't go fully outside slot
     var slot = layout.slots[_slotDrag.idx];
     var f = _slotDrag.fileObj;
-    var imgW = f.ow || 1;
-    var imgH = f.oh || 1;
     var s = _slotDrag.cachedSettings;
+    var _clampDims = getObjDims(f, s);
+    var imgW = _clampDims.w;
+    var imgH = _clampDims.h;
     // 旋转 90°/270° 时约束范围按旋转后的视觉尺寸计算（与 renderPage 一致）
     var clampRot = getRotation(f, slot, s);
     var clampRot90 = (clampRot === 90 || clampRot === 270);
