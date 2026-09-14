@@ -194,18 +194,22 @@ function renderPage(pageFiles, pi, total, s) {
       var isRot90 = (rot === 90 || rot === 270);
       var fitW = isRot90 ? imgObjH : imgObjW;
       var fitH = isRot90 ? imgObjW : imgObjH;
-      var containedW, containedH;
+      var containedW, containedH, visW, visH;
       if (s.fitMode === 'original') {
         containedW = imgObjW;
         containedH = imgObjH;
+        visW = isRot90 ? containedH : containedW;
+        visH = isRot90 ? containedW : containedH;
       } else if (s.fitMode === 'fill') {
         containedW = isRot90 ? imgH : imgW;
         containedH = isRot90 ? imgW : imgH;
+        visW = isRot90 ? containedH : containedW;
+        visH = isRot90 ? containedW : containedH;
       } else {
         // contain / custom: 旋转后视觉宽高 contain-fit 槽位，wrapper 转置
         var fitScale = Math.min(imgW / fitW, imgH / fitH);
-        var visW = fitW * fitScale;
-        var visH = fitH * fitScale;
+        visW = fitW * fitScale;
+        visH = fitH * fitScale;
         containedW = isRot90 ? visH : visW;
         containedH = isRot90 ? visW : visH;
       }
@@ -213,7 +217,11 @@ function renderPage(pageFiles, pi, total, s) {
       var wrapperStyle = 'width:' + containedW.toFixed(1) + 'px;height:' + containedH.toFixed(1) + 'px;';
       wrapperStyle += 'position:absolute;';
       wrapperStyle += 'left:' + ((imgW - containedW) / 2).toFixed(1) + 'px;';
-      wrapperStyle += 'top:' + ((imgH - containedH) / 2).toFixed(1) + 'px;';
+      // 「裁剪白边」开启时垂直贴顶（视觉盒顶 = 槽位顶）：wrapper 中心对齐到 visH/2，
+      // 否则居中。水平方向始终居中 —— 左右裁剪本来就对得准。
+      var wrapTop = ((imgH - containedH) / 2);
+      if (s.trimWhite) wrapTop = visH / 2 - containedH / 2;
+      wrapperStyle += 'top:' + wrapTop.toFixed(1) + 'px;';
       wrapperStyle += 'transform-origin:center center;';
       if (transforms) wrapperStyle += 'transform:' + transforms + ';';
       if (s.border) wrapperStyle += 'outline:1px solid #000;outline-offset:-1px;';

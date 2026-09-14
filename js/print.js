@@ -502,7 +502,11 @@ async function _buildPage(pdfDoc, pageFiles, pageIdx, totalPages, settings) {
     var visW = fitW * fitScale;
     var visH = fitH * fitScale;
     var cx = slot.x + slot.w / 2 + perOffX * ptPerMm;
-    var cy = ph - (slot.y + slot.h / 2 + perOffY * ptPerMm);
+    // 「裁剪白边」开启时垂直贴顶（视觉盒顶 = 槽位顶）：中心 y = slot.y + visH/2；
+    // 否则在槽位内居中。水平方向始终居中 —— 左右裁剪本来就对得准。
+    var cy = settings.trimWhite
+      ? ph - (slot.y + visH / 2 + perOffY * ptPerMm)
+      : ph - (slot.y + slot.h / 2 + perOffY * ptPerMm);
 
     // pdf-lib drawImage/drawPage 的 rotate 绕 (x,y) 锚点（未旋转盒左下角）且正角度为逆时针，
     // 与 CSS 旋转（绕中心、顺时针为正）不同。这里换算锚点使旋转后视觉盒以 (cx,cy) 为中心：

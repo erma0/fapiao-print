@@ -14,16 +14,10 @@ var _loadingBatchActive = false;
 var _printedMap = {};
 // 白边裁剪：R/G/B 均 >= 阈值视为白（严格小于才算内容）。
 // 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现），
-// 提到 252；纯白底 JPEG 噪点实测 255，配合下面的过滤条件不受影响。
+// 提到 252；纯白底 JPEG 噪点实测 255，配合 MIN_CONTENT_PIXELS 不受影响。
 var WHITE_THRESHOLD = 252;
-// 「确定是内容」的亮度阈值：比它更暗的像素无需厚度检验（黑字/黑线）
-var HARD_THRESHOLD = 200;
-// 一行/列至少这么多非白像素才算「有内容」，抑制孤立噪点
+// 一行/列至少这么多非白像素才算「有内容」，抑制照片/JPEG 的孤立浅色噪点
 var MIN_CONTENT_PIXELS = 2;
-// 浅灰内容（HARD..WHITE 之间）还需在垂直/水平方向连续这么多像素才算真内容：
-// 页面边缘的浅灰细线只有 1~2px 厚会被忽略（否则上下白边裁不掉），
-// 浅灰文字/印章至少十几 px，正常保留
-var MIN_CONTENT_THICKNESS = 4;
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
 
@@ -2018,56 +2012,39 @@ async function trimOneImage(dataUrl) {
         var cw = canvas.width, ch = canvas.height;
         var data = ctx.getImageData(0, 0, cw, ch).data;
         var threshold = WHITE_THRESHOLD;
-        var hard = Math.min(HARD_THRESHOLD, threshold);
         var minCount = MIN_CONTENT_PIXELS;
-        var thick = MIN_CONTENT_THICKNESS;
 
-        // 行统计：每行的「深色像素数」与「非白像素数」
-        var rowHard = new Uint32Array(ch), rowSoft = new Uint32Array(ch);
+        // 行/列「非白」像素计数（一次遍历，避免四边重复扫描）
+        var rowSoft = new Uint32Array(ch);
         for (var y = 0; y < ch; y++) {
-          var dh = 0, ds = 0;
+          var ds = 0;
           for (var x = 0; x < cw; x++) {
             var i = (y * cw + x) * 4;
-            var mn = Math.min(data[i], data[i+1], data[i+2]);
-            if (mn < threshold) { ds++; if (mn < hard) dh++; }
+            if (Math.min(data[i], data[i+1], data[i+2]) < threshold) ds++;
           }
-          rowHard[y] = dh; rowSoft[y] = ds;
+          rowSoft[y] = ds;
         }
-        // 索引 i 是否为「真内容」（forward=true 内容自 i 向下延伸，false 向上延伸）
-        function qualifies(cH, cS, i, forward) {
-          if (cH[i] >= minCount) return true;          // 深色内容：无需厚度检验
-          if (cS[i] < minCount) return false;
-          var s = forward ? i : Math.max(0, i - (thick - 1));
-          var e = forward ? i + thick : i + 1;
-          for (var k = s; k < e; k++) {
-            if (k >= cH.length) return false;
-            if (cH[k] < minCount && cS[k] < minCount) return false;
-          }
-          return true;
-        }
-
         var top = -1;
-        for (var y3 = 0; y3 < ch; y3++) { if (qualifies(rowHard, rowSoft, y3, true)) { top = y3; break; } }
+        for (var y1 = 0; y1 < ch; y1++) { if (rowSoft[y1] >= minCount) { top = y1; break; } }
         if (top < 0) { resolve({ url: dataUrl, box: null }); return; }  // 全白：无内容可裁
         var bottom = -1;
-        for (var y4 = ch - 1; y4 >= 0; y4--) { if (qualifies(rowHard, rowSoft, y4, false)) { bottom = y4; break; } }
+        for (var y2 = ch - 1; y2 >= 0; y2--) { if (rowSoft[y2] >= minCount) { bottom = y2; break; } }
         if (bottom < 0) { resolve({ url: dataUrl, box: null }); return; }
 
-        // 列统计：只扫 top..bottom 范围（与桌面端一致）
-        var colHard = new Uint32Array(cw), colSoft = new Uint32Array(cw);
-        for (var x = 0; x < cw; x++) {
-          var chh = 0, css = 0;
+        // 列统计限定在 top..bottom 范围（与桌面端一致）
+        var colSoft = new Uint32Array(cw);
+        for (var x1 = 0; x1 < cw; x1++) {
+          var cs = 0;
           for (var yy = top; yy <= bottom; yy++) {
-            var ii = (yy * cw + x) * 4;
-            var mn2 = Math.min(data[ii], data[ii+1], data[ii+2]);
-            if (mn2 < threshold) { css++; if (mn2 < hard) chh++; }
+            var ii = (yy * cw + x1) * 4;
+            if (Math.min(data[ii], data[ii+1], data[ii+2]) < threshold) cs++;
           }
-          colHard[x] = chh; colSoft[x] = css;
+          colSoft[x1] = cs;
         }
         var left = -1;
-        for (var x1 = 0; x1 < cw; x1++) { if (qualifies(colHard, colSoft, x1, true)) { left = x1; break; } }
+        for (var x2 = 0; x2 < cw; x2++) { if (colSoft[x2] >= minCount) { left = x2; break; } }
         var right = -1;
-        for (var x2 = cw - 1; x2 >= 0; x2--) { if (qualifies(colHard, colSoft, x2, false)) { right = x2; break; } }
+        for (var x3 = cw - 1; x3 >= 0; x3--) { if (colSoft[x3] >= minCount) { right = x3; break; } }
         if (left < 0 || right < 0) { resolve({ url: dataUrl, box: null }); return; }
         if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
 
