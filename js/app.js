@@ -13,9 +13,10 @@ var PDF_PREVIEW_DPI = 300;  // Preview DPI
 var _loadingBatchActive = false;
 var _printedMap = {};
 // 白边裁剪：R/G/B 均 >= 阈值视为白（严格小于才算内容）。
-// 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现），
-// 提到 252；纯白底 JPEG 噪点实测 255，配合 MIN_CONTENT_PIXELS 不受影响。
-var WHITE_THRESHOLD = 252;
+// 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现）；
+// 取 253 —— 电子发票白底是纯白（255），把 253/254 这类「抗锯齿 + JPEG 淡出」的
+// 内容边缘也算作内容，避免印章/文字边缘被裁掉一点点。
+var WHITE_THRESHOLD = 253;
 // 一行/列至少这么多非白像素才算「有内容」，抑制照片/JPEG 的孤立浅色噪点
 var MIN_CONTENT_PIXELS = 2;
 
@@ -346,6 +347,7 @@ async function processFileList(fileList) {
   if (slotInsert) locateInsertedFile(_lastInsertedId);
   toastLoading('加载完成');
   _loadingBatchActive = false;
+  maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
   _insertSlotIdx = -1;
   _lastInsertedId = null;
 
@@ -2048,7 +2050,9 @@ async function trimOneImage(dataUrl) {
         if (left < 0 || right < 0) { resolve({ url: dataUrl, box: null }); return; }
         if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
 
-        var pad = 4;
+        // 向外留边距再裁：容忍内容边缘的抗锯齿/尖角（如印章圆弧顶）与换算误差。
+        // 12px @300dpi ≈ 1mm，视觉上仍看不出白边，但能避免把内容切掉一点点。
+        var pad = 12;
         top = Math.max(0, top - pad); bottom = Math.min(ch - 1, bottom + pad);
         left = Math.max(0, left - pad); right = Math.min(cw - 1, right + pad);
         var w = right - left + 1, h = bottom - top + 1;
@@ -2064,6 +2068,11 @@ async function trimOneImage(dataUrl) {
     img.onerror = function() { resolve({ url: dataUrl, box: null }); };
     img.src = dataUrl;
   });
+}
+
+/** 批量加载结束后：若「裁剪白边」已开启（开关跨会话记忆），自动补裁剪 */
+function maybeAutoTrim() {
+  if (S.feat.trimWhite) processTrim();
 }
 
 async function processTrim() {
