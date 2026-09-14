@@ -2061,9 +2061,9 @@ async function trimOneImage(dataUrl) {
         if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
 
         // 向外留边距再裁：容忍内容边缘的抗锯齿/尖角（如印章圆弧顶）与换算误差。
-        // 12px @300dpi ≈ 1mm。右侧单独加大到 28px（≈2.4mm）：发票右侧常有
-        // 「下载次数」「密码区」这类浅色小字，检测容易漏掉最右几个字，多留更安全。
-        var padL = 12, padT = 12, padR = 28, padB = 12;
+        // 左/上 6px（≈0.5mm，用户要求尽量小）。右侧单独加大到 28px（≈2.4mm）：
+        // 发票右侧常有「下载次数」「密码区」这类浅色小字，检测容易漏掉最右几个字。
+        var padL = 6, padT = 6, padR = 28, padB = 12;
         top = Math.max(0, top - padT); bottom = Math.min(ch - 1, bottom + padB);
         left = Math.max(0, left - padL); right = Math.min(cw - 1, right + padR);
         var w = right - left + 1, h = bottom - top + 1;
