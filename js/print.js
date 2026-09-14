@@ -289,7 +289,46 @@ async function _getOrLoadSrcPdf(fileObj) {
 // settings._rasterOnly=true → skip vector embedding, always use raster image.
 // settings.trimWhite + fileObj.trimmedBox → 源 PDF 走 embedPage 裁剪框矢量裁切，
 // 无法安全换算坐标时退回裁剪后的位图，保证与预览一致。
-// ptW/ptH: 实际绘制尺寸（点）。仅在裁剪时给出，裁剪后与 srcPageWidthPt 不同。
+// 页面带 /Rotate 时把旋转烘焙进 XObject Matrix（与桌面版同款），无法烘焙时退回位图。
+// ptW/ptH: 实际绘制尺寸（点）。裁剪（尺寸变化）或 /Rotate 烘焙（宽高互换）时给出。
+// 页面 /Rotate 度数。pdf-lib 返回 Rotation 对象 { type, angle }（非数值），
+// radians 需换算；读取失败返回 NaN（调用方按"不可信"处理）。
+function _pageRotationDeg(srcPage) {
+  try {
+    var rot = srcPage.getRotation();
+    if (typeof rot === 'number') return rot;
+    if (rot) return rot.type === 'radians' ? (rot.angle || 0) * 180 / Math.PI : (rot.angle || 0);
+    return 0;
+  } catch (e) { return NaN; }
+}
+
+// /Rotate 90/180/270 的烘焙矩阵（与桌面版 Rust extract_page_as_form_xobject 同款语义）：
+//   90:  (x,y) → (y, pageW - x)          180: (x,y) → (pageW - x, pageH - y)
+//   270: (x,y) → (pageH - y, x)
+// outW/outH 是旋转后的页面尺寸（drawPage 的目标宽高）。
+// ⚠️ pdf-lib drawPage 会先按 width/embWidth、height/embHeight 归一化缩放（emb=BBox
+// 尺寸，未旋转），XMatrix 在缩放之内，所以这里预除该缩放（XMatrix = S⁻¹ · T），
+// 使内容经 Matrix + drawPage 缩放后正好铺满 outW × outH。
+function _rotateMatrix(rot, pageW, pageH, outW, outH) {
+  var ix = pageW / outW, iy = pageH / outH;
+  if (rot === 90) return [0, -iy, ix, 0, 0, iy * pageW];
+  if (rot === 180) return [-ix, 0, 0, -iy, ix * pageW, iy * pageH];
+  if (rot === 270) return [0, iy, -ix, 0, ix * pageH, 0];
+  return null;
+}
+
+// 能否把 /Rotate 烘焙进 XObject：要求 MediaBox 与 CropBox 一致且原点在 0。
+// pdf-lib 的 embedPage BBox 以 0 为基准、忽略原点偏移；不一致时烘焙会错位，退回位图更安全。
+function _canBakeRotation(srcPage) {
+  try {
+    var mb = srcPage.getMediaBox(), cb = srcPage.getCropBox();
+    if (!mb || !cb) return false;
+    if (Math.abs(mb.x) > 0.01 || Math.abs(mb.y) > 0.01) return false;
+    return Math.abs(mb.x - cb.x) < 0.01 && Math.abs(mb.y - cb.y) < 0.01
+      && Math.abs(mb.width - cb.width) < 0.01 && Math.abs(mb.height - cb.height) < 0.01;
+  } catch (e) { return false; }
+}
+
 function _trimBBoxPt(srcPage, fileObj, box) {
   // 预览位图 → 源页面用户空间（PDF 点）的裁剪框换算。
   // PDF.js 预览渲染的是 CropBox（view）区域，基准必须用 CropBox：
@@ -300,13 +339,8 @@ function _trimBBoxPt(srcPage, fileObj, box) {
   var cb;
   try { cb = srcPage.getCropBox(); } catch (e) { return null; }
   if (!cb || !cb.width || !cb.height) return null;
-  // getRotation() 返回 Rotation 对象 { type, angle }（非数值），radians 需换算
-  var rot;
-  try { rot = srcPage.getRotation(); } catch (e) { return null; }
-  var angle = 0;
-  if (typeof rot === 'number') angle = rot;
-  else if (rot) angle = rot.type === 'radians' ? (rot.angle || 0) * 180 / Math.PI : (rot.angle || 0);
-  if (angle % 360 !== 0) return null; // /Rotate 页面预览为旋转后视图，坐标不可直接换算
+  var angle = _pageRotationDeg(srcPage);
+  if (!isFinite(angle) || angle % 360 !== 0) return null; // /Rotate 页面预览为旋转后视图，坐标不可直接换算
   // 预览按 CropBox 渲染，宽高对不上（如 /Rotate 导致的宽高互换）说明不可直接换算
   if (Math.abs(cb.width - fileObj.srcPageWidthPt) > 1.5) return null;
   if (Math.abs(cb.height - fileObj.srcPageHeightPt) > 1.5) return null;
@@ -371,13 +405,36 @@ async function _embedForFile(pdfDoc, fileObj, settings) {
         }
         // 坐标无法安全换算 → 不裁切的矢量图会与预览不一致，改为走裁剪后的位图
       } else {
-        var embedded = await pdfDoc.embedPage(srcPage);
-        return {
-          type: 'pdfPage',
-          embedded: embedded,
-          width: srcPage.getWidth(),
-          height: srcPage.getHeight()
-        };
+        var bake = ((_pageRotationDeg(srcPage) % 360) + 360) % 360;
+        if (bake === 0) {
+          var embedded = await pdfDoc.embedPage(srcPage);
+          return {
+            type: 'pdfPage',
+            embedded: embedded,
+            width: srcPage.getWidth(),
+            height: srcPage.getHeight()
+          };
+        }
+        // /Rotate 页面：把旋转烘焙进 XObject 的 Matrix（与桌面版同款矩阵），
+        // 否则未旋转的内容会被按旋转后的尺寸拉伸；无法安全烘焙时落到
+        // 下方位图路径，保证与预览一致
+        if (isFinite(bake) && _canBakeRotation(srcPage)) {
+          var pw = srcPage.getWidth(), ph = srcPage.getHeight();
+          var outW = bake === 180 ? pw : ph;
+          var outH = bake === 180 ? ph : pw;
+          var matrix = _rotateMatrix(bake, pw, ph, outW, outH);
+          if (matrix) {
+            var emb = await pdfDoc.embedPage(srcPage, { left: 0, bottom: 0, right: pw, top: ph }, matrix);
+            return {
+              type: 'pdfPage',
+              embedded: emb,
+              width: outW,
+              height: outH,
+              ptW: outW,
+              ptH: outH
+            };
+          }
+        }
       }
     } catch (e) {
       console.warn('embedPage failed, falling back to raster:', e);
