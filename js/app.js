@@ -14,10 +14,16 @@ var _loadingBatchActive = false;
 var _printedMap = {};
 // 白边裁剪：R/G/B 均 >= 阈值视为白（严格小于才算内容）。
 // 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现），
-// 提到 252；纯白底 JPEG 噪点实测 255，配合 MIN_CONTENT_PIXELS 不受影响。
+// 提到 252；纯白底 JPEG 噪点实测 255，配合下面的过滤条件不受影响。
 var WHITE_THRESHOLD = 252;
-// 一行/列至少这么多非白像素才算「有内容」，抑制照片/JPEG 的孤立浅色噪点
+// 「确定是内容」的亮度阈值：比它更暗的像素无需厚度检验（黑字/黑线）
+var HARD_THRESHOLD = 200;
+// 一行/列至少这么多非白像素才算「有内容」，抑制孤立噪点
 var MIN_CONTENT_PIXELS = 2;
+// 浅灰内容（HARD..WHITE 之间）还需在垂直/水平方向连续这么多像素才算真内容：
+// 页面边缘的浅灰细线只有 1~2px 厚会被忽略（否则上下白边裁不掉），
+// 浅灰文字/印章至少十几 px，正常保留
+var MIN_CONTENT_THICKNESS = 4;
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
 
@@ -2009,38 +2015,65 @@ async function trimOneImage(dataUrl) {
       var ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0);
       try {
-        var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        var top = 0, bottom = canvas.height - 1, left = 0, right = canvas.width - 1;
+        var cw = canvas.width, ch = canvas.height;
+        var data = ctx.getImageData(0, 0, cw, ch).data;
         var threshold = WHITE_THRESHOLD;
+        var hard = Math.min(HARD_THRESHOLD, threshold);
         var minCount = MIN_CONTENT_PIXELS;
-        function rowBlank(y) {
-          var hit = 0;
-          for (var x = 0; x < canvas.width; x++) {
-            var i = (y * canvas.width + x) * 4;
-            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) {
-              if (++hit >= minCount) return false;
-            }
+        var thick = MIN_CONTENT_THICKNESS;
+
+        // 行统计：每行的「深色像素数」与「非白像素数」
+        var rowHard = new Uint32Array(ch), rowSoft = new Uint32Array(ch);
+        for (var y = 0; y < ch; y++) {
+          var dh = 0, ds = 0;
+          for (var x = 0; x < cw; x++) {
+            var i = (y * cw + x) * 4;
+            var mn = Math.min(data[i], data[i+1], data[i+2]);
+            if (mn < threshold) { ds++; if (mn < hard) dh++; }
+          }
+          rowHard[y] = dh; rowSoft[y] = ds;
+        }
+        // 索引 i 是否为「真内容」（forward=true 内容自 i 向下延伸，false 向上延伸）
+        function qualifies(cH, cS, i, forward) {
+          if (cH[i] >= minCount) return true;          // 深色内容：无需厚度检验
+          if (cS[i] < minCount) return false;
+          var s = forward ? i : Math.max(0, i - (thick - 1));
+          var e = forward ? i + thick : i + 1;
+          for (var k = s; k < e; k++) {
+            if (k >= cH.length) return false;
+            if (cH[k] < minCount && cS[k] < minCount) return false;
           }
           return true;
         }
-        function colBlank(x) {
-          var hit = 0;
-          for (var y = 0; y < canvas.height; y++) {
-            var i = (y * canvas.width + x) * 4;
-            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) {
-              if (++hit >= minCount) return false;
-            }
+
+        var top = -1;
+        for (var y3 = 0; y3 < ch; y3++) { if (qualifies(rowHard, rowSoft, y3, true)) { top = y3; break; } }
+        if (top < 0) { resolve({ url: dataUrl, box: null }); return; }  // 全白：无内容可裁
+        var bottom = -1;
+        for (var y4 = ch - 1; y4 >= 0; y4--) { if (qualifies(rowHard, rowSoft, y4, false)) { bottom = y4; break; } }
+        if (bottom < 0) { resolve({ url: dataUrl, box: null }); return; }
+
+        // 列统计：只扫 top..bottom 范围（与桌面端一致）
+        var colHard = new Uint32Array(cw), colSoft = new Uint32Array(cw);
+        for (var x = 0; x < cw; x++) {
+          var chh = 0, css = 0;
+          for (var yy = top; yy <= bottom; yy++) {
+            var ii = (yy * cw + x) * 4;
+            var mn2 = Math.min(data[ii], data[ii+1], data[ii+2]);
+            if (mn2 < threshold) { css++; if (mn2 < hard) chh++; }
           }
-          return true;
+          colHard[x] = chh; colSoft[x] = css;
         }
-        while (top < canvas.height && rowBlank(top)) top++;
-        while (bottom > top && rowBlank(bottom)) bottom--;
-        while (left < canvas.width && colBlank(left)) left++;
-        while (right > left && colBlank(right)) right--;
+        var left = -1;
+        for (var x1 = 0; x1 < cw; x1++) { if (qualifies(colHard, colSoft, x1, true)) { left = x1; break; } }
+        var right = -1;
+        for (var x2 = cw - 1; x2 >= 0; x2--) { if (qualifies(colHard, colSoft, x2, false)) { right = x2; break; } }
+        if (left < 0 || right < 0) { resolve({ url: dataUrl, box: null }); return; }
         if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
+
         var pad = 4;
-        top = Math.max(0, top - pad); bottom = Math.min(canvas.height - 1, bottom + pad);
-        left = Math.max(0, left - pad); right = Math.min(canvas.width - 1, right + pad);
+        top = Math.max(0, top - pad); bottom = Math.min(ch - 1, bottom + pad);
+        left = Math.max(0, left - pad); right = Math.min(cw - 1, right + pad);
         var w = right - left + 1, h = bottom - top + 1;
         var out = document.createElement('canvas');
         out.width = w; out.height = h;
