@@ -12,7 +12,12 @@ var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
 var _loadingBatchActive = false;
 var _printedMap = {};
-var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
+// 白边裁剪：R/G/B 均 >= 阈值视为白（严格小于才算内容）。
+// 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现），
+// 提到 252；纯白底 JPEG 噪点实测 255，配合 MIN_CONTENT_PIXELS 不受影响。
+var WHITE_THRESHOLD = 252;
+// 一行/列至少这么多非白像素才算「有内容」，抑制照片/JPEG 的孤立浅色噪点
+var MIN_CONTENT_PIXELS = 2;
 
 function nextFrame() { return new Promise(function(r) { requestAnimationFrame(function() { requestAnimationFrame(r); }); }); }
 
@@ -2007,17 +2012,24 @@ async function trimOneImage(dataUrl) {
         var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         var top = 0, bottom = canvas.height - 1, left = 0, right = canvas.width - 1;
         var threshold = WHITE_THRESHOLD;
+        var minCount = MIN_CONTENT_PIXELS;
         function rowBlank(y) {
+          var hit = 0;
           for (var x = 0; x < canvas.width; x++) {
             var i = (y * canvas.width + x) * 4;
-            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) return false;
+            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) {
+              if (++hit >= minCount) return false;
+            }
           }
           return true;
         }
         function colBlank(x) {
+          var hit = 0;
           for (var y = 0; y < canvas.height; y++) {
             var i = (y * canvas.width + x) * 4;
-            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) return false;
+            if (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold) {
+              if (++hit >= minCount) return false;
+            }
           }
           return true;
         }
