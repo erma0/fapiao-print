@@ -16,7 +16,14 @@ var _printedMap = {};
 // 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现）；
 // 取 253 —— 电子发票白底是纯白（255），把 253/254 这类「抗锯齿 + JPEG 淡出」的
 // 内容边缘也算作内容，避免印章/文字边缘被裁掉一点点。
+// 白边裁剪分方向阈值：
+// - 左右方向（列）用 WHITE_THRESHOLD=253（宽松）：发票右侧常有「下载次数：1」
+//   这类 250 上下的浅灰细字（实测 245 阈值会把它们裁掉一小半），253 保护浅色小字
+// - 上下方向（行）用 EDGE_THRESHOLD=245（严格）：页面顶/底的浅灰渐变、扫描
+//   阴影是 R=G=B≈252 的纯灰，min 通道仍是 252，宽松阈值会把它们当内容导致
+//   上下白边裁不干净；而红章是彩色的（G/B 通道远低），min 通道很低，照样保留
 var WHITE_THRESHOLD = 253;
+var EDGE_THRESHOLD = 245;
 // 一行/列至少这么多非白像素才算「有内容」，抑制照片/JPEG 的孤立浅色噪点
 var MIN_CONTENT_PIXELS = 2;
 
@@ -2013,16 +2020,18 @@ async function trimOneImage(dataUrl) {
       try {
         var cw = canvas.width, ch = canvas.height;
         var data = ctx.getImageData(0, 0, cw, ch).data;
-        var threshold = WHITE_THRESHOLD;
+        var threshold = WHITE_THRESHOLD;                 // 左右方向（列）
+        var edgeThr = Math.min(EDGE_THRESHOLD, threshold); // 上下方向（行）
         var minCount = MIN_CONTENT_PIXELS;
 
-        // 行/列「非白」像素计数（一次遍历，避免四边重复扫描）
+        // 行「非白」像素计数（上下方向：用严格的 EDGE_THRESHOLD，
+        // 只认彩色/深色内容，忽略页面顶/底的浅灰渐变 —— R=G=B≈252 不算）
         var rowSoft = new Uint32Array(ch);
         for (var y = 0; y < ch; y++) {
           var ds = 0;
           for (var x = 0; x < cw; x++) {
             var i = (y * cw + x) * 4;
-            if (Math.min(data[i], data[i+1], data[i+2]) < threshold) ds++;
+            if (Math.min(data[i], data[i+1], data[i+2]) < edgeThr) ds++;
           }
           rowSoft[y] = ds;
         }
@@ -2033,7 +2042,8 @@ async function trimOneImage(dataUrl) {
         for (var y2 = ch - 1; y2 >= 0; y2--) { if (rowSoft[y2] >= minCount) { bottom = y2; break; } }
         if (bottom < 0) { resolve({ url: dataUrl, box: null }); return; }
 
-        // 列统计限定在 top..bottom 范围（与桌面端一致）
+        // 列统计限定在 top..bottom 范围（与桌面端一致）；左右方向用宽松的
+        // WHITE_THRESHOLD（保护「下载次数」这类浅色小字）
         var colSoft = new Uint32Array(cw);
         for (var x1 = 0; x1 < cw; x1++) {
           var cs = 0;
