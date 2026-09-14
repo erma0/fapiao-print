@@ -292,11 +292,14 @@ async function _getOrLoadSrcPdf(fileObj) {
 // ptW/ptH: 实际绘制尺寸（点）。仅在裁剪时给出，裁剪后与 srcPageWidthPt 不同。
 function _trimBBoxPt(srcPage, fileObj, box) {
   // 预览位图 → 源页面用户空间（PDF 点）的裁剪框换算。
-  // 只有当预览渲染范围与 MediaBox 完全对应时才成立，否则返回 null 交由位图路径。
+  // PDF.js 预览渲染的是 CropBox（view）区域，基准必须用 CropBox：
+  // 用 MediaBox 会在「CropBox 与 MediaBox 等尺寸但原点偏移」时整体错位，
+  // 且会错杀 CropBox < MediaBox 的页面（其实可正确换算）。
+  // 只有当预览渲染范围与 CropBox 完全对应时才成立，否则返回 null 交由位图路径。
   var dpi = fileObj.renderDpi || 300;
-  var mb;
-  try { mb = srcPage.getMediaBox(); } catch (e) { return null; }
-  if (!mb || !mb.width || !mb.height) return null;
+  var cb;
+  try { cb = srcPage.getCropBox(); } catch (e) { return null; }
+  if (!cb || !cb.width || !cb.height) return null;
   // getRotation() 返回 Rotation 对象 { type, angle }（非数值），radians 需换算
   var rot;
   try { rot = srcPage.getRotation(); } catch (e) { return null; }
@@ -304,14 +307,15 @@ function _trimBBoxPt(srcPage, fileObj, box) {
   if (typeof rot === 'number') angle = rot;
   else if (rot) angle = rot.type === 'radians' ? (rot.angle || 0) * 180 / Math.PI : (rot.angle || 0);
   if (angle % 360 !== 0) return null; // /Rotate 页面预览为旋转后视图，坐标不可直接换算
-  if (Math.abs(mb.width - fileObj.srcPageWidthPt) > 1.5) return null;  // CropBox ≠ MediaBox
-  if (Math.abs(mb.height - fileObj.srcPageHeightPt) > 1.5) return null;
+  // 预览按 CropBox 渲染，宽高对不上（如 /Rotate 导致的宽高互换）说明不可直接换算
+  if (Math.abs(cb.width - fileObj.srcPageWidthPt) > 1.5) return null;
+  if (Math.abs(cb.height - fileObj.srcPageHeightPt) > 1.5) return null;
   var ptPerPx = 72 / dpi;
   return {
-    left: mb.x + box.x * ptPerPx,
-    right: mb.x + (box.x + box.w) * ptPerPx,
-    bottom: mb.y + mb.height - (box.y + box.h) * ptPerPx,
-    top: mb.y + mb.height - box.y * ptPerPx
+    left: cb.x + box.x * ptPerPx,
+    right: cb.x + (box.x + box.w) * ptPerPx,
+    bottom: cb.y + cb.height - (box.y + box.h) * ptPerPx,
+    top: cb.y + cb.height - box.y * ptPerPx
   };
 }
 
