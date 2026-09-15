@@ -723,26 +723,33 @@ function resolveInvoiceType(f) {
   return '发票';
 }
 
-// 专票 / 普票 chip：紧贴发票号码行展示，只有能判出专普时才渲染
-// （「电子发票」这类无专普信息的原始串不占用 chip；缩略图徽章仍留给文件格式）
-function vatBadgeHtml(f) {
-  var t = normalizeInvoiceType(f.invoiceType);
-  if (t !== '专票' && t !== '普票') return '';
-  var cls = t === '专票' ? ' special' : '';
-  return '<span class="vat-badge' + cls + '" title="识别到的票种：' + escHtml(f.invoiceType) + '">' + escHtml(t) + '</span>';
+// 统一票种 chip：所有发票类型共用同一形状、按类型配色
+// （专票金 / 普票灰 / 通行费青 / 车票蓝 / 非税紫）；无类型信息（兜底「发票」）
+// 与无法归类的原始串（如「电子发票」）不渲染。缩略图徽章仍留给文件格式
+function typeChipHtml(f) {
+  var t = resolveInvoiceType(f);
+  if (!t || t === '发票') return '';
+  var cls = '', label = t, raw = '';
+  if (t === '专票') { cls = ' special'; raw = f.invoiceType || ''; }
+  else if (t === '普票') { raw = f.invoiceType || ''; }
+  else if (t === '通行费发票') { cls = ' toll'; label = '通行费'; raw = f.invoiceType || ''; }
+  else if (t === '非税票据') { cls = ' nontax'; label = '非税'; }
+  else if (f._isTicket) { cls = ' ticket'; } // 车票：sellerName 存标签全文
+  else return '';
+  return '<span class="vat-badge' + cls + '" title="识别到的票种：' + escHtml(raw || t) + '">' + escHtml(label) + '</span>';
 }
 
-// 销售方徽章（列表视图额外挂上税号 tooltip）
+// 销售方徽章：恒为灰色（类型信息全部由票种 chip 表达，不再靠变色）；
+// 车票不渲染——其 sellerName 存的是车票标签，由票种 chip 展示
 function sellerBadgeHtml(f, withTaxId) {
-  if (!f.sellerName) return '';
-  var cls = f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge';
+  if (!f.sellerName || f._isTicket) return '';
   var title = withTaxId ? ' title="' + escHtml(f.sellerCreditCode || f.sellerName) + '"' : '';
-  return '<span class="' + cls + '"' + title + '>' + escHtml(f.sellerName) + '</span>';
+  return '<span class="seller-badge"' + title + '>' + escHtml(f.sellerName) + '</span>';
 }
 
 // 列表项销售方行内容 = 票种 chip + 销售方徽章（两者皆空返回空串，整行不渲染）
 function sellerRowHtml(f, withTaxId) {
-  return vatBadgeHtml(f) + sellerBadgeHtml(f, withTaxId);
+  return typeChipHtml(f) + sellerBadgeHtml(f, withTaxId);
 }
 
 // 文件格式标签：jpeg 统一显示 jpg（缩略图徽章用）
@@ -1625,16 +1632,14 @@ function openInvModal(i) {
   var _fwm = _fw + ';font-family:monospace';
   var mRF = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl end">' + html + '</div></div>'; };
   var mRA = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl">' + html + '</div></div>'; };
-  // 顶部信息条：文件名 + 票种 chip + 状态标记 + 格式/大小
+  // 顶部信息条：文件名 + 统一票种 chip + 状态标记 + 格式/大小（类型明细悬停 chip 可见，不再单设一行）
   var headMarks = (f._printed ? '<span style="font-size:11px;color:var(--success);flex-shrink:0">✓ 已打印</span>' : '') +
                   (f._dup ? '<span style="font-size:11px;color:var(--danger);flex-shrink:0">⚠ 重复</span>' : '');
   var headMeta = escHtml(fileFormatLabel(f).toUpperCase()) + ' · ' + fmtSize(f.size);
-  // 发票类型：归一化短标签 + 原始识别串（如「电子发票(普通发票)」）
-  var typeHint = f.invoiceType ? '<span style="font-size:11px;color:var(--text-muted);margin-left:6px">' + escHtml(f.invoiceType) + '</span>' : '';
   document.getElementById('invModalBody').innerHTML =
     '<div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px">' +
       '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(f.name) + '">\uD83D\uDCC4 ' + escHtml(f.name) + '</span>' +
-      vatBadgeHtml(f) + headMarks +
+      typeChipHtml(f) + headMarks +
       '<span style="font-size:11px;color:var(--text-muted);flex-shrink:0">' + headMeta + '</span>' +
     '</div>' +
     mRF('排版份数', '<button class="btn btn-sm btn-icon" onclick="changeModalCopies(-1)">\u2212</button><input type="number" id="mCopies" value="' + f.copies + '" min="1" max="99" style="width:52px;text-align:center;flex:none"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(1)">+</button>') +
@@ -1642,7 +1647,6 @@ function openInvModal(i) {
     mRF('含税价', '<span style="font-size:14px;font-weight:600;color:var(--success);flex-shrink:0">\u00A5</span><input type="number" id="mAmountTax" value="' + (f.amountTax || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
     mRF('不含税', '<span style="font-size:14px;font-weight:600;color:var(--text-muted);flex-shrink:0">\u00A5</span><input type="number" id="mAmountNoTax" value="' + (f.amountNoTax || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
     mRF('税额', '<span style="font-size:14px;font-weight:600;color:var(--warning,orange);flex-shrink:0">\u00A5</span><input type="number" id="mTaxAmount" value="' + (f.taxAmount || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
-    mRA('发票类型', '<span style="font-size:12px">' + escHtml(resolveInvoiceType(f)) + '</span>' + typeHint) +
     mRA('发票号码', '<input type="text" id="mInvoiceNo" value="' + escHtml(f.invoiceNo || '') + '" placeholder="自动识别" class="mono-input">') +
     mRA('开票日期', '<input type="text" id="mInvoiceDate" value="' + escHtml(f.invoiceDate || '') + '" placeholder="自动识别">') +
     mRA('购买方', '<input type="text" id="mBuyer" value="' + escHtml(f.buyerName || '') + '" placeholder="自动识别">') +
