@@ -61,7 +61,7 @@ var S = {
   filterCollapsed: true,
   fileView: 'list',    // 'list' | 'grid'
   feat: {
-    cutline: true, number: false, border: false, trimWhite: false,
+    cutline: true, number: false, border: false, trimWhite: false, trimPad: 3,
     watermark: false, pageNum: false,
     printDate: false, footer: false,
     pdfTextEnabled: true,
@@ -2008,7 +2008,33 @@ function changeCopies(d) { var e = document.getElementById('copies'); e.value = 
 // Trim whitespace — client-side canvas implementation
 // 返回 { url, box }：box 为裁剪后内容在原图中的像素范围（供 PDF 矢量裁切换算），
 // 未发生裁剪（全白/失败）时 box 为 null，调用方按原图处理。
-async function trimOneImage(dataUrl) {
+/** 裁剪留边（px）：默认值与上限，与桌面端 TRIM_PAD_DEFAULT / TRIM_PAD_MAX 一致 */
+var TRIM_PAD_DEFAULT = 3;
+var TRIM_PAD_MAX = 60;
+
+/** 当前裁剪留边（px）：唯一数据源是 S.feat.trimPad，非法值回退默认 */
+function getTrimPad() {
+  var n = parseInt(S.feat.trimPad, 10);
+  if (isNaN(n)) n = TRIM_PAD_DEFAULT;
+  return Math.max(0, Math.min(TRIM_PAD_MAX, n));
+}
+
+/** 设置裁剪留边（px，0–TRIM_PAD_MAX）：改变后需清空白边缓存并按新值重算 */
+function setTrimPad(v) {
+  var n = parseInt(v, 10);
+  if (isNaN(n)) n = TRIM_PAD_DEFAULT;
+  n = Math.max(0, Math.min(TRIM_PAD_MAX, n));
+  document.getElementById('trimPad').value = n;
+  if (n === S.feat.trimPad) return;
+  S.feat.trimPad = n;
+  S.files.forEach(function(f) {
+    f.trimmedUrl = null; f.trimmedBox = null; f.trimmedW = 0; f.trimmedH = 0;
+  });
+  if (S.feat.trimWhite) processTrim(); else updatePreview();
+  saveSettings();
+}
+
+async function trimOneImage(dataUrl, pad) {
   return new Promise(function(resolve) {
     var img = new Image();
     img.onload = function() {
@@ -2066,7 +2092,8 @@ async function trimOneImage(dataUrl) {
         // 四边统一 3px（≈0.25mm）—— 检测已按真实内容边界（列全高 + 左右宽松阈值
         // 保护浅字），无需按方向加大兜底。padR 曾单独设 28px 兜「下载次数」，
         // 但那会让没有该字段的发票白白多留 2.4mm 白边（用户实测反馈）。
-        var padL = 3, padT = 3, padR = 3, padB = 3;
+        var _p = (typeof pad === 'number' && isFinite(pad)) ? Math.max(0, Math.min(TRIM_PAD_MAX, Math.floor(pad))) : TRIM_PAD_DEFAULT;
+        var padL = _p, padT = _p, padR = _p, padB = _p;
         top = Math.max(0, top - padT); bottom = Math.min(ch - 1, bottom + padB);
         left = Math.max(0, left - padL); right = Math.min(cw - 1, right + padR);
         var w = right - left + 1, h = bottom - top + 1;
@@ -2095,7 +2122,7 @@ async function processTrim() {
     for (var i = 0; i < S.files.length; i++) {
       var f = S.files[i];
       if (f.previewUrl && !f.trimmedUrl) {
-        var trimmed = await trimOneImage(f.previewUrl);
+        var trimmed = await trimOneImage(f.previewUrl, getTrimPad());
         if (!trimmed || !trimmed.url) continue;
         f.trimmedUrl = trimmed.url;
         f.trimmedBox = trimmed.box;
@@ -2324,7 +2351,7 @@ function saveSettings() {
     copies: document.getElementById('copies').value,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','watermark','pageNum','printDate','footer','customFM','slotAdjMemory','copyBadge'];
+  var featKeys = ['cutline','number','border','trimWhite','trimPad','watermark','pageNum','printDate','footer','customFM','slotAdjMemory','copyBadge'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
@@ -2491,10 +2518,10 @@ function resetSettings(scope) {
   // scope='layout'：仅恢复「排版」页（纸张/行列/边距/间距/水印等），不动偏好（同步桌面版 #33）
   var layoutOnly = scope === 'layout';
   if (!confirm(layoutOnly ? '仅恢复「排版」页默认设置（纸张/行列/边距/间距/水印等），不影响主题等偏好？' : '确认恢复所有默认设置？')) return;
-  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false };
+  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, trimPad: 3, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false };
   S.layout = { cols: 1, rows: 1 };
   if (layoutOnly) {
-    ['cutline','number','border','trimWhite','watermark','copyBadge'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
+    ['cutline','number','border','trimWhite','trimPad','watermark','copyBadge'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
   } else {
     S.feat = featDefaults;
   }
@@ -2528,6 +2555,7 @@ function resetSettings(scope) {
   document.getElementById('toggleCopyBadge').classList.remove('on');
   document.getElementById('toggleBorder').classList.remove('on');
   document.getElementById('toggleTrimWhite').classList.remove('on');
+  document.getElementById('trimPad').value = 3;
   document.getElementById('toggleWatermark').classList.remove('on');
   if (layoutOnly) {
     syncLayoutHighlight();
