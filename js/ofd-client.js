@@ -640,6 +640,27 @@ function _extractFromCustomTag(customTag, allTexts) {
   return info;
 }
 
+/**
+ * 发票类型判定（OFD 文本层）。
+ * 逐条文本匹配，避免跨文本拼接出来的假关键词；「普通」优先于「专用」——
+ * 票面其它位置出现「专用」字样或文字层噪声时，不会被误判成专票。
+ * @param {string[]} texts
+ * @returns {'增值税普通发票'|'增值税专用发票'|'电子发票'|''}
+ */
+function _detectInvoiceTypeTexts(texts) {
+  var general = false, special = false, electronic = false;
+  for (var i = 0; i < texts.length; i++) {
+    var s = String(texts[i] || '').replace(/\s/g, '');
+    if (s.indexOf('普通发票') >= 0 || s.indexOf('增值税普通') >= 0 || s.indexOf('电子普通') >= 0) general = true;
+    if (s.indexOf('专用发票') >= 0 || s.indexOf('增值税专用') >= 0) special = true;
+    if (s.indexOf('电子发票') >= 0) electronic = true;
+  }
+  if (general) return '增值税普通发票';
+  if (special) return '增值税专用发票';
+  if (electronic) return '电子发票';
+  return '';
+}
+
 function _extractInvoiceFromText(texts) {
   var info = {};
   var section = '';
@@ -746,12 +767,10 @@ function _extractInvoiceFromText(texts) {
         }
       }
     }
-    if (!info.invoiceType) {
-      if (t.indexOf('增值税专用') >= 0) info.invoiceType = '增值税专用发票';
-      else if (t.indexOf('增值税普通') >= 0 || t.indexOf('增值税电子普通') >= 0) info.invoiceType = '增值税普通发票';
-      else if (t.indexOf('电子发票') >= 0) info.invoiceType = '电子发票';
-    }
   }
+
+  // 发票类型：在合并后的文本序列上判定（连续单字已拼接，拆字票同样可识别）
+  if (!info.invoiceType) info.invoiceType = _detectInvoiceTypeTexts(compositeTexts);
 
   if (info.amountTax != null && info.amountNoTax == null) {
     info.amountNoTax = info.amountTax;
@@ -1063,22 +1082,12 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   if (!invoiceInfo.taxAmount && ctInfo.taxAmount) invoiceInfo.taxAmount = ctInfo.taxAmount;
   if (!invoiceInfo.amountTax && ctInfo.amountTax) invoiceInfo.amountTax = ctInfo.amountTax;
 
-  // Detect invoice type from template texts
+  // 发票类型：模板层 + 数据层文本合并判定（「普通」优先；逐条未命中时用拼接串兜底拆字票）
   if (!invoiceInfo.invoiceType) {
-    for (var tti = 0; tti < tplTexts.length; tti++) {
-      var tt = tplTexts[tti].text || '';
-      if (tt.indexOf('增值税专用') >= 0) { invoiceInfo.invoiceType = '增值税专用发票'; break; }
-      if (tt.indexOf('增值税普通') >= 0 || tt.indexOf('增值税电子普通') >= 0) { invoiceInfo.invoiceType = '增值税普通发票'; break; }
-      if (tt.indexOf('电子发票') >= 0) { invoiceInfo.invoiceType = '电子发票'; break; }
-    }
-  }
-  if (!invoiceInfo.invoiceType) {
-    for (var pti = 0; pti < pageTexts.length; pti++) {
-      var pt = pageTexts[pti].text || '';
-      if (pt.indexOf('增值税专用') >= 0) { invoiceInfo.invoiceType = '增值税专用发票'; break; }
-      if (pt.indexOf('增值税普通') >= 0 || pt.indexOf('增值税电子普通') >= 0) { invoiceInfo.invoiceType = '增值税普通发票'; break; }
-      if (pt.indexOf('电子发票') >= 0) { invoiceInfo.invoiceType = '电子发票'; break; }
-    }
+    var typeTexts = tplTexts.map(function(t) { return t.text || ''; })
+      .concat(pageTexts.map(function(t) { return t.text || ''; }));
+    typeTexts.push(typeTexts.join(''));
+    invoiceInfo.invoiceType = _detectInvoiceTypeTexts(typeTexts);
   }
 
   // Text-based fallback extraction when no CustomData or CustomTag

@@ -699,6 +699,37 @@ async function handleDrop(e) {
 var TYPE_FILTER_LABELS = { vat: '发票', ticket: '车票', toll: '通行费', nontax: '财政' };
 var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片', xml: 'XML' };
 
+// 发票类型归一化：把各来源的原始类型串收敛成可比较的短标签
+// 「电子发票(普通发票)」「增值税普通发票」「普通发票」→ 普票；含「专用」→ 专票
+function normalizeInvoiceType(raw) {
+  if (!raw) return '';
+  var s = String(raw).replace(/\s/g, '');
+  if (s.indexOf('专用') >= 0) return '专票';
+  if (s.indexOf('普通') >= 0) return '普票';
+  return s;
+}
+
+// 「发票类型」单一真源：分类标记（通行费 / 车票 / 非税票据）优先，其次结构化类型
+// （XML / OFD 解析、PDF 文字层识别结果），最后兜底「发票」。
+// 分类标记优先是必须的：通行费发票、车票也有专普属性，但它们按类别单独排版，
+// 若让专普信息抢先，通行费发票会从「通行费发票」退化成「普票」。
+// 不再写死「增值税发票」—— 那会让普通发票在汇总表里看起来像专票（issue #35）
+function resolveInvoiceType(f) {
+  if (!f) return '';
+  if (f._isToll) return '通行费发票';
+  if (f._isTicket) return f.sellerName || '车票'; // sellerName 存车票标签
+  if (f._ocrText && /非税/.test(f._ocrText)) return '非税票据';
+  if (f.invoiceType) return normalizeInvoiceType(f.invoiceType);
+  return '发票';
+}
+
+// 列表缩略图徽章文字：有专普信息（专票/普票）就显示它，否则显示文件格式。
+// 通行费 / 车票按类别单独排版、徽章由销售方标签表达，此处不抢（缩略图仅 40px 宽）
+function invoiceBadgeText(f) {
+  if (f.invoiceType && !f._isToll && !f._isTicket) return normalizeInvoiceType(f.invoiceType);
+  return f.type === 'jpeg' ? 'jpg' : String(f.type || '');
+}
+
 // 筛选区折叠：默认收起节省侧边栏垂直空间，摘要行仍实时反映激活的筛选
 function toggleFilterPanel() {
   S.filterCollapsed = !S.filterCollapsed;
@@ -984,7 +1015,7 @@ function renderFileList() {
       var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
       var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
       var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
-      var gtype = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : (f.type === 'jpeg' ? 'jpg' : escHtml(f.type));
+      var gtype = escHtml(invoiceBadgeText(f));
       var gacts = '';
       if (!f._loading) {
         gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -1010,8 +1041,7 @@ function renderFileList() {
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
-    var safeType = escHtml(f.type === 'jpeg' ? 'jpg' : f.type);
-    var typeBadgeText = f._xmlInvoice && f.invoiceType ? escHtml(f.invoiceType.replace(/^[^(]*\(/, '').replace(/\)$/, '') || f.invoiceType) : safeType;
+    var typeBadgeText = escHtml(invoiceBadgeText(f));
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
@@ -1176,7 +1206,7 @@ function ctxCopyInfo() {
   function add(label, val) {
     if (val !== undefined && val !== null && String(val).trim() !== '') lines.push(label + '：' + String(val).trim());
   }
-  add('发票类型', f.invoiceType);
+  add('发票类型', normalizeInvoiceType(f.invoiceType));
   add('发票号码', f.invoiceNo);
   add('开票日期', f.invoiceDate);
   add('购买方', f.buyerName);
@@ -2893,10 +2923,7 @@ function getSummaryCellValue(fileObj, field, idx) {
   switch (field.key) {
     case 'seq': return String(idx + 1);
     case 'invoiceType':
-      if (fileObj.invoiceType) return fileObj.invoiceType;
-      if (fileObj._isToll) return '通行费发票';
-      if (fileObj._isTicket) return fileObj.sellerName || '车票'; // sellerName holds ticket label
-      return '增值税发票';
+      return resolveInvoiceType(fileObj);
     case 'amountTax': return fileObj.amountTax > 0 ? fileObj.amountTax.toFixed(2) : '';
     case 'amountNoTax': return fileObj.amountNoTax > 0 ? fileObj.amountNoTax.toFixed(2) : '';
     case 'taxAmount': return fileObj.taxAmount > 0 ? fileObj.taxAmount.toFixed(2) : '';

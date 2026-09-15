@@ -449,6 +449,7 @@ function applyPdfTextResult(fileObj, pdfTextResult) {
     fileObj._isTicket = info.isTicket || false;
     fileObj._isNonTax = info.isNonTax || false;
     fileObj._isToll = info.isToll || false;
+    if (info.invoiceType && !fileObj.invoiceType) fileObj.invoiceType = info.invoiceType;
 
     // Only fill empty fields — structured extraction priority
     if (info.invoiceNo && !fileObj.invoiceNo) fileObj.invoiceNo = info.invoiceNo;
@@ -2609,6 +2610,24 @@ function _detectInvoiceType(words, imgW, imgH) {
 }
 
 /**
+ * 增值税发票 专票/普票 判定。
+ * 票头标题区（ny < 0.18）优先，全文兜底；「普通」优先于「专用」——
+ * 票面其它位置出现「专用」字样或文字层噪声时，不会把普票误判成专票。
+ * @returns {'专票'|'普票'|''}
+ */
+function _detectVatSubtype(words) {
+  function pick(text) {
+    var s = (text || '').replace(/\s/g, '');
+    if (/普通发票|增值税普通|电子普通/.test(s)) return '普票';
+    if (/专用发票|增值税专用/.test(s)) return '专票';
+    return '';
+  }
+  var head = words.filter(function(w) { return w.ny < 0.18; })
+    .map(function(w) { return w.normText; }).join('');
+  return pick(head) || pick(words.map(function(w) { return w.normText; }).join(''));
+}
+
+/**
  * Extract seller info using coordinates.
  * Strategy: find "销售方信息" or "名称:" in right half → grab name + credit code.
  */
@@ -2813,13 +2832,16 @@ function extractByCoordinates(ocrResult) {
 
   // Detect invoice type
   var invType = _detectInvoiceType(words, imgW, imgH);
+  // 专票/普票仅在增值税发票路径下判定（车票/通行费/非税各走自己的类型标记）
+  var vatSubtype = invType === 'vat' ? _detectVatSubtype(words) : '';
   var isTicket = invType === 'ticket';
   var isToll = invType === 'toll';
   var sellerName = textInfo.sellerName || '';
   var sellerCreditCode = textInfo.sellerCreditCode || '';
   var amountTax = 0, amountNoTax = 0, taxAmount = 0;
 
-  console.log('[坐标提取] 发票类型:', invType, '字数:', fullText.length, '词数:', words.length,
+  console.log('[坐标提取] 发票类型:', invType + (vatSubtype ? '/' + vatSubtype : ''),
+    '字数:', fullText.length, '词数:', words.length,
     '文本提取:', { invoiceNo: invoiceNo || '(空)', invoiceDate: invoiceDate || '(空)',
     buyerName: buyerName || '(空)', sellerName: sellerName || '(空)' });
 
@@ -3686,6 +3708,7 @@ function extractByCoordinates(ocrResult) {
            sellerName: sellerName, sellerCreditCode: sellerCreditCode,
            invoiceNo: invoiceNo, invoiceDate: invoiceDate,
            buyerName: buyerName, buyerCreditCode: buyerCreditCode,
+           invoiceType: vatSubtype,
            _ocrText: fullText, isTicket: false, isNonTax: false, isToll: isToll };
 }
 

@@ -46,6 +46,7 @@ var __xmlClient = (function() {
     // Track LabelName values from different parent contexts
     var einvoiceTypeLabel = null;
     var generalOrSpecialLabel = null;
+    var generalOrSpecialCode = null;
 
     // --- InvoiceNumber ---
     var invoiceNoEl = _findFirstText(doc, 'InvoiceNumber');
@@ -98,6 +99,7 @@ var __xmlClient = (function() {
     // --- Invoice type: collect LabelName from different parent contexts ---
     // EInvoiceType/LabelName → einvoice_type_label
     // GeneralOrSpecialVAT/LabelName → general_or_special_label
+    // GeneralOrSpecialVAT/LabelCode → 名称缺失时的兜底（01=专票、02=普票）
     var einvoiceTypeEls = doc.getElementsByTagName('EInvoiceType');
     for (var i = 0; i < einvoiceTypeEls.length; i++) {
       var labelEl = _getChildText(einvoiceTypeEls[i], 'LabelName');
@@ -112,7 +114,13 @@ var __xmlClient = (function() {
       if (labelEl2 && !generalOrSpecialLabel) {
         generalOrSpecialLabel = labelEl2;
       }
+      var codeEl = _getChildText(generalOrSpecialEls[j], 'LabelCode');
+      if (codeEl && !generalOrSpecialCode) {
+        generalOrSpecialCode = codeEl;
+      }
     }
+    if (!generalOrSpecialLabel && generalOrSpecialCode === '01') generalOrSpecialLabel = '增值税专用发票';
+    if (!generalOrSpecialLabel && generalOrSpecialCode === '02') generalOrSpecialLabel = '普通发票';
 
     // Compose invoice_type: "电子发票(普通发票)" or "电子发票(增值税专用发票)"
     if (generalOrSpecialLabel) {
