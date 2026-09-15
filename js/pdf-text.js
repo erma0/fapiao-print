@@ -651,6 +651,22 @@ function _cleanName(raw) {
 }
 
 /**
+ * 坐标法与跨行法结果择优：
+ * - 坐标值含冒号 → 标签残留（脏值），用跨行候选；
+ * - 两值互为子串 → 坐标法截断/丢字，取更长的跨行候选；
+ * - 其余（同名/完全不同名）保持坐标值 —— 跨行在乱序文本上可能配错侧，不盲目覆盖。
+ */
+function _betterCoordName(coord, cross) {
+  if (!coord) return cross || '';
+  if (!cross) return coord;
+  if (/[:：]/.test(coord)) return cross;
+  if (coord !== cross && (cross.indexOf(coord) >= 0 || coord.indexOf(cross) >= 0)) {
+    return cross.length > coord.length ? cross : coord;
+  }
+  return coord;
+}
+
+/**
  * Extract buyer/seller names when label and value are on separate lines.
  * This handles PDFs where text extraction puts labels and values in different blocks.
  * Strategy: Find "名称：" labels, then look at the NEXT non-empty line for the actual value.
@@ -1641,6 +1657,11 @@ function _extractByText(fullText, words) {
   }
 
   // --- Buyer/Seller names ---
+  // Priority 0: Cross-line candidates（文本顺序，对拆字 PDF 稳定）。
+  // 坐标邻近提取在拆字 PDF 上用近似宽度取值，易截断/混入标签冒号，
+  // 先预跑跨行候选，坐标法跑完后做合成（见 _betterCoordName）。
+  var crossNames = {};
+  _extractNamesCrossLine(text, crossNames);
   // Priority 1: Explicit labels "购买方名称：" / "销售方名称：" (same line)
   // Also handles non-tax invoices: "交款人：" for buyer
   var buyerLabelMatch = text.match(/(?:购\s*买\s*方(?:信息)?名\s*称|交\s*款\s*人\s*[:：])\s*([^\n]+)/);
@@ -1658,6 +1679,10 @@ function _extractByText(fullText, words) {
   if ((!result.buyerName || !result.sellerName) && words && words.length > 0) {
     _extractNamesByCoords(words, result);
   }
+  // 合成：坐标法残缺值（标签冒号残留 / 截断成跨行候选的子串）用跨行候选修复；
+  // 干净的坐标值保持不变（跨行在乱序文本上可能配错侧，不盲目覆盖）
+  result.buyerName = _betterCoordName(result.buyerName, crossNames.buyerName);
+  result.sellerName = _betterCoordName(result.sellerName, crossNames.sellerName);
   // Priority 1c: Cross-line format (label and value on separate lines)
   // Only if coordinate method didn't find both names
   if (!result.buyerName || !result.sellerName) {
