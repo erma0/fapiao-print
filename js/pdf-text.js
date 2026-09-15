@@ -2611,11 +2611,13 @@ function _detectInvoiceType(words, imgW, imgH) {
 
 /**
  * 增值税发票 专票/普票 判定。
- * 票头标题区（ny < 0.18）优先，全文兜底；「普通」优先于「专用」——
- * 票面其它位置出现「专用」字样或文字层噪声时，不会把普票误判成专票。
+ * 三层兜底：票头标题区（ny < 0.18）→ 全文原始串（内容流顺序，标题连续）→ 词序拼接。
+ * 「普通」优先于「专用」——票面其它位置出现「专用」字样或文字层噪声时，不会把普票误判成专票。
+ * fullText 必传：部分 PDF 的文字层坐标失效（整页并成一行、词按 x 重排），
+ * 按 words 拼接会把连续标题打散，只有内容流顺序的原始串能保住连续关键词。
  * @returns {'专票'|'普票'|''}
  */
-function _detectVatSubtype(words) {
+function _detectVatSubtype(words, fullText) {
   function pick(text) {
     var s = (text || '').replace(/\s/g, '');
     if (/普通发票|增值税普通|电子普通/.test(s)) return '普票';
@@ -2624,7 +2626,7 @@ function _detectVatSubtype(words) {
   }
   var head = words.filter(function(w) { return w.ny < 0.18; })
     .map(function(w) { return w.normText; }).join('');
-  return pick(head) || pick(words.map(function(w) { return w.normText; }).join(''));
+  return pick(head) || pick(fullText) || pick(words.map(function(w) { return w.normText; }).join(''));
 }
 
 /**
@@ -2833,7 +2835,7 @@ function extractByCoordinates(ocrResult) {
   // Detect invoice type
   var invType = _detectInvoiceType(words, imgW, imgH);
   // 专票/普票仅在增值税发票路径下判定（车票/通行费/非税各走自己的类型标记）
-  var vatSubtype = invType === 'vat' ? _detectVatSubtype(words) : '';
+  var vatSubtype = invType === 'vat' ? _detectVatSubtype(words, fullText) : '';
   var isTicket = invType === 'ticket';
   var isToll = invType === 'toll';
   var sellerName = textInfo.sellerName || '';
