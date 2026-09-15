@@ -103,7 +103,7 @@
         <div class="sec">
           <div class="sec-title">📄 纸张设置</div>
           <div class="row"><label class="lbl">规格</label><div class="ctrl"><select id="paperSize" onchange="onPaperChange()"><option value="A4">A4 (210×297mm)</option><option value="A5">A5 (148×210mm)</option><option value="B5">B5 (176×250mm)</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">自定义</option></select></div></div>
-          <div id="customPaperRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="number" id="customW" value="210" min="50" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="50" style="width:60px" onchange="updatePreview()"></div></div>
+          <div id="customPaperRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl"><input type="number" id="customW" value="210" min="50" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="50" style="width:60px" onchange="updatePreview()"></div></div>
           <div class="row"><label class="lbl">方向</label><div class="ctrl"><select id="orientation" onchange="updatePreview();syncLayoutHighlight()"><option value="portrait">纵向</option><option value="landscape" selected>横向</option></select></div></div>
         </div>
         <div class="sec">
@@ -118,7 +118,7 @@
           </div>
           <div class="row" style="margin-top:4px;margin-bottom:0">
             <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
-            <div style="display:flex;gap:4px;align-items:center;flex:1">
+            <div class="ctrl">
               <input type="number" id="customRows" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
               <span style="color:var(--text-muted);font-size:13px">行 ×</span>
               <input type="number" id="customCols" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
@@ -128,10 +128,10 @@
         </div>
         <div class="sec">
           <div class="sec-title">📐 边距 (mm)</div>
-          <div class="row"><label class="lbl">上</label><div class="rr ctrl"><input type="range" id="marginTop" min="0" max="30" value="5" oninput="syncSlider(this,'marginTopN');updatePreview()"><input type="number" id="marginTopN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginTop');updatePreview()"></div></div>
-          <div class="row"><label class="lbl">下</label><div class="rr ctrl"><input type="range" id="marginBottom" min="0" max="30" value="5" oninput="syncSlider(this,'marginBottomN');updatePreview()"><input type="number" id="marginBottomN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginBottom');updatePreview()"></div></div>
-          <div class="row"><label class="lbl">左</label><div class="rr ctrl"><input type="range" id="marginLeft" min="0" max="30" value="5" oninput="syncSlider(this,'marginLeftN');updatePreview()"><input type="number" id="marginLeftN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginLeft');updatePreview()"></div></div>
-          <div class="row"><label class="lbl">右</label><div class="rr ctrl"><input type="range" id="marginRight" min="0" max="30" value="5" oninput="syncSlider(this,'marginRightN');updatePreview()"><input type="number" id="marginRightN" min="0" max="30" value="5" style="width:64px" onchange="syncRange(this,'marginRight');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">上</label><div class="rr ctrl"><input type="range" id="marginTop" min="0" max="30" value="5" oninput="syncSlider(this,'marginTopN');updatePreview()"><input type="number" id="marginTopN" min="0" max="30" value="5" onchange="syncRange(this,'marginTop');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">下</label><div class="rr ctrl"><input type="range" id="marginBottom" min="0" max="30" value="5" oninput="syncSlider(this,'marginBottomN');updatePreview()"><input type="number" id="marginBottomN" min="0" max="30" value="5" onchange="syncRange(this,'marginBottom');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">左</label><div class="rr ctrl"><input type="range" id="marginLeft" min="0" max="30" value="5" oninput="syncSlider(this,'marginLeftN');updatePreview()"><input type="number" id="marginLeftN" min="0" max="30" value="5" onchange="syncRange(this,'marginLeft');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">右</label><div class="rr ctrl"><input type="range" id="marginRight" min="0" max="30" value="5" oninput="syncSlider(this,'marginRightN');updatePreview()"><input type="number" id="marginRightN" min="0" max="30" value="5" onchange="syncRange(this,'marginRight');updatePreview()"></div></div>
           <div style="display:flex;gap:6px;margin-top:6px">
             <button class="btn btn-sm" style="flex:1" onclick="setMP(10,10,10,10)">10mm</button>
             <button class="btn btn-sm" style="flex:1" onclick="setMP(5,5,5,5)">5mm</button>
@@ -140,13 +140,13 @@
         </div>
         <div class="sec">
           <div class="sec-title">↔ 间距 (mm)</div>
-          <div class="row"><label class="lbl">列间距</label><div class="rr ctrl"><input type="range" id="gapH" min="0" max="20" value="3" oninput="syncSlider(this,'gapHN');updatePreview()"><input type="number" id="gapHN" min="0" max="20" value="3" style="width:64px" onchange="syncRange(this,'gapH');updatePreview()"></div></div>
-          <div class="row"><label class="lbl">行间距</label><div class="rr ctrl"><input type="range" id="gapV" min="0" max="20" value="3" oninput="syncSlider(this,'gapVN');updatePreview()"><input type="number" id="gapVN" min="0" max="20" value="3" style="width:64px" onchange="syncRange(this,'gapV');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">列间距</label><div class="rr ctrl"><input type="range" id="gapH" min="0" max="20" value="3" oninput="syncSlider(this,'gapHN');updatePreview()"><input type="number" id="gapHN" min="0" max="20" value="3" onchange="syncRange(this,'gapH');updatePreview()"></div></div>
+          <div class="row"><label class="lbl">行间距</label><div class="rr ctrl"><input type="range" id="gapV" min="0" max="20" value="3" oninput="syncSlider(this,'gapVN');updatePreview()"><input type="number" id="gapVN" min="0" max="20" value="3" onchange="syncRange(this,'gapV');updatePreview()"></div></div>
         </div>
         <div class="sec">
           <div class="sec-title">🔍 缩放模式</div>
           <div class="row"><label class="lbl">模式</label><div class="ctrl"><select id="fitMode" onchange="onFitChange()"><option value="fit">自适应</option><option value="fill">拉伸填充</option><option value="original">原始大小</option><option value="custom">自定义 %</option></select></div></div>
-          <div id="customScaleRow" class="row" style="display:none"><label class="lbl">%</label><div class="rr ctrl"><input type="range" id="customScale" min="20" max="200" value="100" oninput="syncSlider(this,'customScaleN');updatePreview()"><input type="number" id="customScaleN" min="20" max="200" value="100" style="width:48px" onchange="syncRange(this,'customScale');updatePreview()"></div></div>
+          <div id="customScaleRow" class="row" style="display:none"><label class="lbl">%</label><div class="rr ctrl"><input type="range" id="customScale" min="20" max="200" value="100" oninput="syncSlider(this,'customScaleN');updatePreview()"><input type="number" id="customScaleN" min="20" max="200" value="100" onchange="syncRange(this,'customScale');updatePreview()"></div></div>
           <div id="customScaleHint" class="row hint" style="display:none;font-size:11px;color:#6b7280;padding:2px 0 2px 70px">提示：自定义缩放模式下，可通过右侧「单票调整」面板微调偏移位置</div>
         </div>
         <div class="sec">
@@ -160,7 +160,15 @@
           <div class="trow" id="copyBadgeRow"><label class="tlbl">副本标记</label><button class="tgl" id="toggleCopyBadge" onclick="toggleFeature('copyBadge',this)"></button></div>
           <div class="trow"><label class="tlbl">边框</label><button class="tgl" id="toggleBorder" onclick="toggleFeature('border',this)"></button></div>
           <div class="trow"><label class="tlbl">裁剪白边</label><button class="tgl" id="toggleTrimWhite" onclick="toggleFeature('trimWhite',this)"></button></div>
-          <div class="trow"><label class="tlbl">留边</label><div class="ctrl" style="display:flex;gap:4px;align-items:center"><input type="number" id="trimPad" value="3" min="0" max="60" step="1" style="width:64px;text-align:center" onchange="setTrimPad(this.value)"><span style="color:var(--text-muted);font-size:12px">px，裁剪时向外保留（0–60）</span></div></div>
+          <div id="trimPadOpts" style="display:none;margin:-2px 0 8px 0">
+            <div class="row" style="margin-bottom:0">
+              <label class="lbl">留边</label>
+              <div class="ctrl">
+                <input type="number" id="trimPad" value="3" min="0" max="60" step="1" style="width:64px;text-align:center" title="裁剪时向外保留的像素数（0–60，@300dpi 60px ≈ 5mm）" onchange="setTrimPad(this.value)">
+                <span style="color:var(--text-muted);font-size:12px;white-space:nowrap">px（0–60）</span>
+              </div>
+            </div>
+          </div>
           <div class="trow"><label class="tlbl">页码</label><button class="tgl" id="togglePageNum" onclick="toggleFeature('pageNum',this)"></button></div>
           <div class="trow"><label class="tlbl">打印日期</label><button class="tgl" id="toggleDate" onclick="toggleFeature('printDate',this)"></button></div>
           <div class="trow"><label class="tlbl">自定义页脚</label><button class="tgl" id="toggleFooter" onclick="toggleFeature('footer',this)"></button></div>
@@ -168,17 +176,17 @@
             <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-input);color:var(--text);box-sizing:border-box">
           </div>
           <div id="customFMRow" class="trow" style="display:none"><label class="tlbl">自定义下边距</label><button class="tgl" id="toggleCustomFM" onclick="toggleFeature('customFM',this)"></button></div>
-          <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" style="width:64px" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
+          <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
         </div>
         <div class="sec">
           <div class="sec-title">🖊 水印</div>
           <div class="trow"><label class="tlbl">启用水印</label><button class="tgl" id="toggleWatermark" onclick="toggleFeature('watermark',this)"></button></div>
           <div id="wmOpts" style="display:none">
             <div class="row"><label class="lbl">文字</label><div class="ctrl"><input type="text" id="wmText" value="已打印" onchange="updatePreview()"></div></div>
-            <div class="row"><label class="lbl">透明度</label><div class="rr ctrl"><input type="range" id="wmOpacity" min="5" max="80" value="20" oninput="syncSlider(this,'wmOpacityN');updatePreview()"><input type="number" id="wmOpacityN" min="5" max="80" value="20" style="width:64px" onchange="syncRange(this,'wmOpacity');updatePreview()"></div></div>
+            <div class="row"><label class="lbl">透明度</label><div class="rr ctrl"><input type="range" id="wmOpacity" min="5" max="80" value="20" oninput="syncSlider(this,'wmOpacityN');updatePreview()"><input type="number" id="wmOpacityN" min="5" max="80" value="20" onchange="syncRange(this,'wmOpacity');updatePreview()"></div></div>
             <div class="row"><label class="lbl">颜色</label><div class="ctrl"><input type="color" id="wmColor" value="#ff0000" onchange="updatePreview()" style="width:100%;height:28px;padding:2px;cursor:pointer;border:1px solid var(--border);border-radius:4px"></div></div>
-            <div class="row"><label class="lbl">角度</label><div class="rr ctrl"><input type="range" id="wmAngle" min="-90" max="90" value="-30" oninput="syncSlider(this,'wmAngleN');updatePreview()"><input type="number" id="wmAngleN" min="-90" max="90" value="-30" style="width:64px" onchange="syncRange(this,'wmAngle');updatePreview()"></div></div>
-            <div class="row"><label class="lbl">字号mm</label><div class="rr ctrl"><input type="range" id="wmSize" min="5" max="50" value="15" oninput="syncSlider(this,'wmSizeN');updatePreview()"><input type="number" id="wmSizeN" min="5" max="50" value="15" style="width:64px" onchange="syncRange(this,'wmSize');updatePreview()"></div></div>
+            <div class="row"><label class="lbl">角度</label><div class="rr ctrl"><input type="range" id="wmAngle" min="-90" max="90" value="-30" oninput="syncSlider(this,'wmAngleN');updatePreview()"><input type="number" id="wmAngleN" min="-90" max="90" value="-30" onchange="syncRange(this,'wmAngle');updatePreview()"></div></div>
+            <div class="row"><label class="lbl">字号mm</label><div class="rr ctrl"><input type="range" id="wmSize" min="5" max="50" value="15" oninput="syncSlider(this,'wmSizeN');updatePreview()"><input type="number" id="wmSizeN" min="5" max="50" value="15" onchange="syncRange(this,'wmSize');updatePreview()"></div></div>
           </div>
         </div>
         <div class="sec adj-section">
@@ -187,9 +195,9 @@
             <div class="adj-empty" id="adjEmpty">点击预览中的发票进行选中</div>
             <div id="adjContent" style="display:none">
               <span class="adj-file-name" id="adjFileName"></span>
-              <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="300" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="300" value="100" style="width:68px" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
-              <div class="row"><label class="lbl">X偏移</label><div class="rr ctrl"><input type="range" id="adjOffX" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffXN');onAdjOffsetChange()"><input type="number" id="adjOffXN" min="-150" max="150" value="0" step="0.5" style="width:72px" onchange="syncRange(this,'adjOffX');onAdjOffsetChange()"></div></div>
-              <div class="row"><label class="lbl">Y偏移</label><div class="rr ctrl"><input type="range" id="adjOffY" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffYN');onAdjOffsetChange()"><input type="number" id="adjOffYN" min="-150" max="150" value="0" step="0.5" style="width:72px" onchange="syncRange(this,'adjOffY');onAdjOffsetChange()"></div></div>
+              <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="300" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="300" value="100" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
+              <div class="row"><label class="lbl">X偏移</label><div class="rr ctrl"><input type="range" id="adjOffX" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffXN');onAdjOffsetChange()"><input type="number" id="adjOffXN" min="-150" max="150" value="0" step="0.5" onchange="syncRange(this,'adjOffX');onAdjOffsetChange()"></div></div>
+              <div class="row"><label class="lbl">Y偏移</label><div class="rr ctrl"><input type="range" id="adjOffY" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffYN');onAdjOffsetChange()"><input type="number" id="adjOffYN" min="-150" max="150" value="0" step="0.5" onchange="syncRange(this,'adjOffY');onAdjOffsetChange()"></div></div>
               <div style="display:flex;gap:6px;margin-top:6px">
                 <button class="btn btn-sm" style="flex:1" onclick="resetSlotAdj()">重置</button>
                 <button class="btn btn-sm" style="flex:1" onclick="applySlotAdjToAll()">应用到全部</button>

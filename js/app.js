@@ -1891,7 +1891,23 @@ function quickLayout(c, r) {
   document.getElementById('customRows').value = r;
   document.getElementById('customCols').value = c;
 }
+/** 标签宽度按「每个 .sec 分组」分别测算：组内标签统一到该组最宽的标签，
+ *  这样组内起点对齐、又不会像整面板统一宽度那样让 1 字标签左侧空一大片。
+ *  在初始化 / 窗口尺寸变化 / 分块显隐后调用；未测算时 CSS 回退为内容宽度。 */
+function applyPerSectionLabelWidth() {
+  document.querySelectorAll('.sec').forEach(function(sec) {
+    sec.style.setProperty('--lbl-w', '0px');   // 先清零，量到的就是内容宽度
+    var max = 0;
+    sec.querySelectorAll('.lbl, .tlbl').forEach(function(lb) {
+      if (lb.offsetWidth === 0) return;        // 隐藏行的标签不参与
+      if (lb.offsetWidth > max) max = lb.offsetWidth;
+    });
+    sec.style.setProperty('--lbl-w', max + 'px');
+  });
+}
+
 function toggleFeature(k, btn) {
+  setTimeout(applyPerSectionLabelWidth, 0);   // 分块显隐后重算标签宽度
   var isOn = !S.feat[k]; // 切换后的状态
   S.feat[k] = isOn;
   btn.classList.toggle('on', isOn);
@@ -1924,6 +1940,7 @@ function toggleFeature(k, btn) {
   }
 
   if (k === 'watermark') document.getElementById('wmOpts').style.display = S.feat[k] ? 'block' : 'none';
+  if (k === 'trimWhite') document.getElementById('trimPadOpts').style.display = S.feat[k] ? 'block' : 'none';
   if (k === 'trimWhite' && S.feat[k]) processTrim();
   if (k === 'footer') {
     document.getElementById('footerOpts').style.display = S.feat[k] ? 'block' : 'none';
@@ -2452,6 +2469,9 @@ function loadSettings() {
     if (S.feat.watermark) {
       document.getElementById('wmOpts').style.display = 'block';
     }
+    if (S.feat.trimWhite) {
+      document.getElementById('trimPadOpts').style.display = 'block';
+    }
     if (S.feat.footer) {
       document.getElementById('footerOpts').style.display = 'block';
     }
@@ -2544,6 +2564,7 @@ function resetSettings(scope) {
   document.getElementById('customPaperRow').style.display = 'none';
   document.getElementById('customScaleRow').style.display = 'none';
   document.getElementById('wmOpts').style.display = 'none';
+  document.getElementById('trimPadOpts').style.display = 'none';
   document.getElementById('wmText').value = '已打印';
   document.getElementById('wmOpacity').value = 20; document.getElementById('wmOpacityN').value = 20;
   document.getElementById('wmColor').value = '#ff0000';
@@ -2710,7 +2731,7 @@ document.getElementById('previewWrap').addEventListener('dblclick', function(e) 
 // Global drag & drop (browser fallback)
 document.body.addEventListener('dragover', function(e) { e.preventDefault(); });
 
-window.addEventListener('resize', function() { if (S.files.length) updatePreview(); });
+window.addEventListener('resize', function() { applyPerSectionLabelWidth(); if (S.files.length) updatePreview(); });
 
 // beforeunload safety net — stop all work if the window is being destroyed
 window.addEventListener('beforeunload', function() {
@@ -2760,6 +2781,7 @@ document.getElementById('orientation').value = 'landscape';
 
 // Restore all layout & feature settings
 loadSettings();
+applyPerSectionLabelWidth();
 
 // =====================================================
 // App initialization

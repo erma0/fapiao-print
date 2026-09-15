@@ -357,8 +357,13 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .sec { padding: 12px; border-bottom: 1px solid var(--border); }
 .sec-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
 .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
-.lbl { font-size: 13px; color: var(--text-secondary); flex-shrink: 0; min-width: 40px; }
-.ctrl { flex: 1; }
+/* 标签：宽度按「每个 .sec 分组」各自测算（JS 设 --lbl-w = 该组最宽标签），
+   组内标签左对齐、宽度一致 → 组内控件起点对齐，组间各按所需（无跨组统一空白）。
+   未测算时回退为内容宽度。 */
+.lbl { font-size: 13px; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; min-width: var(--lbl-w, 0px); }
+/* 控件容器统一为 flex + 右对齐：右端与开关行（.trow 的 .tgl）对齐，
+   滑条等可伸缩控件用 flex:1 撑开（原先控件靠左，滑条行右侧空 72px） */
+.ctrl { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 select, input[type="number"], input[type="text"] {
   width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   font-size: 13px; color: var(--text-primary); background: var(--surface); outline: none;
@@ -367,6 +372,9 @@ select, input[type="number"], input[type="text"] {
 select:focus, input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
 .rr { display: flex; align-items: center; gap: 8px; }
 input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor: pointer; }
+/* 滑条后的数值框统一 52px（能容纳 -150 / 0.5）：宽度不统一会让滑条长短不一，
+   统一后滑条随面板宽度自适应撑满；内边距收窄让数字居中更好看 */
+.rr input[type="number"] { width: 52px; text-align: center; padding: 6px 4px; }
 .rv { width: 38px; text-align: right; font-size: 12px; color: var(--accent); font-weight: 700; }
 
 .grid-sel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
@@ -383,7 +391,7 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .custom-layout-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
 
 .trow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.tlbl { font-size: 13px; color: var(--text-secondary); }
+.tlbl { font-size: 13px; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; min-width: var(--lbl-w, 0px); }
 .tgl {
   position: relative; width: 40px; height: 22px; background: var(--border); border-radius: 11px;
   cursor: pointer; transition: background 0.2s; border: none; flex-shrink: 0;
