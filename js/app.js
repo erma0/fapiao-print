@@ -404,24 +404,24 @@ function updateFileItem(fileObj) {
       var gdupb = f._dup ? '<span class="dup-badge" title="检测到重复发票">⚠</span>' : '';
       cardMetaEl.innerHTML = pd + ab + cb + rb + gdupb + '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
     }
-    var gsellerHtml = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var gsellerInner = sellerRowHtml(f, false);
     var sellerLine = items[idx].querySelector('.card-seller');
     if (sellerLine) {
-      sellerLine.innerHTML = gsellerHtml;
+      sellerLine.innerHTML = gsellerInner;
       sellerLine.title = f.sellerName || '';
-      sellerLine.style.display = gsellerHtml ? '' : 'none';
-    } else if (gsellerHtml) {
+      sellerLine.style.display = gsellerInner ? '' : 'none';
+    } else if (gsellerInner) {
       var cardNameEl = items[idx].querySelector('.card-name');
       if (cardNameEl && cardNameEl.parentElement) {
         var newSellerLine = document.createElement('div');
         newSellerLine.className = 'card-seller';
         newSellerLine.title = f.sellerName || '';
-        newSellerLine.innerHTML = gsellerHtml;
+        newSellerLine.innerHTML = gsellerInner;
         cardNameEl.parentElement.insertBefore(newSellerLine, cardNameEl.nextSibling);
       }
     }
   } else {
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sellerInner = sellerRowHtml(f, true);
     // 只更新 .file-meta-left，保留 file-meta-right 操作按钮与布局结构
     var leftEl = items[idx].querySelector('.file-meta-left');
     if (leftEl) {
@@ -430,17 +430,17 @@ function updateFileItem(fileObj) {
     }
     var sellerEl = items[idx].querySelector('.file-seller');
     if (sellerEl) {
-      sellerEl.innerHTML = sb;
+      sellerEl.innerHTML = sellerInner;
       sellerEl.title = f.sellerName || '';
-      sellerEl.style.display = sb ? '' : 'none';
-    } else if (sb) {
+      sellerEl.style.display = sellerInner ? '' : 'none';
+    } else if (sellerInner) {
       // .file-seller didn't exist at render time (no sellerName yet), insert it now
       var nameEl = items[idx].querySelector('.file-name');
       if (nameEl && nameEl.parentElement) {
         var newSeller = document.createElement('div');
         newSeller.className = 'file-seller';
         newSeller.title = f.sellerName || '';
-        newSeller.innerHTML = sb;
+        newSeller.innerHTML = sellerInner;
         nameEl.parentElement.insertBefore(newSeller, nameEl.nextSibling);
       }
     }
@@ -723,10 +723,30 @@ function resolveInvoiceType(f) {
   return '发票';
 }
 
-// 列表缩略图徽章文字：有专普信息（专票/普票）就显示它，否则显示文件格式。
-// 通行费 / 车票按类别单独排版、徽章由销售方标签表达，此处不抢（缩略图仅 40px 宽）
-function invoiceBadgeText(f) {
-  if (f.invoiceType && !f._isToll && !f._isTicket) return normalizeInvoiceType(f.invoiceType);
+// 专票 / 普票 chip：紧贴发票号码行展示，只有能判出专普时才渲染
+// （「电子发票」这类无专普信息的原始串不占用 chip；缩略图徽章仍留给文件格式）
+function vatBadgeHtml(f) {
+  var t = normalizeInvoiceType(f.invoiceType);
+  if (t !== '专票' && t !== '普票') return '';
+  var cls = t === '专票' ? ' special' : '';
+  return '<span class="vat-badge' + cls + '" title="识别到的票种：' + escHtml(f.invoiceType) + '">' + escHtml(t) + '</span>';
+}
+
+// 销售方徽章（列表视图额外挂上税号 tooltip）
+function sellerBadgeHtml(f, withTaxId) {
+  if (!f.sellerName) return '';
+  var cls = f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge';
+  var title = withTaxId ? ' title="' + escHtml(f.sellerCreditCode || f.sellerName) + '"' : '';
+  return '<span class="' + cls + '"' + title + '>' + escHtml(f.sellerName) + '</span>';
+}
+
+// 列表项销售方行内容 = 票种 chip + 销售方徽章（两者皆空返回空串，整行不渲染）
+function sellerRowHtml(f, withTaxId) {
+  return vatBadgeHtml(f) + sellerBadgeHtml(f, withTaxId);
+}
+
+// 文件格式标签：jpeg 统一显示 jpg（缩略图徽章用）
+function fileFormatLabel(f) {
   return f.type === 'jpeg' ? 'jpg' : String(f.type || '');
 }
 
@@ -1013,9 +1033,10 @@ function renderFileList() {
       var gab = buildAmtBadge(f);
       var gpd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
       var gsize = '<span class="card-size" title="文件大小">' + fmtSize(f.size) + '</span>';
-      var gseller = f.sellerName ? '<div class="card-seller" title="' + escHtml(f.sellerName) + '"><span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '">' + escHtml(f.sellerName) + '</span></div>' : '';
+      var gsellerInner = sellerRowHtml(f, false);
+      var gseller = gsellerInner ? '<div class="card-seller"' + (f.sellerName ? ' title="' + escHtml(f.sellerName) + '"' : '') + '>' + gsellerInner + '</div>' : '';
       var gthumb = f._loading ? '' : (f.previewUrl ? '<img src="' + escHtml(f.previewUrl) + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
-      var gtype = escHtml(invoiceBadgeText(f));
+      var gtype = f.type === 'jpeg' ? 'jpg' : escHtml(f.type);
       var gacts = '';
       if (!f._loading) {
         gacts = '<button class="ib card-ib' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -1037,11 +1058,12 @@ function renderFileList() {
     var rb = f.rotation ? '<span class="rot-badge">' + f.rotation + '°</span>' : '';
     var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
     var ab = buildAmtBadge(f);
-    var sb = f.sellerName ? '<span class="' + (f._isTicket ? 'ticket-badge' : f._isNonTax ? 'nontax-badge' : f._isToll ? 'toll-badge' : 'seller-badge') + '" title="' + escHtml(f.sellerCreditCode || f.sellerName) + '">' + escHtml(f.sellerName) + '</span>' : '';
+    var sellerInner = sellerRowHtml(f, true);
+    var sellerRow = sellerInner ? '<div class="file-seller"' + (f.sellerName ? ' title="' + escHtml(f.sellerName) + '"' : '') + '>' + sellerInner + '</div>' : '';
     // XSS FIX: escHtml(f.name) in both title and display text
     // XSS FIX: escHtml(f.previewUrl) in img src, escHtml(f.type) in type-badge
     var safePreviewUrl = escHtml(f.previewUrl || '');
-    var typeBadgeText = escHtml(invoiceBadgeText(f));
+    var typeBadgeText = f.type === 'jpeg' ? 'jpg' : escHtml(f.type);
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
     var metaActions = f._loading
@@ -1055,7 +1077,7 @@ function renderFileList() {
     return '<div class="' + cls + '" data-idx="' + i + '" data-printed="' + (f._printed ? '1' : '0') + '"' + hideStyle + ' onclick="clickFileItem(' + i + ',event)" ondblclick="openInvModal(' + i + ')">' +
       '<div class="file-check ' + (f.checked ? 'checked' : '') + '" onclick="togCheck(' + i + ')"></div>' +
       '<div class="file-thumb">' + thumbContent + '<div class="type-badge">' + typeBadgeText + '</div></div>' +
-      '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' + (sb ? '<div class="file-seller" title="' + escHtml(f.sellerName) + '">' + sb + '</div>' : '') + '<div class="file-meta">' + metaActions + '</div></div>' +
+      '<div class="file-info"><div class="file-name" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' + sellerRow + '<div class="file-meta">' + metaActions + '</div></div>' +
     '</div>';
   }).join('');
 
@@ -1603,19 +1625,31 @@ function openInvModal(i) {
   var _fwm = _fw + ';font-family:monospace';
   var mRF = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl end">' + html + '</div></div>'; };
   var mRA = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl">' + html + '</div></div>'; };
+  // 顶部信息条：文件名 + 票种 chip + 状态标记 + 格式/大小
+  var headMarks = (f._printed ? '<span style="font-size:11px;color:var(--success);flex-shrink:0">✓ 已打印</span>' : '') +
+                  (f._dup ? '<span style="font-size:11px;color:var(--danger);flex-shrink:0">⚠ 重复</span>' : '');
+  var headMeta = escHtml(fileFormatLabel(f).toUpperCase()) + ' · ' + fmtSize(f.size);
+  // 发票类型：归一化短标签 + 原始识别串（如「电子发票(普通发票)」）
+  var typeHint = f.invoiceType ? '<span style="font-size:11px;color:var(--text-muted);margin-left:6px">' + escHtml(f.invoiceType) + '</span>' : '';
   document.getElementById('invModalBody').innerHTML =
-    '<div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px">\uD83D\uDCC4 ' + escHtml(f.name) + '</div>' +
+    '<div style="font-size:13px;padding:8px 10px;background:var(--surface2);border-radius:6px;margin-bottom:10px;display:flex;align-items:center;gap:6px">' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(f.name) + '">\uD83D\uDCC4 ' + escHtml(f.name) + '</span>' +
+      vatBadgeHtml(f) + headMarks +
+      '<span style="font-size:11px;color:var(--text-muted);flex-shrink:0">' + headMeta + '</span>' +
+    '</div>' +
     mRF('排版份数', '<button class="btn btn-sm btn-icon" onclick="changeModalCopies(-1)">\u2212</button><input type="number" id="mCopies" value="' + f.copies + '" min="1" max="99" style="width:52px;text-align:center;flex:none"><button class="btn btn-sm btn-icon" onclick="changeModalCopies(1)">+</button>') +
     '<div style="font-size:10px;color:var(--text-muted);margin:-6px 0 8px 76px">同一发票在布局中占几个位置</div>' +
     mRF('含税价', '<span style="font-size:14px;font-weight:600;color:var(--success);flex-shrink:0">\u00A5</span><input type="number" id="mAmountTax" value="' + (f.amountTax || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
     mRF('不含税', '<span style="font-size:14px;font-weight:600;color:var(--text-muted);flex-shrink:0">\u00A5</span><input type="number" id="mAmountNoTax" value="' + (f.amountNoTax || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
     mRF('税额', '<span style="font-size:14px;font-weight:600;color:var(--warning,orange);flex-shrink:0">\u00A5</span><input type="number" id="mTaxAmount" value="' + (f.taxAmount || '') + '" min="0" step="0.01" placeholder="0.00" style="' + _fw + '">') +
+    mRA('发票类型', '<span style="font-size:12px">' + escHtml(resolveInvoiceType(f)) + '</span>' + typeHint) +
     mRA('发票号码', '<input type="text" id="mInvoiceNo" value="' + escHtml(f.invoiceNo || '') + '" placeholder="自动识别" class="mono-input">') +
     mRA('开票日期', '<input type="text" id="mInvoiceDate" value="' + escHtml(f.invoiceDate || '') + '" placeholder="自动识别">') +
     mRA('购买方', '<input type="text" id="mBuyer" value="' + escHtml(f.buyerName || '') + '" placeholder="自动识别">') +
     mRA('购方代码', '<input type="text" id="mBuyerCreditCode" value="' + escHtml(f.buyerCreditCode || '') + '" placeholder="自动识别" class="mono-input">') +
     mRA('销售方', '<input type="text" id="mSeller" value="' + escHtml(f.sellerName || '') + '" placeholder="自动识别">') +
     mRA('信用代码', '<input type="text" id="mCreditCode" value="' + escHtml(f.sellerCreditCode || '') + '" placeholder="自动识别" class="mono-input">') +
+    mRA('备注', '<input type="text" id="mNote" value="' + escHtml(f.note || '') + '" placeholder="手动备注（汇总表同步）">') +
     mRF('旋转', '<select id="mRot" style="width:140px;flex:none"><option value="0" ' + (f.rotation === 0 ? 'selected' : '') + '>不旋转</option><option value="90" ' + (f.rotation === 90 ? 'selected' : '') + '>90\u00B0</option><option value="180" ' + (f.rotation === 180 ? 'selected' : '') + '>180\u00B0</option><option value="270" ' + (f.rotation === 270 ? 'selected' : '') + '>270\u00B0</option></select>') +
     '<div style="border-top:1px dashed var(--border);margin-top:4px;padding-top:8px">' +
     '<div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:6px">🎯 单票调整</div>' +
@@ -1645,6 +1679,7 @@ function confirmInvModal() {
   f.invoiceDate = document.getElementById('mInvoiceDate').value;
   f.buyerName = document.getElementById('mBuyer').value;
   f.buyerCreditCode = document.getElementById('mBuyerCreditCode').value;
+  f.note = document.getElementById('mNote').value;
   // Per-slot adjustments
   f.slotScale = Math.max(0.2, Math.min(3.0, (parseInt(document.getElementById('mSlotScale').value) || 100) / 100));
   f.slotOffsetX = parseFloat(document.getElementById('mSlotOffX').value) || 0;
