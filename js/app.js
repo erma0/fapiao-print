@@ -2042,12 +2042,14 @@ async function trimOneImage(dataUrl) {
         for (var y2 = ch - 1; y2 >= 0; y2--) { if (rowSoft[y2] >= minCount) { bottom = y2; break; } }
         if (bottom < 0) { resolve({ url: dataUrl, box: null }); return; }
 
-        // 列统计限定在 top..bottom 范围（与桌面端一致）；左右方向用宽松的
+        // 列统计扫全高（0..ch）：左右边界必须包含**所有**内容，不能限定在行检测的
+        // top..bottom 内 —— 否则位于该范围外的左右内容（如超出主体行范围的竖排
+        // 浅字）会被漏检，导致边界内缩、把内容裁掉。左右方向用宽松的
         // WHITE_THRESHOLD（保护「下载次数」这类浅色小字）
         var colSoft = new Uint32Array(cw);
         for (var x1 = 0; x1 < cw; x1++) {
           var cs = 0;
-          for (var yy = top; yy <= bottom; yy++) {
+          for (var yy = 0; yy < ch; yy++) {
             var ii = (yy * cw + x1) * 4;
             if (Math.min(data[ii], data[ii+1], data[ii+2]) < threshold) cs++;
           }
@@ -2061,9 +2063,10 @@ async function trimOneImage(dataUrl) {
         if (top >= bottom || left >= right) { resolve({ url: dataUrl, box: null }); return; }
 
         // 向外留边距再裁：容忍内容边缘的抗锯齿/尖角（如印章圆弧顶）与换算误差。
-        // 左/上 6px（≈0.5mm，用户要求尽量小）。右侧单独加大到 28px（≈2.4mm）：
-        // 发票右侧常有「下载次数」「密码区」这类浅色小字，检测容易漏掉最右几个字。
-        var padL = 3, padT = 3, padR = 28, padB = 12;
+        // 四边统一 3px（≈0.25mm）—— 检测已按真实内容边界（列全高 + 左右宽松阈值
+        // 保护浅字），无需按方向加大兜底。padR 曾单独设 28px 兜「下载次数」，
+        // 但那会让没有该字段的发票白白多留 2.4mm 白边（用户实测反馈）。
+        var padL = 3, padT = 3, padR = 3, padB = 3;
         top = Math.max(0, top - padT); bottom = Math.min(ch - 1, bottom + padB);
         left = Math.max(0, left - padL); right = Math.min(cw - 1, right + padR);
         var w = right - left + 1, h = bottom - top + 1;
