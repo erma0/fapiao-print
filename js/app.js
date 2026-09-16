@@ -794,7 +794,10 @@ function clearAllFilters(e) {
   syncTypeFilterButtons();
   syncFormatFilterButtons();
   updateFilterSummary();
+  applyFilterSelection();
   renderFileList();
+  updatePdfBtn();
+  updateSummaryBtn();
 }
 
 function setPrintedFilter(filter) {
@@ -802,7 +805,10 @@ function setPrintedFilter(filter) {
   S.fileFilter = 'all';
   syncFilterButtons();
   updateFilterSummary();
+  applyFilterSelection();
   renderFileList();
+  updatePdfBtn();
+  updateSummaryBtn();
 }
 
 // 按 S.fileFilter / S.printedFilter 统一同步筛选按钮高亮（仅状态行）
@@ -818,26 +824,38 @@ function setFileFilter(filter) {
   S.fileFilter = 'all';
   syncFilterButtons();
   updateFilterSummary();
+  applyFilterSelection();
   renderFileList();
+  updatePdfBtn();
+  updateSummaryBtn();
 }
 
-// 类型/格式筛选 = 分批打印工作流维度：切换即切换工作批次，
-// 清除不可见项的勾选保证打印集合 = 当前可见勾选集合，
-// 避免筛选车票打完后切到发票时残留勾选把车票再打一遍
-function clearInvisibleChecks() {
-  var cleared = 0;
+// 类型/格式/状态筛选 = 分批打印工作流维度：切换即切换工作批次，
+// 全部非重复筛选的勾选集合 = 当前筛选结果（切换即自动勾选可见项、取消不可见项），
+// 右侧预览随之只显示当前筛选结果，避免筛选车票打完后切到发票时残留勾选把车票再打一遍。
+// 「重复」筛选除外：它有自己的勾选语义（只勾选每组第一份之后的可靠重复），由 selectDuplicateExtras 接管。
+function selectFilteredOnly() {
+  var n = 0;
   S.files.forEach(function(f) {
-    if (f.checked && !isTypeMatch(f) || f.checked && !isFormatMatch(f)) { f.checked = false; cleared++; }
+    if (f._loading) return;
+    f.checked = !f._placeholder && !isFileHidden(f);
+    if (f.checked) n++;
   });
-  if (cleared) toast('已清除 ' + cleared + ' 张不可见发票的勾选');
+  updatePreview();
+  return n;
+}
+
+function applyFilterSelection() {
+  var n = selectFilteredOnly();
+  toast(n ? '已自动勾选当前筛选结果 ' + n + ' 张' : '当前筛选无结果');
 }
 
 function setTypeFilter(t) {
   if (S.typeFilter === t) return;
   S.typeFilter = t;
-  clearInvisibleChecks();
   syncTypeFilterButtons();
   updateFilterSummary();
+  applyFilterSelection();
   renderFileList();
   updatePdfBtn();
   updateSummaryBtn();
@@ -871,9 +889,9 @@ function isTypeMatch(f) {
 function setFormatFilter(t) {
   if (S.formatFilter === t) return;
   S.formatFilter = t;
-  clearInvisibleChecks();
   syncFormatFilterButtons();
   updateFilterSummary();
+  applyFilterSelection();
   renderFileList();
   updatePdfBtn();
   updateSummaryBtn();
@@ -969,6 +987,7 @@ function removeDuplicates(silent) {
     S.printedFilter = 'all';
     syncFilterButtons();
     updateFilterSummary();
+    selectFilteredOnly();
     renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
     toast(removed ? '已删除 ' + removed + ' 个重复项，保留每组第一份' : '未发现可删除的重复项');
   } else if (removed) {
