@@ -25,6 +25,10 @@ portable-git.7z.exe
 # Temp
 screenshot_*.png
 dist/
+
+# 测试样本（本地保留，不入库）
+sample/
+samples/
 sample.ofd
 sample_ofd_extracted/
 test-emf-vector/
