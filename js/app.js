@@ -1333,6 +1333,15 @@ function deleteSelected() {
 }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn(); }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
+// 旋转选中发票（浮动工具条入口，同步桌面版 #36）
+function rotateSelected() {
+  var f = getSelectedFileObj();
+  if (!f) { toast('请先选中版面中的发票'); return; }
+  var i = S.files.indexOf(f);
+  if (i < 0) return;
+  rotFile(i);
+  syncSlotToolbar();
+}
 
 // Click file item → navigate preview to the page containing this invoice
 function clickFileItem(idx, event, opts) {
@@ -1785,6 +1794,12 @@ function syncSlotToolbar() {
   if (top < wrap.scrollTop + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
   tb.style.left = Math.round(left) + 'px';
   tb.style.top = Math.round(top) + 'px';
+  var rotBtn = document.getElementById('slotRotateBtn');
+  if (rotBtn) {
+    var rot = f.rotation || 0;
+    rotBtn.textContent = '↻ ' + (rot ? rot + '°' : '旋转');
+    rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
+  }
   tb.classList.remove('hidden');
 }
 document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
