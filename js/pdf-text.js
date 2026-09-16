@@ -526,8 +526,16 @@ function _normText(s) {
   s = s.replace(/[Ａ-Ｚａ-ｚ]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
   s = s.replace(/％/g, '%').replace(/．/g, '.').replace(/，/g, ',').replace(/：/g, ':');
   s = s.replace(/￥/g, '¥');
-  // Collapse spaces between CJK chars
-  s = s.replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, '$1$2');
+  // Collapse spaces between CJK chars. Must loop: a single pass with the global
+  // flag skips overlapping neighbours, e.g. "售 方 信 息" → "售方 信息" (one space left).
+  // PDF text layers split text into Tj runs and often leave spaces inside/between
+  // fragments ("名 " / "售 方 信 息"), which breaks every exact/short-word match.
+  for (var _ci = 0; _ci < 5; _ci++) {
+    var _ciPrev = '';
+    while (_ciPrev !== s) { _ciPrev = s; s = s.replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, '$1$2'); }
+  }
+  // Trim stray leading/trailing whitespace ("名 " → "名")
+  s = s.replace(/^\s+|\s+$/g, '');
   return s;
 }
 
@@ -631,6 +639,10 @@ function _cleanName(raw) {
   name = name.replace(/^[\s:：]+/, '');
   // Skip if it's a label itself or non-company text
   if (/^(?:购买方信息|销售方信息|购买方|销售方|名称|信息|纳税人|地址|电话|开户行|账号|项目名称|规格型号|交款人)$/.test(name)) return '';
+  // Skip label/header fragments — 竖排页眉（购买方信息/销售方信息）在文字层里会被拆成
+  // 单字或多个碎片，可能拼出 "售方信息" 这类非公司名文本。真公司名必然含公司后缀，
+  // 不会只由标签字构成。
+  if (/^[购买销售方信息名称备注项目单位数量金额税率税额合计开票收款复核出行等级交通栏]+$/.test(name)) return '';
   // Skip table header terms and section labels
   if (/^(?:单价|数量|金额|税率|税额|合\s*计|大\s*写|小\s*写|备\s*注|出行人|证件号|出行日期|出发地|到达地|等\s*级|交通工具|开票人|收款人|复核人|价税合计|金额合计|收款单位|校验码|票据代码|票据号码|项目编码|项目名称|单位|标准)$/.test(name)) return '';
   // Skip metadata/watermark annotations (download count, verification count, etc.)
@@ -1536,23 +1548,22 @@ function _extractByText(fullText, words) {
   }
   // Pattern 3: Loose cross-line (label and value separated by multiple lines)
   // e.g., "发票号码：\n...\n25322000000337005189"
-  // Find ALL digit sequences of 8-20 digits after the label, pick the longest one.
-  // This avoids matching credit code prefixes like "91320583" (8 digits) when the
-  // actual invoice number is "25327200000104224588" (20 digits).
+  // 文字层按内容流顺序产出时（数电票 PDF），号码可能远在标签之后，中间还夹着
+  // 购销双方的信用代码。扫描标签之后的所有 8~20 位纯数字串，取最长的一个，并剔除：
+  //   - 信用代码尾段：数字串紧邻字母（如 ...34916R / ...48368W）
+  //   - 小数/长数字片段：数字串紧邻 "." 或数字（被 {8,20} 截断，如 61.06333333）
   if (!result.invoiceNo) {
-    var noLooseAll = text.match(/(?:发\s*票\s*号\s*码|票\s*据\s*号\s*码|票\s*据\s*号\s*码)[:：][\s\S]*?\d{8,20}/g);
-    if (noLooseAll) {
-      var bestNo = '';
-      for (var _ni = 0; _ni < noLooseAll.length; _ni++) {
-        // Extract all digit sequences of 8-20 digits from each match
-        var _digitMatches = noLooseAll[_ni].match(/\d{8,20}/g);
-        if (_digitMatches) {
-          for (var _di = 0; _di < _digitMatches.length; _di++) {
-            if (_digitMatches[_di].length > bestNo.length) {
-              bestNo = _digitMatches[_di];
-            }
-          }
-        }
+    var _noLabelPos = text.search(/(?:发\s*票\s*号\s*码|票\s*据\s*号\s*码|票\s*据\s*号\s*码)/);
+    if (_noLabelPos >= 0) {
+      var _noTail = text.substring(_noLabelPos);
+      var _noRunRe = /\d{8,20}/g;
+      var _noRunM, bestNo = '';
+      while ((_noRunM = _noRunRe.exec(_noTail)) !== null) {
+        var _noRun = _noRunM[0];
+        if (/[A-Za-z]/.test(_noTail.charAt(_noRunM.index + _noRun.length))) continue;
+        var _noPrevCh = _noTail.charAt(_noRunM.index - 1);
+        if (_noPrevCh === '.' || /\d/.test(_noPrevCh)) continue;
+        if (_noRun.length > bestNo.length) bestNo = _noRun;
       }
       // Only accept if >= 10 digits (credit code prefixes are typically 8 digits,
       // invoice numbers are 10-20 digits)
@@ -2655,6 +2666,19 @@ function _detectVatSubtype(words, fullText) {
 }
 
 /**
+ * 判断一个词是否属于标签/表头碎片（不是名称内容）。
+ * 文字层把竖排页眉"购买方信息/销售方信息"拆成单字（销/售/方/信/息）时，
+ * 这些字与信用代码标签会混进名称收集区，被拼成名称尾缀（如"…公司方信统一社会"）。
+ * 仅对整词生效，不影响公司名内部字符。
+ */
+function _isLabelFragmentWord(w) {
+  var t = (w && (w.normText || w.text)) || '';
+  if (!t) return false;
+  if (/^[购买销售方信息名称备注项目单位数量金额税率税额合计开票收款复核出行等级交通栏]+$/.test(t)) return true;
+  return /统一社会|信用代码|纳税人识别号/.test(t);
+}
+
+/**
  * Extract seller info using coordinates.
  * Strategy: find "销售方信息" or "名称:" in right half → grab name + credit code.
  */
@@ -2663,7 +2687,8 @@ function _extractSeller(words, imgW, imgH) {
 
   // Right-half words (nx > 0.45) in top 40% (seller region)
   var sellerWords = words.filter(function(w) {
-    return w.nx > 0.45 && w.ny > 0.15 && w.ny < 0.45;
+    if (w.nx <= 0.45 || w.ny <= 0.15 || w.ny >= 0.45) return false;
+    return !_isLabelFragmentWord(w);
   });
   var sellerText = sellerWords.map(function(w) { return w.normText; }).join('');
 
@@ -2773,10 +2798,30 @@ function _extractSeller(words, imgW, imgH) {
     }
   }
 
-  // Pattern 3: Company name with suffix in seller region
+  // Pattern 3: Company name with suffix, matched at WORD level first.
+  // 词级匹配最精确（文字层里公司名通常就是一个整词），放在整段文本正则之前：
+  // 后者用后缀表（含"行/会/社"等单字后缀）贪心匹配，会把标签残片一起吃进去
+  // （如"…有限公司" + "方信统一社会" → 末尾"会"命中后缀）。
+  if (!sellerName && words && words.length > 0) {
+    var csSuffix3 = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
+    var companyRe3 = new RegExp('^([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + csSuffix3 + ')$');
+    var sellerCompWords = words.filter(function(w) {
+      if (w.nx < 0.4) return false;  // Must be in right portion of page
+      if (_isLabelFragmentWord(w)) return false;
+      var t = (w.normText || w.text || '').trim();
+      if (t.length < 6) return false;  // 排除"有限公司"等纯后缀片段
+      return companyRe3.test(w.normText) || companyRe3.test(t);
+    });
+    if (sellerCompWords.length > 0) {
+      sellerName = sellerCompWords[0].normText || sellerCompWords[0].text;
+    }
+  }
+
+  // Pattern 4: Company name with suffix in the concatenated seller-region text
+  // (last resort — covers names split across several words)
   if (!sellerName) {
     var csSuffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
-    var companyRe = new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + csSuffix + ')');
+    var companyRe = new RegExp('([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]{2,25}' + csSuffix + ')');
     var companyMatch = sellerText.match(companyRe);
     if (companyMatch) sellerName = companyMatch[1].trim();
   }
