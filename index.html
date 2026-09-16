@@ -13,7 +13,7 @@
 <div class="toast" id="toast"></div>
 
 <!-- File input — browser fallback only -->
-<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.tif,.ofd,.xml" multiple style="display:none" onchange="handleFileInput(this.files)">
+<input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.ofd,.xml" multiple style="display:none" onchange="handleFileInput(this.files)">
 
 <div class="main-layout">
   <!-- Sidebar -->
@@ -65,12 +65,14 @@
           </div>
           <div class="filter-body">
             <div class="filter-body-inner">
-              <div class="print-filter-bar type-filter-bar" id="typeFilterBar" title="按发票类型筛选列表（配合全选可分类型分批排版打印，需先完成识别）">
+              <div class="print-filter-bar type-filter-bar" id="typeFilterBar" title="按发票类型筛选列表（配合全选可分类型分批排版打印，识别/解析后生效）">
                 <button class="pf-btn pf-active" data-type="all" onclick="setTypeFilter('all')">全部</button>
-                <button class="pf-btn" data-type="vat" onclick="setTypeFilter('vat')">发票</button>
+                <button class="pf-btn" data-type="special" onclick="setTypeFilter('special')">专票</button>
+                <button class="pf-btn" data-type="plain" onclick="setTypeFilter('plain')">普票</button>
                 <button class="pf-btn" data-type="ticket" onclick="setTypeFilter('ticket')">车票</button>
                 <button class="pf-btn" data-type="toll" onclick="setTypeFilter('toll')">通行费</button>
-                <button class="pf-btn" data-type="nontax" onclick="setTypeFilter('nontax')">财政</button>
+                <button class="pf-btn" data-type="nontax" onclick="setTypeFilter('nontax')">非税</button>
+                <button class="pf-btn" data-type="other" onclick="setTypeFilter('other')" title="未识别出类型，或识别到的类型无法归入专票/普票">其他</button>
               </div>
               <div class="print-filter-bar type-filter-bar" id="formatFilterBar" title="按文件格式筛选列表（配合全选可分格式分批排版打印）">
                 <button class="pf-btn pf-active" data-format="all" onclick="setFormatFilter('all')">全部</button>

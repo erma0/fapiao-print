@@ -139,14 +139,17 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .upload-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
 /* ===== File list ===== */
+/* 钉在滚动容器顶部，列表内容从下方穿过 */
 .file-header {
+  position: sticky; top: 0; z-index: 3;
   padding: 8px 12px; display: flex; align-items: center; justify-content: space-between;
   border-bottom: 1px solid var(--border); background: var(--surface2);
 }
 .file-count { font-size: 12px; color: var(--text-muted); }
 .file-actions { display: flex; gap: 4px; }
 /* === 筛选区（可折叠） === */
-.filter-section { background: var(--surface2); border-bottom: 1px solid var(--border); }
+/* top 45px = 工具栏高（28px 按钮 + 16px 上下内边距 + 1px 下边框） */
+.filter-section { position: sticky; top: 45px; z-index: 2; background: var(--surface2); border-bottom: 1px solid var(--border); }
 .filter-head {
   display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 27px;
   cursor: pointer; user-select: none;
