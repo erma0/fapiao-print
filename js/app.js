@@ -343,6 +343,7 @@ async function processFileList(fileList) {
       var items = Array.isArray(r) ? r : [r];
       items.forEach(function(it) { _newFileIds[it.id] = true; });
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+      finalizeMedicalDetailPages(items); // 加入列表后立即排除医疗明细页附件（幂等）
       added += items.length;
     } else if (phIdx >= 0) {
       S.files.splice(phIdx, 1);
@@ -696,7 +697,7 @@ async function handleDrop(e) {
 // =====================================================
 // File list management
 // =====================================================
-var TYPE_FILTER_LABELS = { special: '专票', plain: '普票', ticket: '车票', toll: '通行费', nontax: '非税', other: '其他' };
+var TYPE_FILTER_LABELS = { special: '专票', plain: '普票', ticket: '车票', toll: '通行费', medical: '医疗', nontax: '非税', other: '其他' };
 var FORMAT_FILTER_LABELS = { pdf: 'PDF', ofd: 'OFD', image: '图片', xml: 'XML' };
 
 // 发票类型归一化：把各来源的原始类型串收敛成可比较的短标签
@@ -720,6 +721,7 @@ function resolveInvoiceType(f) {
   if (!f) return '';
   if (f._isToll) return '通行费发票';
   if (f._isTicket) return f.sellerName || '车票'; // sellerName 存车票标签
+  if (f._isMedical) return '医疗收费票据';
   if (f._ocrText && /非税/.test(f._ocrText)) return '非税票据';
   if (f.invoiceType) return normalizeInvoiceType(f.invoiceType);
   return '发票';
@@ -736,9 +738,16 @@ function typeChipHtml(f) {
   else if (t === '普票') { raw = f.invoiceType || ''; }
   else if (t === '通行费发票') { cls = ' toll'; label = '通行费'; raw = f.invoiceType || ''; }
   else if (t === '非税票据') { cls = ' nontax'; label = '非税'; }
+  else if (t === '医疗收费票据') { cls = ' medical'; label = '医疗'; }
   else if (f._isTicket) { cls = ' ticket'; } // 车票：sellerName 存标签全文
   else return '';
   return '<span class="vat-badge' + cls + '" title="识别到的票种：' + escHtml(raw || t) + '">' + escHtml(label) + '</span>';
+}
+
+// 医疗票附件徽章：同文件 PDF 的收费明细长页已自动排除打印，在汇总页上留痕
+function detailBadgeHtml(f) {
+  if (!f._medDetailCount) return '';
+  return '<span class="vat-badge detail" title="同文件的收费明细长页已作为附件排除，未参与排版/统计">附' + f._medDetailCount + '页明细</span>';
 }
 
 // 销售方徽章：恒为灰色（类型信息全部由票种 chip 表达，不再靠变色）；
@@ -749,9 +758,9 @@ function sellerBadgeHtml(f, withTaxId) {
   return '<span class="seller-badge"' + title + '>' + escHtml(f.sellerName) + '</span>';
 }
 
-// 列表项销售方行内容 = 票种 chip + 销售方徽章（两者皆空返回空串，整行不渲染）
+// 列表项销售方行内容 = 票种 chip + 附件徽章 + 销售方徽章（皆空返回空串，整行不渲染）
 function sellerRowHtml(f, withTaxId) {
-  return typeChipHtml(f) + sellerBadgeHtml(f, withTaxId);
+  return typeChipHtml(f) + detailBadgeHtml(f) + sellerBadgeHtml(f, withTaxId);
 }
 
 // 文件格式标签：jpeg 统一显示 jpg（缩略图徽章用）
@@ -875,11 +884,12 @@ function isTypeMatch(f) {
   switch (S.typeFilter) {
     case 'ticket': return !!f._isTicket;
     case 'toll': return !!f._isToll;
+    case 'medical': return !!f._isMedical;
     case 'nontax': return resolveInvoiceType(f) === '非税票据';
     case 'special': return resolveInvoiceType(f) === '专票';
     case 'plain': return resolveInvoiceType(f) === '普票';
     case 'other':
-      if (f._isTicket || f._isToll) return false;
+      if (f._isTicket || f._isToll || f._isMedical) return false;
       var t = resolveInvoiceType(f);
       return t !== '专票' && t !== '普票' && t !== '非税票据';
     default: return true; // 旧配置残留的 'vat' 等未知值按全部处理
@@ -1332,6 +1342,37 @@ function deleteSelected() {
   renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
 }
 function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn(); }
+
+// 医疗票明细页处理（幂等）：把「医疗收费明细」长页从列表移除（只留汇总首页），
+// 在共享批次的主票上挂附件计数徽章，toast 明示排除行为。
+// PDF 文字层完成后触发；_medDetailHandled 防空转。主票用 srcPdfBytes 引用分组 + srcPageIndex 排序。
+function finalizeMedicalDetailPages(results) {
+  if (!results || results.length === 0) return;
+  var mainName = '', detailCount = 0;
+  results.forEach(function(r) {
+    if (!r._isMedicalDetail || r._medDetailHandled) return;
+    var i = S.files.indexOf(r);
+    if (i < 0) return;
+    r._medDetailHandled = true;
+    detailCount++;
+    var main = null;
+    // 同一 srcPdfBytes（同源 PDF）中的主票 = 首个非明细页
+    if (r.srcPdfBytes) {
+      var same = S.files.filter(function(o) { return o !== r && o.srcPdfBytes === r.srcPdfBytes && !o._isMedicalDetail; });
+      same.sort(function(a, b) { return (a.srcPageIndex || 0) - (b.srcPageIndex || 0); });
+      main = same[0] || null;
+    }
+    if (main) {
+      main._medDetailCount = (main._medDetailCount || 0) + 1;
+      mainName = main.name;
+    }
+    rmFile(i);
+  });
+  if (detailCount > 0) {
+    updateDuplicateMarks();
+    toast((mainName ? '“' + mainName + '”的' : '') + detailCount + ' 页收费明细已自动排除，仅保留汇总页');
+  }
+}
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 // 旋转选中发票（浮动工具条入口，同步桌面版 #36）
 function rotateSelected() {

@@ -76,6 +76,7 @@ html.dark .vat-badge.special { background: #3a3520; color: #d69e2e; border-color
 html.dark .vat-badge.toll { background: #122a26; color: #2dd4bf; border-color: #1f4d45; }
 html.dark .vat-badge.ticket { background: #1a2a4a; color: #64b5f6; }
 html.dark .vat-badge.nontax { background: #2a2440; color: #b794f6; border-color: #44337a; }
+html.dark .vat-badge.medical { background: #06281c; color: #34d399; border-color: #064e3b; }
 html.dark .file-summary { background: #16213e; border-top-color: #2a2a4a; }
 html.dark .sec { border-bottom-color: #2a2a4a; }
 html.dark .tgl { background: #3a3a5a; }
@@ -258,6 +259,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .vat-badge.toll { background: #f0fdfa; color: #0d9488; border-color: #99f6e4; }
 .vat-badge.ticket { background: #e3f2fd; color: #1976d2; }
 .vat-badge.nontax { background: #f5f3ff; color: #7c3aed; border-color: #ddd6fe; }
+.vat-badge.medical { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+.vat-badge.detail { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
 .file-summary {
   padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface2);
   font-size: 12px; display: flex; align-items: center; gap: 8px;
