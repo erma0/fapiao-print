@@ -1826,14 +1826,22 @@ function syncSlotToolbar() {
   var f = getSelectedFileObj();
   var wrap = document.getElementById('previewWrap');
   if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
+  tb.classList.remove('hidden'); // 先显示后测量：hidden 时 offsetWidth 为 0
   var wr = wrap.getBoundingClientRect();
   var sr = slotEl.getBoundingClientRect();
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
-  var left = sr.left - wr.left + wrap.scrollLeft + sr.width / 2;
-  var slotTop = sr.top - wr.top + wrap.scrollTop;
+  var sl = wrap.scrollLeft, st = wrap.scrollTop;
+  var tbW = tb.offsetWidth;
+  var center = sr.left - wr.left + sl + sr.width / 2;
+  // 水平越界时贴边（同步桌面版 #43①）：右列槽位按中心居中会让工具条右半截跑到预览框外
+  var minC = sl + 8 + tbW / 2;
+  var maxC = sl + wrap.clientWidth - 8 - tbW / 2;
+  if (maxC < minC) center = sl + wrap.clientWidth / 2;
+  else center = Math.max(minC, Math.min(maxC, center));
+  var slotTop = sr.top - wr.top + st;
   var top = slotTop - 36;
-  if (top < wrap.scrollTop + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
-  tb.style.left = Math.round(left) + 'px';
+  if (top < st + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
+  tb.style.left = Math.round(center) + 'px';
   tb.style.top = Math.round(top) + 'px';
   var rotBtn = document.getElementById('slotRotateBtn');
   if (rotBtn) {
@@ -1845,6 +1853,17 @@ function syncSlotToolbar() {
 }
 document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
 window.addEventListener('resize', syncSlotToolbar);
+
+// 浮动工具条「✕ 删除」（同步桌面版 #43②）：删除选中槽位对应的那张发票
+function deleteSlotInvoice() {
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx < 0) return;
+  rmFile(idx);
+  S.selectedSlot = -1;
+  updateAdjPanel();
+}
 
 // 选中槽位 → 同步左侧列表高亮并滚动定位（列表与版面双向联动）
 function syncSidebarToSelectedSlot() {

@@ -467,6 +467,8 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   box-shadow: var(--shadow); transform: translateX(-50%); white-space: nowrap;
 }
 .slot-toolbar .btn { padding: 3px 8px; font-size: 11px; font-weight: 600; }
+.slot-toolbar .btn.danger { color: var(--danger); }
+.slot-toolbar .btn.danger:hover { background: var(--danger-light); }
 .slot-toolbar.hidden { display: none; }
 .invoice-slot { overflow: hidden; position: absolute; display: flex; align-items: center; justify-content: center; background: white; }
 .invoice-slot img { display: block; }
