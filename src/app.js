@@ -1415,8 +1415,11 @@ function applyOcrAsync(fileObj, dataUrl) {
         var autoRemoved = removeDuplicates(true);
         if (autoRemoved) { updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
       }
-      updateFileItem(fileObj);
+      // updateAmountSummary 内含 rebuildPdfInvoiceGroups，必须先跑：跨页组的
+      // 合计页/末页金额徽章要等分组重建后才算得出来
       updateAmountSummary();
+      updateFileItem(fileObj);
+      updateGroupSiblings(fileObj);
       // Show result toast only for single-file OCR triggered by button click
       // (_ocrFromButton === true means user clicked OCR on one file)
       // During batch loading or ocrAll, progress is shown via _onOcrTaskDone
@@ -1442,8 +1445,19 @@ function applyOcrAsync(fileObj, dataUrl) {
 }
 
 function buildAmtBadge(f) {
-  if (f.amountTax > 0 || f.amountNoTax > 0) {
-    return '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>';
+  var amt = f.amountTax || f.amountNoTax;
+  var fromGroup = false;
+  // 跨页发票的非合计页：金额在合计页上，本页金额留空（不进统计），但列表里补挂同一个
+  // 绿色金额，一眼就能确认这张票已认出来（_multiPageInvoice.groupAmount）
+  if (!amt && f._multiPageInvoice && f._multiPageInvoice.groupAmount > 0) {
+    amt = f._multiPageInvoice.groupAmount;
+    fromGroup = true;
+  }
+  if (amt > 0) {
+    var gtip = fromGroup
+      ? ' title="同一张发票的合计金额（在合计页，本页不重复计入统计）"'
+      : '';
+    return '<span class="amt-badge"' + gtip + '>\u00A5' + amt.toFixed(2) + '</span>';
   }
   if (f._amtValidationFail) {
     var v = f._amtValidationFail;
@@ -1542,6 +1556,19 @@ function updateFileItem(fileObj) {
 }
 
 /**
+ * 同一张跨页发票的其它页重建一遍徽章。
+ * 金额是识别完合计页才知道的，而续页的绿色金额徽章（_multiPageInvoice.groupAmount）
+ * 要靠 rebuildPdfInvoiceGroups 才能挂上——所以识别完一页后要把同组的兄弟页刷一遍。
+ */
+function updateGroupSiblings(f) {
+  if (!f._multiPageInvoice) return;
+  var gid = f._invoiceGroupId;
+  S.files.forEach(function(g) {
+    if (g !== f && g._invoiceGroupId === gid) updateFileItem(g);
+  });
+}
+
+/**
  * Render SVG string to PNG data URL via Canvas.
  * @param {string} svgString - SVG markup
  * @param {number} pageWidthMm - page width in mm
@@ -1597,6 +1624,15 @@ function applyPdfTextToResults(results, pdfPath) {
   // 「文字层已覆盖关键字段则跳过」守卫读的是此刻的 fileObj 状态，抢跑就等于白 OCR 一遍。
   // _pdfTextPending 让加载收尾知道还有一批识别工作没结算（ocrBusyCount）
   _pdfTextPending++;
+  // 统一收尾（成功/失败都走）：先减 pending，再整批刷 UI ——
+  // rebuildPdfInvoiceGroups 要等本批所有页结算完才能把 groupAmount / _multiPageInvoice
+  // 挂给续页，逐页刷会让续页的页数徽章与金额徽章漏到下次整表重绘才出现；
+  // 用双参 then 兜底，catch 自身抛错也不会泄漏 _pdfTextPending（否则加载提示卡死）
+  var settle = function() {
+    _pdfTextPending--;
+    updateAmountSummary();
+    results.forEach(function(r) { updateFileItem(r); });
+  };
   return invoke('extract_pdf_texts', {
     pdfPath: pdfPath,
     pageIndices: pageIndices
@@ -1605,8 +1641,6 @@ function applyPdfTextToResults(results, pdfPath) {
       var pdfText = pdfTextMap[r._pdfPageIdx];
       if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
         applyPdfTextResult(r, pdfText);
-        updateFileItem(r);
-        updateAmountSummary();
       } else {
         console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，交由调用方回退OCR');
       }
@@ -1621,16 +1655,12 @@ function applyPdfTextToResults(results, pdfPath) {
       }).then(function(pdfText) {
         if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
           applyPdfTextResult(r, pdfText);
-          updateFileItem(r);
-          updateAmountSummary();
         }
       }).catch(function() {}).then(function() {
         finalizeMedicalDetailPages([r]);
       });
     }));
-  }).then(function() {
-    _pdfTextPending--;
-  });
+  }).then(settle, settle);
 }
 
 function buildPdfResults(pages, id, name, size, filePath) {
@@ -2243,10 +2273,16 @@ function rebuildPdfInvoiceGroups() {
     members.forEach(function(f) { if (f.amountTax > 0) summary = f; });
     if (!summary) summary = members[members.length - 1];
     var total = members.length;
+    var sumAmt = summary.amountTax || summary.amountNoTax || 0;
     members.forEach(function(f, idx) {
       var isSum = (f === summary);
       f._invoiceGroupId = bk;
       f._multiPageInvoice = { total: total, pageNo: idx + 1, isSummary: isSum };
+      // 组内每一页都补挂同一个合计金额：只作展示用（buildAmtBadge），金额字段本身仍留空，
+      // 统计口径不变 —— 仍是「只计合计页」
+      if (!isSum && sumAmt > 0) {
+        f._multiPageInvoice.groupAmount = sumAmt;
+      }
       // 明细页回填合计页票种（只补空不覆盖，金额不回填）
       if (summary.invoiceType && !f.invoiceType) f.invoiceType = summary.invoiceType;
       if (summary._isToll && !f._isToll) f._isToll = true;
