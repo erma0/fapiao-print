@@ -162,7 +162,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **清晰度体检与打印自动增强**（v2.6.6，issue #39）：`audit_clarity`（`async fn` + `spawn_blocking`）只读文件头毫秒级算每张发票折算打印 DPI（矢量电子发票 `kind='vector'` 与分辨率无关刻意不参与），低于阈值前端打 `clarity-badge` ⚠ 徽章；`S.feat.autoEnhance` 开启后打印/保存时对折算 DPI < `enhanceMinDpi`（默认 250）的图片自动增强（`EnhanceParams{minDpi, gamma, amountPct, quality}`，滑块越界 clamp 而非拒绝），读原图全分辨率、预览缩略图永不作增强源。
 
-**白边裁剪坐标换算**（v2.6.6，issue #38）：`trimmedBox` 基于预览缩略图（`THUMB_MAX_DIM=600`）坐标，而图片文件 `ow/oh` 是原图尺寸——进 `SlotSpec.trimBox` 前必须按 `ow/tw`、`oh/th` 比例换算到原图坐标（否则 Rust 读全分辨率原图执行裁剪时整体偏移，打印与预览不一致）；PDF/OFD 页面 `ow/oh` 即渲染位图尺寸，无需换算。`trim_image` 为 `async fn` + `spawn_blocking`。
+**白边裁剪坐标换算**（v2.6.6，issue #38）：`trimmedBox` 基于预览缩略图（`THUMB_MAX_DIM=600`）坐标，而图片文件 `ow/oh` 是原图尺寸——进 `SlotSpec.trimBox` 前必须按 `ow/tw`、`oh/th` 比例换算到原图坐标（否则 Rust 读全分辨率原图执行裁剪时整体偏移，打印与预览不一致）；PDF/OFD 页面 `ow/oh` 即渲染位图尺寸，无需换算。裁剪走 `trim_images_batch`（`async fn` + `spawn_blocking`，Rust 内 rayon 并行，一次 IPC 返回整批 `[Option<TrimImageResult>]`，单张失败为 `null` 由前端跳过）。
 
 ### 发票识别与数据提取
 

@@ -1184,6 +1184,12 @@ async function processFilesIncremental(paths) {
   var remaining = placeholders.slice();
   var promises = loadPromises.slice();
   var completedCount = 0;
+  // 视图刷新按时间片合并：渲染数据早已并行就绪时，逐文件全量重绘 + 双 rAF
+  // 会让加载白耗数秒（renderFileList 是 O(n) 重建，累计 O(n²)）。每 ≥100ms 才
+  // 重绘一次并让帧；渲染 IPC 本身慢时（完成间隔本就 >100ms）行为与逐文件刷新
+  // 完全等价，进度与骨架屏反馈不受影响。
+  var lastFlushTs = Date.now();
+  var UI_FLUSH_MS = 100;
 
   while (remaining.length > 0) {
     // 等待任意一个完成
@@ -1228,8 +1234,11 @@ async function processFilesIncremental(paths) {
       }
     }
 
-    renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
-    await nextFrame();
+    if (Date.now() - lastFlushTs >= UI_FLUSH_MS) {
+      lastFlushTs = Date.now();
+      renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+      await nextFrame();
+    }
   }
 
   if (slotInsert) locateInsertedFile(_lastInsertedId);
@@ -3949,19 +3958,28 @@ async function processTrim() {
     toast('裁剪需要桌面版');
     return;
   }
+  var targets = [];
+  for (var i = 0; i < S.files.length; i++) {
+    var f = S.files[i];
+    if (f.previewUrl && !f.trimmedUrl) targets.push(f);
+  }
   showLoading('裁剪白边...');
   try {
-    for (var i = 0; i < S.files.length; i++) {
-      var f = S.files[i];
-      if (f.previewUrl && !f.trimmedUrl) {
-        var trimmed = await invoke('trim_image', { dataUrl: f.previewUrl, pad: getTrimPad() });
-        if (!trimmed || !trimmed.dataUrl) continue;
-        f.trimmedUrl = trimmed.dataUrl;
-        var tb = trimmed.trimBox;
-        f.trimmedBox = (tb && tb[2] > 0 && tb[3] > 0) ? { x: tb[0], y: tb[1], w: tb[2], h: tb[3] } : null;
-        f.trimmedW = f.trimmedBox ? f.trimmedBox.w : 0;
-        f.trimmedH = f.trimmedBox ? f.trimmedBox.h : 0;
-      }
+    // 一次 IPC 批量裁剪（Rust 内 rayon 并行），替代逐张串行 invoke：
+    // 每张一次的往返 + 全量 base64 传输曾是加载完成后最大的一段串行等待
+    var results = await invoke('trim_images_batch', {
+      dataUrls: targets.map(function(t) { return t.previewUrl; }),
+      pad: getTrimPad()
+    });
+    for (var j = 0; j < targets.length; j++) {
+      var t = targets[j];
+      var trimmed = results && results[j];
+      if (!trimmed || !trimmed.dataUrl) continue;
+      t.trimmedUrl = trimmed.dataUrl;
+      var tb = trimmed.trimBox;
+      t.trimmedBox = (tb && tb[2] > 0 && tb[3] > 0) ? { x: tb[0], y: tb[1], w: tb[2], h: tb[3] } : null;
+      t.trimmedW = t.trimmedBox ? t.trimmedBox.w : 0;
+      t.trimmedH = t.trimmedBox ? t.trimmedBox.h : 0;
     }
     hideLoading();
     updatePreview();

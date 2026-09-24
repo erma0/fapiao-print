@@ -568,34 +568,36 @@ struct TrimImageResult {
     trim_box: Option<pdf_engine::TrimBox>,
 }
 
-/// Trim white edges from an image (base64 data URL → 裁剪后 data URL + 裁剪框)
-/// `pad`: 裁剪后向外保留的边距（px，前端「留边」配置项；缺省 3，上限 60）
-/// **Async command**: 白边检测是 CPU 密集操作，须跑 spawn_blocking，
-/// 避免阻塞 IPC 消息泵（AGENTS 硬性规则 3）。
+/// Trim white edges for a batch of images in ONE IPC round-trip.
+/// Rust 内 rayon 并行，替代前端逐张串行 invoke；单张解码/编码失败返回 null
+/// （前端跳过该张），不会像逐张那样「一张失败整批中断」。
+/// `trim_box` 语义与单张命令完全一致：像素坐标、原点左上，基于入参位图。
 #[command]
-async fn trim_image(data_url: String, pad: Option<u32>) -> Result<TrimImageResult, String> {
+async fn trim_images_batch(data_urls: Vec<String>, pad: Option<u32>) -> Result<Vec<Option<TrimImageResult>>, String> {
     use base64::Engine;
+    use rayon::prelude::*;
     use std::io::Cursor;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let img = pdf_engine::decode_base64_image(&data_url)
-            .map_err(|e| format!("解码失败: {}", e))?;
         let pad = pad.unwrap_or(pdf_engine::TRIM_PAD_DEFAULT).min(pdf_engine::TRIM_PAD_MAX);
-        let (trimmed, trim_box) = pdf_engine::trim_white_edges(&img, pdf_engine::WHITE_THRESHOLD, pad);
-
-        // Encode back to PNG base64
-        let mut buf = Cursor::new(Vec::new());
-        trimmed.write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| format!("PNG编码失败: {}", e))?;
-
-        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
-        Ok(TrimImageResult {
-            data_url: format!("data:image/png;base64,{}", b64),
-            trim_box,
-        })
+        let results: Vec<Option<TrimImageResult>> = data_urls
+            .par_iter()
+            .map(|data_url| {
+                let img = pdf_engine::decode_base64_image(data_url).ok()?;
+                let (trimmed, trim_box) = pdf_engine::trim_white_edges(&img, pdf_engine::WHITE_THRESHOLD, pad);
+                let mut buf = Cursor::new(Vec::new());
+                trimmed.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+                Some(TrimImageResult {
+                    data_url: format!("data:image/png;base64,{}", b64),
+                    trim_box,
+                })
+            })
+            .collect();
+        Ok::<_, String>(results)
     })
     .await
-    .map_err(|e| format!("裁剪任务失败: {}", e))?
+    .map_err(|e| format!("批量裁剪任务失败: {}", e))?
 }
 
 /// Enhance a faint/blurry invoice image (levels stretch + gamma + unsharp mask).
@@ -1519,7 +1521,7 @@ pub fn run() {
         get_config,
         get_temp_dir,
         show_window,
-        trim_image,
+        trim_images_batch,
         enhance_image,
         audit_clarity,
         generate_pdf_from_layout,
@@ -1559,7 +1561,7 @@ pub fn run() {
         get_config,
         get_temp_dir,
         show_window,
-        trim_image,
+        trim_images_batch,
         enhance_image,
         audit_clarity,
         generate_pdf_from_layout,
