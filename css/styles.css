@@ -467,6 +467,10 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   box-shadow: var(--shadow); transform: translateX(-50%); white-space: nowrap;
 }
 .slot-toolbar .btn { padding: 3px 8px; font-size: 11px; font-weight: 600; }
+/* 窄格子（工具条比格子还宽，如 3×3 / 纵向纸张）时只留图标，避免横向压住邻格票面；
+   图标与文字的间距由 .btn 的 flex gap 给，隐藏 tb-text 后 gap 自然消失 */
+.slot-toolbar.compact .tb-text { display: none; }
+.slot-toolbar.compact .btn { padding: 3px 7px; }
 .slot-toolbar .btn.danger { color: var(--danger); }
 .slot-toolbar .btn.danger:hover { background: var(--danger-light); }
 .slot-toolbar.hidden { display: none; }

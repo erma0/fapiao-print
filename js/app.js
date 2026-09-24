@@ -1827,28 +1827,61 @@ function syncSlotToolbar() {
   var wrap = document.getElementById('previewWrap');
   if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
   tb.classList.remove('hidden'); // 先显示后测量：hidden 时 offsetWidth 为 0
+
+  // 旋转按钮文案随角度变化（'旋转' → '90°' 约 +12px），必须先刷新再测量，
+  // 否则下面钳制用的是上一次的宽度，贴边时会多越出十几像素
+  var rotBtn = document.getElementById('slotRotateBtn');
+  var rotText = rotBtn ? rotBtn.querySelector('.tb-text') : null;
+  if (rotText) {
+    var rot = f.rotation || 0;
+    rotText.textContent = rot ? rot + '°' : '旋转';
+    rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
+  }
+
   var wr = wrap.getBoundingClientRect();
   var sr = slotEl.getBoundingClientRect();
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
   var sl = wrap.scrollLeft, st = wrap.scrollTop;
-  var tbW = tb.offsetWidth;
-  var center = sr.left - wr.left + sl + sr.width / 2;
+  var tbW = tb.offsetWidth, tbH = tb.offsetHeight;
+  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格
+  var compact = tbW + 8 > sr.width;
+  if (compact !== tb.classList.contains('compact')) {
+    tb.classList.toggle('compact', compact);
+    tbW = tb.offsetWidth; // 换档后宽度变了，重新测量
+  }
+  var slotLeft = sr.left - wr.left + sl;
+  var slotTop = sr.top - wr.top + st;
+  var center = slotLeft + sr.width / 2;
+
+  // 默认浮在本格子上方 36px
+  var top = slotTop - 36;
+  var inside = top < st + 2; // 视口顶部放不下 → 放回本格子内侧
+  // 上方那块位置若落在别的格子里，工具条会骑在裁切线上压住邻格票面（同步桌面版 #43①：
+  // 2×2 的下排第 3、4 格，上方正是上排发票）→ 同样改放本格子内侧
+  if (!inside) {
+    var slots = document.querySelectorAll('.invoice-slot');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i] === slotEl) continue;
+      var or = slots[i].getBoundingClientRect();
+      var oL = or.left - wr.left + sl, oT = or.top - wr.top + st;
+      if (center + tbW / 2 > oL && center - tbW / 2 < oL + or.width && top + tbH > oT && top < oT + or.height) {
+        inside = true;
+        break;
+      }
+    }
+  }
+  if (inside) top = Math.max(slotTop + 4, st + 2);
+  // 内侧放置优先留在本格子框内（工具条比格子还宽时留给下面的预览区钳制兜底）
+  if (inside && tbW + 8 <= sr.width) {
+    center = Math.max(slotLeft + 4 + tbW / 2, Math.min(slotLeft + sr.width - 4 - tbW / 2, center));
+  }
   // 水平越界时贴边（同步桌面版 #43①）：右列槽位按中心居中会让工具条右半截跑到预览框外
   var minC = sl + 8 + tbW / 2;
   var maxC = sl + wrap.clientWidth - 8 - tbW / 2;
   if (maxC < minC) center = sl + wrap.clientWidth / 2;
   else center = Math.max(minC, Math.min(maxC, center));
-  var slotTop = sr.top - wr.top + st;
-  var top = slotTop - 36;
-  if (top < st + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
   tb.style.left = Math.round(center) + 'px';
   tb.style.top = Math.round(top) + 'px';
-  var rotBtn = document.getElementById('slotRotateBtn');
-  if (rotBtn) {
-    var rot = f.rotation || 0;
-    rotBtn.textContent = '↻ ' + (rot ? rot + '°' : '旋转');
-    rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
-  }
   tb.classList.remove('hidden');
 }
 document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
