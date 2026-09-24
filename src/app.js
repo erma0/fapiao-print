@@ -899,7 +899,7 @@ async function processFileDataList(fileDataList) {
     var now = Date.now();
     if (now - lastToastUpdate > 100 || completed >= total) {
       lastToastUpdate = now;
-      var ocrRemaining = _ocrQueue.length + _ocrRunning;
+      var ocrRemaining = ocrBusyCount();
       var isLast = (completed >= total);
       if (isLast) {
         if (ocrRemaining > 0 && S.feat.ocrEnabled) {
@@ -931,7 +931,9 @@ async function processFileDataList(fileDataList) {
   _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
 
-  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
+  // 含 _pdfTextPending：文字层提取尚未结算时不能提前收尾，否则「文字层已覆盖、
+  // OCR 全被跳过」的批次会停在加载提示上不收尾（toastLoading 不自动隐藏）
+  if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
     _ocrBatchTotal = 0;
     _ocrBatchAddedCount = 0;
@@ -1210,7 +1212,7 @@ async function processFilesIncremental(paths) {
       S.files.splice(phIdx, 1);
     }
 
-    var ocrRemaining = _ocrQueue.length + _ocrRunning;
+    var ocrRemaining = ocrBusyCount();
     var isLast = (completedCount >= total);
     if (isLast) {
       if (ocrRemaining > 0 && S.feat.ocrEnabled) {
@@ -1241,7 +1243,7 @@ async function processFilesIncremental(paths) {
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
   document.getElementById('fileList').classList.remove('batch-loading');
 
-  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
+  if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
     _ocrBatchTotal = 0;
     _ocrBatchAddedCount = 0;
@@ -1282,6 +1284,11 @@ var _loadingBatchActive = false; // True while batch loading is in progress — 
 var _ocrQueue = [];
 var _ocrRunning = 0;
 var _ocrMaxConcurrent = 1; // OCR引擎是Mutex，同时只有1个请求能执行
+var _pdfTextPending = 0;   // 尚未结算的 PDF 文字层提取批次数——结算后才决定要不要排队 OCR
+// OCR 侧的待处理总量：排队 + 执行中 + 待结算的文字层提取。
+// 加载完成判定与按钮计数都要算上文字层，否则「文字层已覆盖、OCR 全被跳过」时
+// 加载提示会停在「识别中」不收尾（toastLoading 不带自动隐藏）
+function ocrBusyCount() { return _ocrQueue.length + _ocrRunning + _pdfTextPending; }
 var _ocrToastActive = false; // track if "识别中" toast is showing
 var _ocrFromButton = false;  // true = OCR triggered by single-file button click (show per-file result toast)
 var _ocrBatchTotal = 0;     // Total files in current batch (for progress display)
@@ -1335,7 +1342,7 @@ function _drainOcrQueue() {
     task().then(_onOcrTaskDone).catch(_onOcrTaskDone);
   }
   // All OCR done — dismiss loading toast (but NOT if batch loading is still active)
-  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive && !_loadingBatchActive) {
+  if (ocrBusyCount() === 0 && _ocrToastActive && !_loadingBatchActive) {
     _ocrToastActive = false;
     var wasBatchTotal = _ocrBatchTotal;
     var wasAddedCount = _ocrBatchAddedCount;
@@ -1359,7 +1366,7 @@ function _drainOcrQueue() {
 function updateOcrAllBtn() {
   var btn = document.getElementById('ocrAllBtn');
   if (!btn) return;
-  var remaining = _ocrQueue.length + _ocrRunning;
+  var remaining = ocrBusyCount();
   if (remaining > 0) {
     var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
     btn.innerHTML = _ocrBatchTotal > 0
@@ -1583,10 +1590,14 @@ function svgToPngDataUrl(svgString, pageWidthMm, pageHeightMm) {
  * @param {Object} fd - FileData from Rust: { name, dataUrl, size, ext, path, origW, origH }
  */
 function applyPdfTextToResults(results, pdfPath) {
-  if (!results || results.length === 0) return;
-  if (!S.feat.pdfTextEnabled) return;
+  if (!results || results.length === 0) return Promise.resolve();
+  if (!S.feat.pdfTextEnabled) return Promise.resolve();
   var pageIndices = results.map(function(r) { return r._pdfPageIdx; });
-  invoke('extract_pdf_texts', {
+  // 返回 Promise：调用方必须等文字层结算完再排队 OCR —— applyOcrAsync 的
+  // 「文字层已覆盖关键字段则跳过」守卫读的是此刻的 fileObj 状态，抢跑就等于白 OCR 一遍。
+  // _pdfTextPending 让加载收尾知道还有一批识别工作没结算（ocrBusyCount）
+  _pdfTextPending++;
+  return invoke('extract_pdf_texts', {
     pdfPath: pdfPath,
     pageIndices: pageIndices
   }).then(function(pdfTextMap) {
@@ -1596,16 +1607,15 @@ function applyPdfTextToResults(results, pdfPath) {
         applyPdfTextResult(r, pdfText);
         updateFileItem(r);
         updateAmountSummary();
-      } else if (hasOcr && S.feat.ocrEnabled) {
-        console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，自动回退OCR');
-        applyOcrAsync(r, r.previewUrl);
+      } else {
+        console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，交由调用方回退OCR');
       }
     });
     finalizeMedicalDetailPages(results);
   }).catch(function(err) {
     console.warn('[PDF文字提取] 批量提取失败，回退单页模式:', err);
-    results.forEach(function(r) {
-      invoke('extract_pdf_text', {
+    return Promise.all(results.map(function(r) {
+      return invoke('extract_pdf_text', {
         pdfPath: r._pdfPath,
         pageIdx: r._pdfPageIdx
       }).then(function(pdfText) {
@@ -1613,15 +1623,13 @@ function applyPdfTextToResults(results, pdfPath) {
           applyPdfTextResult(r, pdfText);
           updateFileItem(r);
           updateAmountSummary();
-        } else if (hasOcr && S.feat.ocrEnabled) {
-          applyOcrAsync(r, r.previewUrl);
         }
-        finalizeMedicalDetailPages([r]);
-      }).catch(function() {
-        if (hasOcr && S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+      }).catch(function() {}).then(function() {
         finalizeMedicalDetailPages([r]);
       });
-    });
+    }));
+  }).then(function() {
+    _pdfTextPending--;
   });
 }
 
@@ -1671,10 +1679,15 @@ function loadFileFromDataUrlFast(fd) {
             resolve(results.length === 1 ? results[0] : results);
 
             loadPdfImages(results);
-            applyPdfTextToResults(results, filePath);
-
-            results.forEach(function(r) {
-              if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+            // 先等文字层提取结算，再排队 OCR：文字层已覆盖关键字段的页会被
+            // applyOcrAsync 的守卫直接跳过（电子票几乎全部命中），只有文本层为空
+            // （扫描件）或字段不全的页才真正跑 OCR
+            applyPdfTextToResults(results, filePath).then(function() {
+              results.forEach(function(r) {
+                if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+              });
+              // 全部被文字层覆盖时没有任何任务进队列，这里收尾加载提示
+              if (!window.__TAURI_CLOSING__) _drainOcrQueue();
             });
             return;
           }
@@ -1691,10 +1704,11 @@ function loadFileFromDataUrlFast(fd) {
                 resolve(results2.length === 1 ? results2[0] : results2);
 
                 loadPdfImages(results2);
-                applyPdfTextToResults(results2, filePath);
-
-                results2.forEach(function(r) {
-                  if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+                applyPdfTextToResults(results2, filePath).then(function() {
+                  results2.forEach(function(r) {
+                    if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+                  });
+                  if (!window.__TAURI_CLOSING__) _drainOcrQueue();
                 });
                 return;
               }

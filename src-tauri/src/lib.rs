@@ -316,27 +316,41 @@ fn open_url(url: String) -> Result<(), String> {
 /// When `filePath` is provided, Rust reads the image directly from disk — skipping the
 /// expensive base64 encode→IPC→decode round-trip (saves ~30% data + CPU for large images).
 /// Falls back to `dataUrl` when `filePath` is None or file read fails.
+///
+/// **Async command**: MNN 推理单页要 1~3s。同步命令由 Tauri 跑在主线程上，会把事件循环
+/// 一起阻塞住 —— 表现就是识别期间窗口「未响应」、进度与重绘全部停摆。这里跑 spawn_blocking。
 #[cfg(feature = "ocr")]
 #[command]
-fn ocr_image(data_url: String, file_path: Option<String>, ocr_precision: Option<String>) -> Result<OcrResult, String> {
-    use std::sync::atomic::Ordering;
-    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭".to_string());
-    }
-    pdf_engine::ocr_image(&data_url, file_path.as_deref(), ocr_precision.as_deref())
+async fn ocr_image(data_url: String, file_path: Option<String>, ocr_precision: Option<String>) -> Result<OcrResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::sync::atomic::Ordering;
+        if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return Err("应用正在关闭".to_string());
+        }
+        pdf_engine::ocr_image(&data_url, file_path.as_deref(), ocr_precision.as_deref())
+    })
+    .await
+    .map_err(|e| format!("OCR任务失败: {}", e))?
 }
 
 /// Render a single PDF page and run OCR on it — zero IPC round-trip.
 /// The frontend calls this instead of `render_pdf_pages` + `ocr_image` for PDF pages,
 /// avoiding the expensive Rust→base64→IPC→frontend→downsample→base64→IPC→Rust cycle.
+///
+/// **Async command**：同 `ocr_image` —— 这个命令内部还有 WinRT 渲染的阻塞等待，
+/// 放主线程上会把窗口一起拖死。见 `ocr_image` 的说明。
 #[cfg(feature = "ocr")]
 #[command]
-fn ocr_pdf_page(pdf_path: String, page_index: u32, dpi: Option<u32>, ocr_precision: Option<String>) -> Result<OcrResult, String> {
-    use std::sync::atomic::Ordering;
-    if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
-        return Err("应用正在关闭".to_string());
-    }
-    pdf_engine::ocr_pdf_page(&pdf_path, page_index, dpi, ocr_precision.as_deref())
+async fn ocr_pdf_page(pdf_path: String, page_index: u32, dpi: Option<u32>, ocr_precision: Option<String>) -> Result<OcrResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::sync::atomic::Ordering;
+        if pdf_engine::SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return Err("应用正在关闭".to_string());
+        }
+        pdf_engine::ocr_pdf_page(&pdf_path, page_index, dpi, ocr_precision.as_deref())
+    })
+    .await
+    .map_err(|e| format!("OCR任务失败: {}", e))?
 }
 
 /// Check whether OCR feature is available at runtime.
