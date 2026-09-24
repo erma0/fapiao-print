@@ -3295,12 +3295,13 @@ function syncSlotToolbar() {
   if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
   tb.classList.remove('hidden'); // 先显示后测量：hidden 时 offsetWidth 为 0
 
-  // 旋转按钮文案随角度变化（'旋转' → '↻ 90°' 约 +12px），必须先刷新再测量，
+  // 旋转按钮文案随角度变化（'旋转' → '90°' 约 +12px），必须先刷新再测量，
   // 否则下面钳制用的是上一次的宽度，贴边时会多越出十几像素
   var rotBtn = document.getElementById('slotRotateBtn');
-  if (rotBtn) {
+  var rotText = rotBtn ? rotBtn.querySelector('.tb-text') : null;
+  if (rotText) {
     var rot = f.rotation || 0;
-    rotBtn.textContent = '↻ ' + (rot ? rot + '°' : '旋转');
+    rotText.textContent = rot ? rot + '°' : '旋转';
     rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
   }
 
@@ -3309,6 +3310,12 @@ function syncSlotToolbar() {
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
   var sl = wrap.scrollLeft, st = wrap.scrollTop;
   var tbW = tb.offsetWidth, tbH = tb.offsetHeight;
+  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格
+  var compact = tbW + 8 > sr.width;
+  if (compact !== tb.classList.contains('compact')) {
+    tb.classList.toggle('compact', compact);
+    tbW = tb.offsetWidth; // 换档后宽度变了，重新测量
+  }
   var slotLeft = sr.left - wr.left + sl;
   var slotTop = sr.top - wr.top + st;
   var center = slotLeft + sr.width / 2;
