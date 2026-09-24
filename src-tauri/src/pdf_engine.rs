@@ -531,7 +531,10 @@ pub(crate) fn ocr_pdf_page(pdf_path: &str, page_index: u32, dpi: Option<u32>, oc
     use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
 
     let _com = ComGuard::init();
-    let dpi = dpi.unwrap_or(RENDER_DPI);
+    // OCR 渲染上限（DPI）：沿用旧实现的 1200 DPI 封顶。注意这是「上限」而非目标 ——
+    // OCR 目标像素本身已封顶（≤2800），1200 DPI 只约束极小页面被放大到夸张尺寸，
+    // 不会压缩 A4 在标准(1920)/精确(2800)档拿到的目标像素。调用方传了 dpi 才按小的来。
+    let max_dpi = dpi.unwrap_or(1200);
     let path_h = HSTRING::from(pdf_path);
 
     let file = StorageFile::GetFileFromPathAsync(&path_h)
@@ -557,20 +560,19 @@ pub(crate) fn ocr_pdf_page(pdf_path: &str, page_index: u32, dpi: Option<u32>, oc
 
     let size = page.Size().map_err(|e| format!("获取第{}页尺寸失败: {}", page_index + 1, e))?;
 
-    // Adaptive DPI (same logic as render_pdf_pages)
-    let min_render_px: u32 = 3508;
-    let longest_side = size.Width.max(size.Height) as u32;
-    let base_pixels = longest_side * dpi / 96;
-    let effective_dpi = if base_pixels >= min_render_px {
-        dpi
-    } else {
-        let needed = (min_render_px as f32 * 96.0 / longest_side as f32).ceil() as u32;
-        dpi.max(needed).min(1200)
-    };
-
-    let scale = effective_dpi as f32 / 96.0;
-    let dest_w = (size.Width * scale) as u32;
-    let dest_h = (size.Height * scale) as u32;
+    // OCR 只吃 max_dim 级别的像素（见 ocr_max_dim_for_precision），所以直接按目标像素尺寸
+    // 栅格化。此前沿用 render_pdf_pages 的「至少 3508px」逻辑，等于先渲染 3.3 倍像素、
+    // 再在 run_ocr_on_image 里 Lanczos3 降采样砍掉 —— 白烧掉的正是单页 OCR 的大头耗时。
+    // 与旧实现等价：最终输入 = min(ocr_target, 长边 × 1200/96)，各档目标像素都能拿满。
+    let ocr_target = ocr_max_dim_for_precision(ocr_precision.unwrap_or("standard"));
+    let longest_side = size.Width.max(size.Height);
+    if longest_side <= 0.0 {
+        return Err(format!("第{}页尺寸异常", page_index + 1));
+    }
+    // floor 而非 round：保证长边 ≤ ocr_target，run_ocr_on_image 便不会再触发降采样
+    let scale = (ocr_target as f32 / longest_side).min(max_dpi as f32 / 96.0);
+    let dest_w = ((size.Width * scale).floor() as u32).max(1);
+    let dest_h = ((size.Height * scale).floor() as u32).max(1);
 
     let options = PdfPageRenderOptions::new().map_err(|e| format!("创建渲染选项失败: {}", e))?;
     options.SetDestinationWidth(dest_w).map_err(|e| format!("设置宽度失败: {}", e))?;

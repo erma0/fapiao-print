@@ -899,7 +899,7 @@ async function processFileDataList(fileDataList) {
     var now = Date.now();
     if (now - lastToastUpdate > 100 || completed >= total) {
       lastToastUpdate = now;
-      var ocrRemaining = _ocrQueue.length + _ocrRunning;
+      var ocrRemaining = ocrBusyCount();
       var isLast = (completed >= total);
       if (isLast) {
         if (ocrRemaining > 0 && S.feat.ocrEnabled) {
@@ -931,7 +931,9 @@ async function processFileDataList(fileDataList) {
   _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
 
-  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
+  // 含 _pdfTextPending：文字层提取尚未结算时不能提前收尾，否则「文字层已覆盖、
+  // OCR 全被跳过」的批次会停在加载提示上不收尾（toastLoading 不自动隐藏）
+  if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
     _ocrBatchTotal = 0;
     _ocrBatchAddedCount = 0;
@@ -1210,7 +1212,7 @@ async function processFilesIncremental(paths) {
       S.files.splice(phIdx, 1);
     }
 
-    var ocrRemaining = _ocrQueue.length + _ocrRunning;
+    var ocrRemaining = ocrBusyCount();
     var isLast = (completedCount >= total);
     if (isLast) {
       if (ocrRemaining > 0 && S.feat.ocrEnabled) {
@@ -1241,7 +1243,7 @@ async function processFilesIncremental(paths) {
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
   document.getElementById('fileList').classList.remove('batch-loading');
 
-  if (_ocrQueue.length === 0 && _ocrRunning === 0) {
+  if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
     _ocrBatchTotal = 0;
     _ocrBatchAddedCount = 0;
@@ -1282,6 +1284,11 @@ var _loadingBatchActive = false; // True while batch loading is in progress — 
 var _ocrQueue = [];
 var _ocrRunning = 0;
 var _ocrMaxConcurrent = 1; // OCR引擎是Mutex，同时只有1个请求能执行
+var _pdfTextPending = 0;   // 尚未结算的 PDF 文字层提取批次数——结算后才决定要不要排队 OCR
+// OCR 侧的待处理总量：排队 + 执行中 + 待结算的文字层提取。
+// 加载完成判定与按钮计数都要算上文字层，否则「文字层已覆盖、OCR 全被跳过」时
+// 加载提示会停在「识别中」不收尾（toastLoading 不带自动隐藏）
+function ocrBusyCount() { return _ocrQueue.length + _ocrRunning + _pdfTextPending; }
 var _ocrToastActive = false; // track if "识别中" toast is showing
 var _ocrFromButton = false;  // true = OCR triggered by single-file button click (show per-file result toast)
 var _ocrBatchTotal = 0;     // Total files in current batch (for progress display)
@@ -1335,7 +1342,7 @@ function _drainOcrQueue() {
     task().then(_onOcrTaskDone).catch(_onOcrTaskDone);
   }
   // All OCR done — dismiss loading toast (but NOT if batch loading is still active)
-  if (_ocrQueue.length === 0 && _ocrRunning === 0 && _ocrToastActive && !_loadingBatchActive) {
+  if (ocrBusyCount() === 0 && _ocrToastActive && !_loadingBatchActive) {
     _ocrToastActive = false;
     var wasBatchTotal = _ocrBatchTotal;
     var wasAddedCount = _ocrBatchAddedCount;
@@ -1359,7 +1366,7 @@ function _drainOcrQueue() {
 function updateOcrAllBtn() {
   var btn = document.getElementById('ocrAllBtn');
   if (!btn) return;
-  var remaining = _ocrQueue.length + _ocrRunning;
+  var remaining = ocrBusyCount();
   if (remaining > 0) {
     var done = _ocrBatchTotal > 0 ? _ocrBatchTotal - remaining : 0;
     btn.innerHTML = _ocrBatchTotal > 0
@@ -1408,8 +1415,11 @@ function applyOcrAsync(fileObj, dataUrl) {
         var autoRemoved = removeDuplicates(true);
         if (autoRemoved) { updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
       }
-      updateFileItem(fileObj);
+      // updateAmountSummary 内含 rebuildPdfInvoiceGroups，必须先跑：跨页组的
+      // 合计页/末页金额徽章要等分组重建后才算得出来
       updateAmountSummary();
+      updateFileItem(fileObj);
+      updateGroupSiblings(fileObj);
       // Show result toast only for single-file OCR triggered by button click
       // (_ocrFromButton === true means user clicked OCR on one file)
       // During batch loading or ocrAll, progress is shown via _onOcrTaskDone
@@ -1435,8 +1445,19 @@ function applyOcrAsync(fileObj, dataUrl) {
 }
 
 function buildAmtBadge(f) {
-  if (f.amountTax > 0 || f.amountNoTax > 0) {
-    return '<span class="amt-badge">\u00A5' + (f.amountTax || f.amountNoTax).toFixed(2) + '</span>';
+  var amt = f.amountTax || f.amountNoTax;
+  var fromGroup = false;
+  // 跨页发票的非合计页：金额在合计页上，本页金额留空（不进统计），但列表里补挂同一个
+  // 绿色金额，一眼就能确认这张票已认出来（_multiPageInvoice.groupAmount）
+  if (!amt && f._multiPageInvoice && f._multiPageInvoice.groupAmount > 0) {
+    amt = f._multiPageInvoice.groupAmount;
+    fromGroup = true;
+  }
+  if (amt > 0) {
+    var gtip = fromGroup
+      ? ' title="同一张发票的合计金额（在合计页，本页不重复计入统计）"'
+      : '';
+    return '<span class="amt-badge"' + gtip + '>\u00A5' + amt.toFixed(2) + '</span>';
   }
   if (f._amtValidationFail) {
     var v = f._amtValidationFail;
@@ -1535,6 +1556,19 @@ function updateFileItem(fileObj) {
 }
 
 /**
+ * 同一张跨页发票的其它页重建一遍徽章。
+ * 金额是识别完合计页才知道的，而续页的绿色金额徽章（_multiPageInvoice.groupAmount）
+ * 要靠 rebuildPdfInvoiceGroups 才能挂上——所以识别完一页后要把同组的兄弟页刷一遍。
+ */
+function updateGroupSiblings(f) {
+  if (!f._multiPageInvoice) return;
+  var gid = f._invoiceGroupId;
+  S.files.forEach(function(g) {
+    if (g !== f && g._invoiceGroupId === gid) updateFileItem(g);
+  });
+}
+
+/**
  * Render SVG string to PNG data URL via Canvas.
  * @param {string} svgString - SVG markup
  * @param {number} pageWidthMm - page width in mm
@@ -1583,10 +1617,23 @@ function svgToPngDataUrl(svgString, pageWidthMm, pageHeightMm) {
  * @param {Object} fd - FileData from Rust: { name, dataUrl, size, ext, path, origW, origH }
  */
 function applyPdfTextToResults(results, pdfPath) {
-  if (!results || results.length === 0) return;
-  if (!S.feat.pdfTextEnabled) return;
+  if (!results || results.length === 0) return Promise.resolve();
+  if (!S.feat.pdfTextEnabled) return Promise.resolve();
   var pageIndices = results.map(function(r) { return r._pdfPageIdx; });
-  invoke('extract_pdf_texts', {
+  // 返回 Promise：调用方必须等文字层结算完再排队 OCR —— applyOcrAsync 的
+  // 「文字层已覆盖关键字段则跳过」守卫读的是此刻的 fileObj 状态，抢跑就等于白 OCR 一遍。
+  // _pdfTextPending 让加载收尾知道还有一批识别工作没结算（ocrBusyCount）
+  _pdfTextPending++;
+  // 统一收尾（成功/失败都走）：先减 pending，再整批刷 UI ——
+  // rebuildPdfInvoiceGroups 要等本批所有页结算完才能把 groupAmount / _multiPageInvoice
+  // 挂给续页，逐页刷会让续页的页数徽章与金额徽章漏到下次整表重绘才出现；
+  // 用双参 then 兜底，catch 自身抛错也不会泄漏 _pdfTextPending（否则加载提示卡死）
+  var settle = function() {
+    _pdfTextPending--;
+    updateAmountSummary();
+    results.forEach(function(r) { updateFileItem(r); });
+  };
+  return invoke('extract_pdf_texts', {
     pdfPath: pdfPath,
     pageIndices: pageIndices
   }).then(function(pdfTextMap) {
@@ -1594,35 +1641,26 @@ function applyPdfTextToResults(results, pdfPath) {
       var pdfText = pdfTextMap[r._pdfPageIdx];
       if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
         applyPdfTextResult(r, pdfText);
-        updateFileItem(r);
-        updateAmountSummary();
-      } else if (hasOcr && S.feat.ocrEnabled) {
-        console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，自动回退OCR');
-        applyOcrAsync(r, r.previewUrl);
+      } else {
+        console.log('[PDF文字提取] 文本层为空(无CMap/扫描件)，交由调用方回退OCR');
       }
     });
     finalizeMedicalDetailPages(results);
   }).catch(function(err) {
     console.warn('[PDF文字提取] 批量提取失败，回退单页模式:', err);
-    results.forEach(function(r) {
-      invoke('extract_pdf_text', {
+    return Promise.all(results.map(function(r) {
+      return invoke('extract_pdf_text', {
         pdfPath: r._pdfPath,
         pageIdx: r._pdfPageIdx
       }).then(function(pdfText) {
         if (pdfText && pdfText.lines && pdfText.lines.length > 0) {
           applyPdfTextResult(r, pdfText);
-          updateFileItem(r);
-          updateAmountSummary();
-        } else if (hasOcr && S.feat.ocrEnabled) {
-          applyOcrAsync(r, r.previewUrl);
         }
-        finalizeMedicalDetailPages([r]);
-      }).catch(function() {
-        if (hasOcr && S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+      }).catch(function() {}).then(function() {
         finalizeMedicalDetailPages([r]);
       });
-    });
-  });
+    }));
+  }).then(settle, settle);
 }
 
 function buildPdfResults(pages, id, name, size, filePath) {
@@ -1671,10 +1709,15 @@ function loadFileFromDataUrlFast(fd) {
             resolve(results.length === 1 ? results[0] : results);
 
             loadPdfImages(results);
-            applyPdfTextToResults(results, filePath);
-
-            results.forEach(function(r) {
-              if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+            // 先等文字层提取结算，再排队 OCR：文字层已覆盖关键字段的页会被
+            // applyOcrAsync 的守卫直接跳过（电子票几乎全部命中），只有文本层为空
+            // （扫描件）或字段不全的页才真正跑 OCR
+            applyPdfTextToResults(results, filePath).then(function() {
+              results.forEach(function(r) {
+                if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+              });
+              // 全部被文字层覆盖时没有任何任务进队列，这里收尾加载提示
+              if (!window.__TAURI_CLOSING__) _drainOcrQueue();
             });
             return;
           }
@@ -1691,10 +1734,11 @@ function loadFileFromDataUrlFast(fd) {
                 resolve(results2.length === 1 ? results2[0] : results2);
 
                 loadPdfImages(results2);
-                applyPdfTextToResults(results2, filePath);
-
-                results2.forEach(function(r) {
-                  if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+                applyPdfTextToResults(results2, filePath).then(function() {
+                  results2.forEach(function(r) {
+                    if (S.feat.ocrEnabled) applyOcrAsync(r, r.previewUrl);
+                  });
+                  if (!window.__TAURI_CLOSING__) _drainOcrQueue();
                 });
                 return;
               }
@@ -2229,10 +2273,16 @@ function rebuildPdfInvoiceGroups() {
     members.forEach(function(f) { if (f.amountTax > 0) summary = f; });
     if (!summary) summary = members[members.length - 1];
     var total = members.length;
+    var sumAmt = summary.amountTax || summary.amountNoTax || 0;
     members.forEach(function(f, idx) {
       var isSum = (f === summary);
       f._invoiceGroupId = bk;
       f._multiPageInvoice = { total: total, pageNo: idx + 1, isSummary: isSum };
+      // 组内每一页都补挂同一个合计金额：只作展示用（buildAmtBadge），金额字段本身仍留空，
+      // 统计口径不变 —— 仍是「只计合计页」
+      if (!isSum && sumAmt > 0) {
+        f._multiPageInvoice.groupAmount = sumAmt;
+      }
       // 明细页回填合计页票种（只补空不覆盖，金额不回填）
       if (summary.invoiceType && !f.invoiceType) f.invoiceType = summary.invoiceType;
       if (summary._isToll && !f._isToll) f._isToll = true;
@@ -3244,28 +3294,61 @@ function syncSlotToolbar() {
   var wrap = document.getElementById('previewWrap');
   if (!slotEl || !f || !wrap) { tb.classList.add('hidden'); return; }
   tb.classList.remove('hidden'); // 先显示后测量：hidden 时 offsetWidth 为 0
+
+  // 旋转按钮文案随角度变化（'旋转' → '90°' 约 +12px），必须先刷新再测量，
+  // 否则下面钳制用的是上一次的宽度，贴边时会多越出十几像素
+  var rotBtn = document.getElementById('slotRotateBtn');
+  var rotText = rotBtn ? rotBtn.querySelector('.tb-text') : null;
+  if (rotText) {
+    var rot = f.rotation || 0;
+    rotText.textContent = rot ? rot + '°' : '旋转';
+    rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
+  }
+
   var wr = wrap.getBoundingClientRect();
   var sr = slotEl.getBoundingClientRect();
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
   var sl = wrap.scrollLeft, st = wrap.scrollTop;
-  var tbW = tb.offsetWidth;
-  var center = sr.left - wr.left + sl + sr.width / 2;
+  var tbW = tb.offsetWidth, tbH = tb.offsetHeight;
+  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格
+  var compact = tbW + 8 > sr.width;
+  if (compact !== tb.classList.contains('compact')) {
+    tb.classList.toggle('compact', compact);
+    tbW = tb.offsetWidth; // 换档后宽度变了，重新测量
+  }
+  var slotLeft = sr.left - wr.left + sl;
+  var slotTop = sr.top - wr.top + st;
+  var center = slotLeft + sr.width / 2;
+
+  // 默认浮在本格子上方 36px
+  var top = slotTop - 36;
+  var inside = top < st + 2; // 视口顶部放不下 → 放回本格子内侧
+  // 上方那块位置若落在别的格子里，工具条会骑在裁切线上压住邻格票面（issue #43①：
+  // 2×2 的下排第 3、4 格，上方正是上排发票）→ 同样改放本格子内侧
+  if (!inside) {
+    var slots = document.querySelectorAll('.invoice-slot');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i] === slotEl) continue;
+      var or = slots[i].getBoundingClientRect();
+      var oL = or.left - wr.left + sl, oT = or.top - wr.top + st;
+      if (center + tbW / 2 > oL && center - tbW / 2 < oL + or.width && top + tbH > oT && top < oT + or.height) {
+        inside = true;
+        break;
+      }
+    }
+  }
+  if (inside) top = Math.max(slotTop + 4, st + 2);
+  // 内侧放置优先留在本格子框内（工具条比格子还宽时留给下面的预览区钳制兜底）
+  if (inside && tbW + 8 <= sr.width) {
+    center = Math.max(slotLeft + 4 + tbW / 2, Math.min(slotLeft + sr.width - 4 - tbW / 2, center));
+  }
   // 水平越界时贴边（issue #43①）：右列槽位按中心居中会让工具条右半截跑到预览框外
   var minC = sl + 8 + tbW / 2;
   var maxC = sl + wrap.clientWidth - 8 - tbW / 2;
   if (maxC < minC) center = sl + wrap.clientWidth / 2;
   else center = Math.max(minC, Math.min(maxC, center));
-  var slotTop = sr.top - wr.top + st;
-  var top = slotTop - 36;
-  if (top < st + 2) top = slotTop + 4; // 槽位贴视口顶部时放票面内侧
   tb.style.left = Math.round(center) + 'px';
   tb.style.top = Math.round(top) + 'px';
-  var rotBtn = document.getElementById('slotRotateBtn');
-  if (rotBtn) {
-    var rot = f.rotation || 0;
-    rotBtn.textContent = '↻ ' + (rot ? rot + '°' : '旋转');
-    rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
-  }
   tb.classList.remove('hidden');
 }
 document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);

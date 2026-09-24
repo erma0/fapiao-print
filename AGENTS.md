@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.6.8（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.6.9（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -119,7 +119,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **单票独立调整**：`fileObj.{slotScale, slotOffsetX, slotOffsetY}`，CSS transform 预览 + Rust `SlotSpec` 参数输出。九宫格快速对齐、数字框/滑块滚轮微调、选中后滚轮缩放单票（5%/步）、拖拽约束按实际显示尺寸动态计算、放大上限 5x、编辑态溢出可见（`.selected/.dragging` 时 `overflow:visible`）。持久化：`perFileAdjustments` Map 按文件名匹配，可选开关。
 
-**选中票面浮动工具条**（v2.6.1，v2.6.8 钳制 + 删除）：`app.js syncSlotToolbar()` 把 `#slotToolbar` 锚在选中槽位上方居中（CSS `translateX(-50%)`），随 `previewWrap` 滚动与窗口 resize 重算。⚠️ 两条硬约定：①**水平必须左右钳制**在预览区可视宽度内（各留 8px，槽位比工具条还窄时贴边）——否则 2×2 / 3×3 右列槽位的右半截会跑出框外（issue #43①）；②**先 `classList.remove('hidden')` 再读 `offsetWidth`**，`display:none` 时宽度为 0 会让钳制失效。按钮：重置 / 居中 / 应用到全部 / 旋转 / **✕ 删除**（`deleteSlotInvoice()`，删完清空选中）。
+**选中票面浮动工具条**（v2.6.1，v2.6.8 钳制 + 删除，v2.6.9 按格子归位）：`app.js syncSlotToolbar()` 把 `#slotToolbar` 锚在选中槽位上方 36px 居中（CSS `translateX(-50%)`），随 `previewWrap` 滚动与窗口 resize 重算。⚠️ 四条硬约定：①上方那块位置**一旦与别的格子相交就贴回本格子内侧顶部**（下排格子、报销单第 2 段起、3×3 中下排都命中）——否则工具条骑在裁切线上压住邻格票面，就是 issue #43① 的「跑到框外」；②**水平必须左右钳制**（内侧放置先钳在本格子框内，再统一钳在预览区可视宽度内各留 8px）——否则右列槽位的右半截会跑出预览框；③**先 `classList.remove('hidden')` 再读 `offsetWidth`**，`display:none` 时宽度为 0 会让钳制失效；且**旋转按钮文案要在测量之前刷新**（`旋转` → `90°` 宽约 +12px，否则钳制用过期宽度）。工具条宽于格子时自动加 `.compact`（只留图标）并重测宽度。按钮：重置 / 居中 / 应用到全部 / 旋转 / **✕ 删除**（`deleteSlotInvoice()`，删完清空选中）。
 
 **预览滚轮交互**（`previewWrap` wheel 三分支，按优先级）：选中槽位+悬停 → 缩放单票；Ctrl+滚轮 → 缩放整体视图；普通滚轮 → 滚动内容，触顶/触底翻页。`_wheelFlipTs` 150ms 节流。
 
