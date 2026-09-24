@@ -1,6 +1,6 @@
 [package]
 name = "ticketchan"
-version = "2.6.8"
+version = "2.6.9"
 description = "发票酱"
 authors = ["ticketchan"]
 license = "MIT"
