@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.6.11-beta.4（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.6.11（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -196,7 +196,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 ### 导出与工具命令
 
-**汇总表**（侧边栏 📊）：14 字段按需勾选、双击编辑回写全 UI 同步、三金额合计行 sticky；`exportSummaryCsv()` UTF-8 BOM + CRLF 手写 CSV → `write_text_file`；数据源 `getCheckedFiles()`（不含 copies 展开）。「发票类型」单一真源 `resolveInvoiceType(f)`（分类标记 通行费/车票/非税 → 结构化或 OCR 类型 → 兜底「发票」），`normalizeInvoiceType()` 归一为「专票 / 普票」短标签，列表徽章 / 复制发票信息 / 重命名 / CSV 共用同一口径；**禁止再写死「增值税发票」**（issue #35：普票全被显示成该串）。内嵌批量重命名面板：3 预设模板 + 自定义字段（勾选顺序=文件名顺序）、`resolveNameConflicts()` 自动 `_2` 序号、`executeRename()` → `rename_file` 命令并同步 `S.files` 共享路径与 `_fileAdjMap`/`_notesMap` key；OFD 的 dedup key 排除 `_filePath`。
+**汇总表**（侧边栏 📊）：14 字段按需勾选、双击编辑回写全 UI 同步、三金额合计行 sticky；`exportSummaryCsv()` UTF-8 BOM + CRLF 手写 CSV → `write_text_file`；数据源 `getCheckedFiles()`（不含 copies 展开）。「发票类型」单一真源 `resolveInvoiceType(f)`（分类标记 通行费/车票/非税 → 结构化或 OCR 类型 → 兜底「发票」），`normalizeInvoiceType()` 归一为「专票 / 普票」短标签，列表徽章 / 复制发票信息 / 重命名 / CSV 共用同一口径；**禁止再写死「增值税发票」**（issue #35：普票全被显示成该串）。内嵌批量重命名面板：3 预设模板 + 自定义字段（勾选顺序=文件名顺序）、`resolveNameConflicts()` 自动 `_2` 序号、`executeRename()` → `rename_file` 命令并同步 `S.files` 共享路径与 `_fileAdjMap`/`_notesMap` key；OFD 的 dedup key 排除 `_filePath`。⚠️ **长数字必须按文本导出**：≥15 位纯数字（20 位发票号、18 位税号）用 Excel 文本公式 `="..."` 包裹，否则 Excel/WPS 打开会转科学计数法并丢精度（issue #49）。
 
 **文件命令**（均为 `async fn` + `spawn_blocking`）：`copy_file`、`rename_file`（同盘原子 rename，跨盘 copy+delete）。
 

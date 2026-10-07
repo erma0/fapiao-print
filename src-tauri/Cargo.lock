@@ -5053,7 +5053,7 @@ dependencies = [
 
 [[package]]
 name = "ticketchan"
-version = "2.6.11-beta.4"
+version = "2.6.11"
 dependencies = [
  "ab_glyph",
  "base64 0.22.1",
