@@ -4271,7 +4271,8 @@ function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); i
 // =====================================================
 // Save settings & Preferences
 // =====================================================
-function saveSettings() {
+// 汇总当前全部持久化配置 — saveSettings 与「导出设置」共用同一份数据，保证导出内容 = 软件实际配置
+function collectSettings() {
   var o = {
     layout: { cols: S.layout.cols, rows: S.layout.rows },
     paperSize: document.getElementById('paperSize').value,
@@ -4371,7 +4372,11 @@ function saveSettings() {
   } else {
     o.filePaths = [];
   }
-  try { localStorage.setItem('ticketchan-settings', JSON.stringify(o)); } catch(e) {}
+  return o;
+}
+
+function saveSettings() {
+  try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 
 function loadSettings() {
@@ -4631,24 +4636,54 @@ function applyTheme() {
   try { localStorage.setItem('ticketchan-theme', theme); } catch(e) {}
 }
 
-function exportSettings() {
+// 导出完整配置（issue #50）：内容与持久化同源（collectSettings + localStorage 独立偏好项），
+// Tauri 下弹原生「另存为」对话框自选保存路径；浏览器开发环境回退 Blob 下载
+async function exportSettings() {
+  var ts = new Date();
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  var tsStr = ts.getFullYear() + pad2(ts.getMonth()+1) + pad2(ts.getDate()) + '_' + pad2(ts.getHours()) + pad2(ts.getMinutes());
   var data = {
-    layout: S.layout,
-    feat: S.feat,
-    ocrPrecision: S.ocrPrecision,
-    paperSize: document.getElementById('paperSize').value,
-    orientation: document.getElementById('orientation').value,
-    copies: document.getElementById('copies').value,
-    colorMode: document.getElementById('colorMode').value,
-    printMode: document.getElementById('printMode').value,
-    saveDir: getSaveDir(),
-    quickLayouts: cloneQuickLayouts(S.quickLayouts),
-    quickLayoutMax: normalizeQuickLayoutMax(S.quickLayoutMax)
+    _meta: {
+      app: '发票酱',
+      version: APP_VERSION || '',
+      exportedAt: ts.getFullYear() + '-' + pad2(ts.getMonth()+1) + '-' + pad2(ts.getDate()) + ' ' + pad2(ts.getHours()) + ':' + pad2(ts.getMinutes()) + ':' + pad2(ts.getSeconds())
+    }
   };
-  var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = '发票酱设置.json'; a.click();
-  toast('设置已导出');
+  var o = collectSettings();
+  Object.keys(o).forEach(function(k) { data[k] = o[k]; });
+  data.theme = document.getElementById('themeMode').value;
+  data.amtMode = S.amtMode;
+  data.ocrEnabled = !!S.feat.ocrEnabled;
+  data.pdfTextEnabled = !!S.feat.pdfTextEnabled;
+  data.ocrPrecision = S.ocrPrecision;
+  data.saveDir = getSaveDir();
+  var json = JSON.stringify(data, null, 2);
+  if (isTauri && invoke) {
+    try {
+      var defaultDir = '';
+      try { defaultDir = await invoke('get_downloads_dir'); } catch(e) {}
+      var defaultName = '发票酱设置_' + tsStr + '.json';
+      var savePath = await invoke('plugin:dialog|save', {
+        options: {
+          title: '导出设置',
+          defaultPath: defaultDir ? (defaultDir + (defaultDir.endsWith('\\')||defaultDir.endsWith('/')?'':'\\') + defaultName) : defaultName,
+          filters: [{ name: 'JSON 文件', extensions: ['json'] }]
+        }
+      });
+      if (!savePath) return;
+      await invoke('write_text_file', { path: savePath, content: json });
+      toast('设置已导出: ' + savePath);
+    } catch(e) {
+      toast('导出失败: ' + e);
+    }
+  } else {
+    var blob = new Blob([json], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = '发票酱设置_' + tsStr + '.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('设置已导出');
+  }
 }
 
 function resetSettings(scope) {
