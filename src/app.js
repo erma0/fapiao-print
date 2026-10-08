@@ -4159,6 +4159,11 @@ function buildPages(files, settings) {
 // Preview & Navigation
 // =====================================================
 var _saveTimer = null;
+var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
+function saveSettings() {
+  if (_importingSettings) return;
+  try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
+}
 function updatePreview() {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(saveSettings, 500);
@@ -4373,10 +4378,6 @@ function collectSettings() {
     o.filePaths = [];
   }
   return o;
-}
-
-function saveSettings() {
-  try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 
 function loadSettings() {
@@ -4736,6 +4737,7 @@ async function importSettings() {
   var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir'];
   var settings = {};
   Object.keys(data).forEach(function(k) { if (extraKeys.indexOf(k) < 0) settings[k] = data[k]; });
+  _importingSettings = true; // 写入期间起锁：清挂起的防抖保存 + 拦截重载窗口内新触发的自动保存
   try {
     localStorage.setItem('ticketchan-settings', JSON.stringify(settings));
     if (data.theme === 'dark' || data.theme === 'light') localStorage.setItem('ticketchan-theme', data.theme);
@@ -4745,6 +4747,7 @@ async function importSettings() {
     if (data.ocrPrecision === 'fast' || data.ocrPrecision === 'standard' || data.ocrPrecision === 'precise') localStorage.setItem('ticketchan-ocr-precision', data.ocrPrecision);
     if (typeof data.saveDir === 'string') localStorage.setItem('ticketchan-save-dir', data.saveDir);
   } catch(e) {
+    _importingSettings = false; // 写入失败解锁，恢复自动保存
     toast('导入失败: ' + e);
     return;
   }
