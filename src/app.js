@@ -4686,6 +4686,74 @@ async function exportSettings() {
   }
 }
 
+// 导入设置（issue #50，与导出配对）：读 JSON → 校验 → 覆盖写入本地存储 → 重载生效。
+// 与导出对称、全量还原（含本地记忆）；写完必须重载，否则内存中的旧配置会在下次自动保存时覆盖回去
+async function importSettings() {
+  var content = null;
+  if (isTauri && invoke) {
+    try {
+      var picked = await invoke('plugin:dialog|open', {
+        options: {
+          multiple: false,
+          title: '导入设置',
+          filters: [{ name: 'JSON 文件', extensions: ['json'] }]
+        }
+      });
+      if (!picked) return;
+      var filePath = typeof picked === 'string' ? picked : (Array.isArray(picked) ? picked[0] : '');
+      if (!filePath) return;
+      content = await invoke('read_text_file', { path: filePath });
+    } catch(e) {
+      toast('导入失败: ' + e);
+      return;
+    }
+  } else {
+    // 浏览器开发环境回退：FileReader 读取本地文件
+    content = await new Promise(function(resolve) {
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = function() {
+        var f = input.files && input.files[0];
+        if (!f) { resolve(null); return; }
+        var reader = new FileReader();
+        reader.onload = function() { resolve(reader.result); };
+        reader.onerror = function() { resolve(null); };
+        reader.readAsText(f);
+      };
+      input.click();
+    });
+    if (content == null) return;
+  }
+  var data;
+  try { data = JSON.parse(content); } catch(e) { toast('导入失败：文件不是有效的 JSON'); return; }
+  if (!data || typeof data !== 'object' || (!(data._meta && data._meta.app === '发票酱') && !(data.layout && data.feat))) {
+    toast('导入失败：不是发票酱的设置文件');
+    return;
+  }
+  if (!confirm('导入将覆盖当前全部设置与本地记忆（已打印标记 / 文件列表 / 单票调整 / 备注），并重新加载界面，确认继续？')) return;
+  // 设置主体写回 ticketchan-settings；独立存储的偏好项写回各自的 key
+  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir'];
+  var settings = {};
+  Object.keys(data).forEach(function(k) { if (extraKeys.indexOf(k) < 0) settings[k] = data[k]; });
+  try {
+    localStorage.setItem('ticketchan-settings', JSON.stringify(settings));
+    if (data.theme === 'dark' || data.theme === 'light') localStorage.setItem('ticketchan-theme', data.theme);
+    if (data.amtMode === 'tax' || data.amtMode === 'notax' || data.amtMode === 'both') localStorage.setItem('ticketchan-amt-mode', data.amtMode);
+    if (typeof data.ocrEnabled === 'boolean') localStorage.setItem('ticketchan-ocr-enabled', data.ocrEnabled ? '1' : '0');
+    if (typeof data.pdfTextEnabled === 'boolean') localStorage.setItem('ticketchan-pdf-text-enabled', data.pdfTextEnabled ? '1' : '0');
+    if (data.ocrPrecision === 'fast' || data.ocrPrecision === 'standard' || data.ocrPrecision === 'precise') localStorage.setItem('ticketchan-ocr-precision', data.ocrPrecision);
+    if (typeof data.saveDir === 'string') localStorage.setItem('ticketchan-save-dir', data.saveDir);
+  } catch(e) {
+    toast('导入失败: ' + e);
+    return;
+  }
+  // 清掉挂起的防抖自动保存，否则它会在重载前把内存里的旧配置写回去（覆盖刚导入的内容）
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  toast('设置已导入，正在重新加载…');
+  setTimeout(function() { location.reload(); }, 600);
+}
+
 function resetSettings(scope) {
   // scope='layout'：仅恢复「排版」页（纸张/行列/边距/间距/水印等），不动打印与偏好（issue #33）
   var layoutOnly = scope === 'layout';

@@ -206,6 +206,8 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **设置持久化**：`saveSettings()`/`loadSettings()` — `ticketchan-settings` JSON，覆盖排版/纸张/边距/缩放/旋转/水印/页脚/筛选/视图等；`updatePreview()` 500ms 防抖自动保存；恢复默认清空全部。⚠️ **var 提升坑**：被 `loadSettings()` 恢复的 JS 变量的 `var x = 默认值` 声明必须在调用点之前（声明提升、赋值不提升，曾致 issue #7）。
 
+**导出 / 导入配置**（`exportSettings()`/`importSettings()`，issue #50）：数据同源——`collectSettings()`（saveSettings 的收集逻辑抽出共用）+ 独立存储的偏好键（theme/amtMode/ocrEnabled/pdfTextEnabled/ocrPrecision/saveDir）；导出经原生「另存为」写 JSON（含 `_meta` 头）；导入校验 `_meta.app`（或 layout+feat）→ 写回同名 localStorage 键 → **`location.reload()` 重载生效**（不重载会被下次自动保存覆盖回去），Rust 侧 `read_text_file` 与之配套。
+
 **更新检查**：`check_for_updates`（reqwest 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal`。**忽略体系**（v2.6.0）：`shouldAutoShowUpdate()` 只拦静默弹窗——`ticketchan-update-ignore`（忽略此版本，弹窗按钮）+ `ticketchan-update-ignore-all`（忽略所有，弹窗按钮 + 设置→关于「自动检查更新」开关 `toggleAutoUpdateCheck`，`showApp` 里 `syncAutoUpdateCheckUI()` 同步）；手动检查不受忽略影响。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
 
 ## 前端模块

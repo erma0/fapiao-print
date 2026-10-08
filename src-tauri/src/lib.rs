@@ -303,6 +303,15 @@ async fn write_text_file(path: String, content: String) -> Result<serde_json::Va
     }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
+/// Read a UTF-8 text file. Used by the settings import feature.
+#[command]
+async fn read_text_file(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取文件失败: {}", e))
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
+}
+
 /// Open a URL in the default browser
 #[command]
 fn open_url(url: String) -> Result<(), String> {
@@ -1511,6 +1520,7 @@ pub fn run() {
         copy_file,
         rename_file,
         write_text_file,
+        read_text_file,
         check_path_exists,
         get_downloads_dir,
         ocr_image,
@@ -1554,6 +1564,7 @@ pub fn run() {
         copy_file,
         rename_file,
         write_text_file,
+        read_text_file,
         check_path_exists,
         get_downloads_dir,
         check_ocr_available,
