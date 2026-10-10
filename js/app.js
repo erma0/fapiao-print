@@ -427,7 +427,7 @@ function updateFileItem(fileObj) {
     var leftEl = items[idx].querySelector('.file-meta-left');
     if (leftEl) {
       var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
-      leftEl.innerHTML = pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab;
+      leftEl.innerHTML = pd + ab + cb + rb + dupb + '<span class="file-size">' + fmtSize(f.size) + '</span>';
     }
     var sellerEl = items[idx].querySelector('.file-seller');
     if (sellerEl) {
@@ -1112,9 +1112,11 @@ function renderFileList() {
     var typeBadgeText = f.type === 'jpeg' ? 'jpg' : escHtml(f.type);
     var thumbContent = f._loading ? '' : (f.previewUrl ? '<img src="' + safePreviewUrl + '">' : (f._xmlInvoice ? '<div class="xml-placeholder"><span class="xml-icon">XML</span>' + (f.invoiceNo ? '<span class="xml-no">' + escHtml(f.invoiceNo.slice(-4)) + '</span>' : '') + '</div>' : '\uD83D\uDCC4'));
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+    // 元徽章按重要性从左到右排：金额 > 份数 > 旋转 > 重复 > 文件大小
+    // （.file-meta-left 溢出时裁掉右侧，金额徽章必须靠前，同步桌面版 issue #40）
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + rb + dupb + ab + '</div>' +
+      : '<div class="file-meta-left">' + pd + ab + cb + rb + dupb + '<span class="file-size">' + fmtSize(f.size) + '</span></div>' +
         '<div class="file-meta-sep"></div>' +
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +
@@ -1174,6 +1176,26 @@ function sortByDate(dir) {
   _activeFileIdx = -1;
   renderFileList();
   updatePreview();
+}
+// 按发票类型分组排序（同步桌面版 issue #40）：专票归一堆、普票归一堆，打印按列表顺序分批走
+function sortByType() {
+  document.getElementById('sortMenu').classList.add('hidden');
+  if (!S.files.length) return;
+  S.files.sort(function(a, b) { return _invoiceTypeRank(a) - _invoiceTypeRank(b); });
+  _activeFileIdx = -1;
+  renderFileList();
+  updatePreview();
+}
+// 类型分组次序：专票 → 普票 → 通行费 → 医疗 → 非税 → 车票 → 其他（未识别）
+function _invoiceTypeRank(f) {
+  var t = resolveInvoiceType(f);
+  if (t === '专票') return 0;
+  if (t === '普票') return 1;
+  if (t === '通行费发票') return 2;
+  if (t === '医疗收费票据') return 3;
+  if (t === '非税票据') return 4;
+  if (f._isTicket) return 5;
+  return 6;
 }
 function _parseDate(s) {
   if (!s || typeof s !== 'string') return null;
