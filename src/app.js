@@ -2623,6 +2623,38 @@ function sortByDate(dir) {
   renderFileList();
   updatePreview();
 }
+// 按发票类型分组排序（issue #40）：专票归一堆、普票归一堆，打印按列表顺序分批走。
+// 跨页票整组归堆（取组内最小 rank），组内页序由排序稳定性保持、不拆散
+function sortByType() {
+  document.getElementById('sortMenu').classList.add('hidden');
+  if (!S.files.length) return;
+  var groupRank = {};
+  S.files.forEach(function(f) {
+    if (!f._invoiceGroupId) return;
+    var r = _invoiceTypeRank(f);
+    var g = groupRank[f._invoiceGroupId];
+    groupRank[f._invoiceGroupId] = g === undefined ? r : Math.min(g, r);
+  });
+  function rank(f) {
+    if (f._invoiceGroupId && groupRank[f._invoiceGroupId] !== undefined) return groupRank[f._invoiceGroupId];
+    return _invoiceTypeRank(f);
+  }
+  S.files.sort(function(a, b) { return rank(a) - rank(b); });
+  _activeFileIdx = -1;
+  renderFileList();
+  updatePreview();
+}
+// 类型分组次序：专票 → 普票 → 通行费 → 医疗 → 非税 → 车票 → 其他（未识别 / 占位）
+function _invoiceTypeRank(f) {
+  var t = resolveInvoiceType(f);
+  if (t === '专票') return 0;
+  if (t === '普票') return 1;
+  if (t === '通行费发票') return 2;
+  if (t === '医疗收费票据') return 3;
+  if (t === '非税票据') return 4;
+  if (f._isTicket) return 5;
+  return 6;
+}
 function _parseDate(s) {
   if (!s || typeof s !== 'string') return null;
   var m = s.match(/(\d{4})[^\d]*(\d{1,2})[^\d]*(\d{1,2})/);

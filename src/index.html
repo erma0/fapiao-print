@@ -42,10 +42,12 @@
             </div>
             <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/></svg></button>
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleSortMenu()" title="按日期排序"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button>
+              <button class="ib" onclick="toggleSortMenu()" title="排序"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button>
               <div class="copy-menu hidden" id="sortMenu">
                 <div class="copy-menu-item" onclick="sortByDate(1)">↑ 旧→新</div>
                 <div class="copy-menu-item" onclick="sortByDate(-1)">↓ 新→旧</div>
+                <div class="copy-menu-sep"></div>
+                <div class="copy-menu-item" onclick="sortByType()" title="专票一堆、普票一堆，跨页票整组不拆散">按发票类型分组</div>
               </div>
             </div>
             <button class="ib" id="fileViewBtn" onclick="toggleFileView()" title="切换缩略图视图"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
