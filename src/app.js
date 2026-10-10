@@ -1466,11 +1466,14 @@ function buildAmtBadge(f) {
     amt = f._multiPageInvoice.groupAmount;
     fromGroup = true;
   }
+  // 跨页票明细页（非合计页）的金额徽章一律淡绿：金额无论是本页识别值还是借用合计页值，
+  // 都不属于统计口径，与合计页深绿区分（issue #40）
+  var isDetail = !!(f._multiPageInvoice && !f._multiPageInvoice.isSummary);
   if (amt > 0) {
     var gtip = fromGroup
       ? ' title="同一张发票的合计金额（在合计页，本页不重复计入统计）"'
-      : '';
-    return '<span class="amt-badge"' + gtip + '>\u00A5' + amt.toFixed(2) + '</span>';
+      : (isDetail ? ' title="跨页票明细页：金额以合计页为准，本页不重复计入统计"' : '');
+    return '<span class="amt-badge' + (isDetail ? ' group' : '') + '"' + gtip + '>\u00A5' + amt.toFixed(2) + '</span>';
   }
   if (f._amtValidationFail) {
     var v = f._amtValidationFail;
@@ -1530,7 +1533,7 @@ function updateFileItem(fileObj) {
     var leftEl = items[idx].querySelector('.file-meta-left');
     if (leftEl) {
       var dupb = f._dup ? '<span class="dup-badge" title="检测到重复发票：点击左上角「重复」筛选可一键勾选删除">⚠重复</span>' : '';
-      leftEl.innerHTML = pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + mpb + rb + dupb + ab;
+      leftEl.innerHTML = pd + ab + cb + mpb + rb + dupb + '<span class="file-size">' + fmtSize(f.size) + '</span>';
     }
     var sellerEl = items[idx].querySelector('.file-seller');
     if (sellerEl) {
@@ -2556,9 +2559,11 @@ function renderFileList() {
         : '<button class="ib ocr-btn" onclick="ocrFile(' + i + ')" title="OCR识别">\uD83D\uDD0D</button>')
       : '';
     var pd = f._printed ? '<span class="printed-dot" title="已打印">✓</span>' : '';
+    // 元徽章按重要性从左到右排：金额 > 份数 > 续页 > 旋转 > 重复 > 文件大小
+    // （.file-meta-left 溢出时裁掉右侧，金额徽章必须靠前，issue #40）
     var metaActions = f._loading
       ? '<button class="ib danger" onclick="rmFile(' + i + ')">\u2715</button>'
-      : '<div class="file-meta-left">' + pd + '<span class="file-size">' + fmtSize(f.size) + '</span>' + cb + mpb + rb + dupb + ab + '</div>' +
+      : '<div class="file-meta-left">' + pd + ab + cb + mpb + rb + dupb + '<span class="file-size">' + fmtSize(f.size) + '</span></div>' +
         '<div class="file-meta-sep"></div>' +
         '<div class="file-meta-right">' +
         '<button class="ib sort-btn' + (i === 0 ? ' disabled' : '') + '" onclick="moveFile(' + i + ',-1)" title="上移">\u25B2</button>' +

@@ -65,6 +65,7 @@ html.dark input[type="range"] { accent-color: #5b8def; }
 html.dark .file-thumb { background: #1a1a2e; border-color: #2a2a4a; }
 html.dark .copy-badge { background: #3a3520; color: #d69e2e; }
 html.dark .amt-badge { background: #1a3a36; color: #38b2ac; }
+html.dark .amt-badge.group { background: #14231e; color: #2f8f78; }
 html.dark .amt-warn-badge { background: #3a2020; color: #fc8181; }
 html.dark .seller-badge { background: #1e2a4a; color: #a0aec0; }
 html.dark .ticket-badge { background: #1a2a4a; color: #64b5f6; }
@@ -272,6 +273,8 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 .file-meta-right { display: flex; gap: 2px; align-items: center; flex-shrink: 0; }
 .copy-badge { background: var(--warning-light); color: var(--warning); padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; }
 .amt-badge { background: var(--success-light); color: var(--success); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+/* 跨页票明细页（非合计页）的金额徽章：淡一档，与合计页的统计口径金额区分（issue #40） */
+.amt-badge.group { background: #ecfdf5; color: #34d399; }
 .amt-warn-badge { background: var(--danger-light); color: var(--danger); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: help; }
 .rot-badge { font-size: 10px; color: var(--accent); font-weight: 700; }
 .dup-badge { background: var(--danger-light); color: var(--danger); padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; cursor: help; }
