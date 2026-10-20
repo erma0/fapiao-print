@@ -106,6 +106,8 @@ function createFileObj(opts) {
     buyerName: opts.buyerName || '',
     buyerCreditCode: opts.buyerCreditCode || '',
     invoiceType: opts.invoiceType || '',
+    itemName: opts.itemName || '',            // 项目名称（发票明细首行，best-effort 识别）
+    invoiceRemark: opts.invoiceRemark || '',  // 发票备注（票面「备注」栏，best-effort 识别）
     _isTicket: opts._isTicket || false,
     _loading: opts._loading || false,
     _xmlInvoice: opts._xmlInvoice || false,
@@ -3052,6 +3054,8 @@ var SUMMARY_FIELDS = [
   { key: 'taxAmount', label: '税额',      type: 'amount',  default: false, editable: true },
   { key: 'name',      label: '文件名',    type: 'text',    default: false, editable: true },
   { key: 'copies',    label: '份数',      type: 'copies',  default: false, editable: true },
+  { key: 'itemName',  label: '项目名称',  type: 'text',    default: false, editable: true },
+  { key: 'invoiceRemark', label: '发票备注', type: 'text', default: false, editable: true },
   { key: 'note',      label: '备注',      type: 'text',    default: true, editable: true }
 ];
 
