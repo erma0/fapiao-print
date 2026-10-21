@@ -533,6 +533,8 @@ async function loadXmlFromFile(file, id, name, size) {
   if (info.amountNoTax != null) fileObj.amountNoTax = info.amountNoTax;
   if (info.taxAmount != null) fileObj.taxAmount = info.taxAmount;
   if (info.invoiceType) fileObj.invoiceType = info.invoiceType;
+  if (info.itemName) fileObj.itemName = info.itemName;
+  if (info.remark) fileObj.invoiceRemark = info.remark;
   fileObj._pdfTextExtracted = true;
   return fileObj;
 }
@@ -567,6 +569,8 @@ async function loadOfdFromFile(file, id, name, size) {
   if (info.amountNoTax != null) fileObj.amountNoTax = info.amountNoTax;
   if (info.taxAmount != null) fileObj.taxAmount = info.taxAmount;
   if (info.invoiceType) fileObj.invoiceType = info.invoiceType;
+  if (info.itemName) fileObj.itemName = info.itemName;
+  if (info.remark) fileObj.invoiceRemark = info.remark;
   fileObj._ofdSvg = result.svg;
   fileObj._ofdPageWidth = result.pageWidth;
   fileObj._ofdPageHeight = result.pageHeight;
