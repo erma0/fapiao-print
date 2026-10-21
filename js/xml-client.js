@@ -27,7 +27,9 @@ var __xmlClient = (function() {
       amountNoTax: null,
       taxAmount: null,
       amountTax: null,
-      invoiceType: null
+      invoiceType: null,
+      itemName: null,
+      remark: null
     };
 
     // Strip namespace prefixes first, then check for EInvoice root
@@ -128,6 +130,30 @@ var __xmlClient = (function() {
       info.invoiceType = prefix + '(' + generalOrSpecialLabel + ')';
     } else if (einvoiceTypeLabel) {
       info.invoiceType = einvoiceTypeLabel;
+    }
+
+    // --- 项目名称：全部 ItemName，*类别*品名 → 【类别】品名，去重后「、」连接 ---
+    var itemEls = doc.getElementsByTagName('ItemName');
+    var items = [];
+    for (var k = 0; k < itemEls.length; k++) {
+      var itemText = (itemEls[k].textContent || '').trim();
+      if (!itemText) continue;
+      var itemName = _cleanItemName(itemText);
+      if (itemName && items.indexOf(itemName) < 0) items.push(itemName);
+    }
+    if (items.length) info.itemName = _joinItems(items);
+
+    // --- 发票备注：Remark 可能拆成多个标签，全部收集后空格拼接 ---
+    // XML 没有 Remark 就留空——银行字段（BuyerBankName / SellerBankAccNum 等）不属于备注
+    var remarkEls = doc.getElementsByTagName('Remark');
+    var remarkParts = [];
+    for (var r = 0; r < remarkEls.length; r++) {
+      var remarkText = (remarkEls[r].textContent || '').trim();
+      if (remarkText) remarkParts.push(remarkText);
+    }
+    if (remarkParts.length) {
+      var remark = _cleanRemark(remarkParts.join(' '));
+      if (remark) info.remark = remark;
     }
 
     return info;

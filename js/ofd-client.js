@@ -424,6 +424,28 @@ function _parseCustomTag(xml) {
   return map;
 }
 
+/**
+ * Parse Tags/CustomTag.xml 的 `<Item>` 分组：一个 Item 内的 ObjectRef 序列 = 一条明细。
+ * 生成器会把长品名拆成多个文字对象（如「*生产生活服务*技术服务」+「费」），
+ * 这些段必须按组内顺序拼成一条，不能逐段当成独立明细。
+ * @returns {number[][]} 每个 Item 一组的 TextObject ID
+ */
+function _parseCustomTagItemGroups(xml) {
+  var groups = [];
+  var doc = _parseXml(xml);
+  var itemEls = doc.getElementsByTagName('Item');
+  for (var i = 0; i < itemEls.length; i++) {
+    var refs = itemEls[i].getElementsByTagName('ObjectRef');
+    var group = [];
+    for (var ri = 0; ri < refs.length; ri++) {
+      var id = parseInt((refs[ri].textContent || '').trim());
+      if (!isNaN(id)) group.push(id);
+    }
+    if (group.length) groups.push(group); // 无 ObjectRef 的空组丢弃
+  }
+  return groups;
+}
+
 function _parseFonts(xml) {
   var fonts = {};
   var colorSpaces = {};
@@ -601,11 +623,21 @@ function _extractFromCustomData(customData) {
   return info;
 }
 
-function _extractFromCustomTag(customTag, allTexts) {
+function _extractFromCustomTag(customTag, allTexts, itemGroups, tplTexts) {
   var info = {};
   var idToText = {};
   for (var i = 0; i < allTexts.length; i++) {
     idToText[allTexts[i].id] = allTexts[i].text;
+  }
+  // 项目名称 / 备注的 ID 查找与 Rust 11c 的 by_id 一致：数据层优先，模板层兜底
+  var idToTextAll = {};
+  var tpl = tplTexts || [];
+  for (var ti = 0; ti < tpl.length; ti++) idToTextAll[tpl[ti].id] = tpl[ti].text;
+  for (var pi = 0; pi < allTexts.length; pi++) idToTextAll[allTexts[pi].id] = allTexts[pi].text;
+
+  function textById(map, id) {
+    var t = map[id];
+    return t == null ? null : String(t).trim();
   }
 
   function firstText(field) {
@@ -637,7 +669,58 @@ function _extractFromCustomTag(customTag, allTexts) {
     if (val3) info.amountTax = parseFloat(val3) || null;
   }
 
+  // 项目名称：每个 <Item> 组 = 一条明细，组内多段按顺序拼成完整品名
+  if (itemGroups && itemGroups.length) {
+    var items = [];
+    for (var gi = 0; gi < itemGroups.length; gi++) {
+      var joined = '';
+      for (var gk = 0; gk < itemGroups[gi].length; gk++) {
+        var seg = textById(idToTextAll, itemGroups[gi][gk]);
+        if (seg) joined += seg;
+      }
+      items.push(_cleanItemName(joined));
+    }
+    var itemName = _joinItemNames(items);
+    if (itemName) info.itemName = itemName;
+  } else if (customTag['Item'] && customTag['Item'].length) {
+    // 无分组信息时退回扁平处理（各 ObjectRef 视为独立明细）
+    var flatItems = [];
+    for (var fj = 0; fj < customTag['Item'].length; fj++) {
+      var ft = textById(idToTextAll, customTag['Item'][fj]);
+      if (ft) flatItems.push(_cleanItemName(ft));
+    }
+    var itemName2 = _joinItemNames(flatItems);
+    if (itemName2) info.itemName = itemName2;
+  }
+
+  // 备注：Note 各段按序拼接，剔除以落款人（复核人/收款人/开票人）开头的行
+  var noteIds = customTag['Note'];
+  if (noteIds && noteIds.length) {
+    var lines = [];
+    for (var ni = 0; ni < noteIds.length; ni++) {
+      var nt = textById(idToTextAll, noteIds[ni]);
+      if (!nt) continue;
+      if (/^(?:复核人|收款人|开票人)/.test(nt.replace(/\s+/g, ''))) continue;
+      lines.push(nt);
+    }
+    var remark = _cleanRemark(lines.join(' '));
+    if (remark) info.remark = remark;
+  }
+
   return info;
+}
+
+/**
+ * 多条项目名称去重后用「、」连接（对齐 Rust join_item_names，总长上限 ITEM_NAME_MAX）。
+ * pdf-text.js 的 _joinItems 只做截断不去重，这里补上去重。
+ */
+function _joinItemNames(items) {
+  var uniq = [];
+  for (var i = 0; i < items.length; i++) {
+    var s = (items[i] || '').trim();
+    if (s && uniq.indexOf(s) < 0) uniq.push(s);
+  }
+  return uniq.length ? _joinItems(uniq) : '';
 }
 
 /**
@@ -786,6 +869,208 @@ function _extractInvoiceFromText(texts) {
   }
 
   return info;
+}
+
+// =====================================================
+// 项目名称 / 备注 坐标兜底（无 CustomTag 语义标签时）
+// 对齐 Rust extract_ofd_item_name / extract_ofd_remark
+// =====================================================
+
+// 同一行判定的纵向容差（mm）
+var OFD_ROW_TOL = 1.8;
+// 品名列右界相对邻列表头左缘的内收量（mm）
+var OFD_COL_MARGIN = 2.0;
+
+/** 文本对象在页面坐标系里的位置：Boundary 原点 + CTM 作用于 TextCode 的 X/Y */
+function _ofdPagePos(t) {
+  var m = t.ctm || [1, 0, 0, 1, 0, 0];
+  return [
+    t.boundary[0] + m[0] * t.textX + m[2] * t.textY + m[4],
+    t.boundary[1] + m[1] * t.textX + m[3] * t.textY + m[5]
+  ];
+}
+
+/** 去空白后的文本，用于标签比对 */
+function _ofdCompact(t) {
+  return String(t.text || '').replace(/\s+/g, '');
+}
+
+/**
+ * OFD 项目名称：按「项目名称」列边界取明细（不做全局星号扫描）。
+ * 用「项目名称」表头 + 同排右侧最近表头的左缘定出品名列，只取列内、表头下方的文字；
+ * `*` 开头为新条目、否则为换行续行并回上一条。
+ */
+function _extractOfdItemNameByColumn(texts, pageH) {
+  // 1. 表头：最靠上的「项目名称」
+  var header = null; // {x, y, w}
+  for (var i = 0; i < texts.length; i++) {
+    if (_ofdCompact(texts[i]) !== '项目名称') continue;
+    var p = _ofdPagePos(texts[i]);
+    if (!header || p[1] < header.y - 0.5 ||
+        (Math.abs(p[1] - header.y) <= 0.5 && p[0] < header.x)) {
+      header = { x: p[0], y: p[1], w: texts[i].boundary[2] };
+    }
+  }
+  if (!header) return '';
+  var hx = header.x, hy = header.y;
+
+  // 2. 同一表头行里、表头右侧最近的非空对象左缘，往里收 OFD_COL_MARGIN = 品名列右界
+  var colRight = null;
+  for (var ci = 0; ci < texts.length; ci++) {
+    if (!_ofdCompact(texts[ci])) continue;
+    var cp = _ofdPagePos(texts[ci]);
+    if (Math.abs(cp[1] - hy) > OFD_ROW_TOL) continue;
+    if (cp[0] <= hx + 0.5) continue;
+    if (colRight == null || cp[0] < colRight) colRight = cp[0];
+  }
+  // 找不到同排表头时退到一个保守值（表头自身右边 + 1mm）
+  colRight = colRight == null ? hx + header.w + 1.0 : colRight - OFD_COL_MARGIN;
+
+  // 3. 下界：表头下方最近的 合计/价税合计/大写/小写/备注 锚点，找不到退到表头 + 35% 页高
+  var bottom = hy + pageH * 0.35;
+  for (var bi = 0; bi < texts.length; bi++) {
+    var s = _ofdCompact(texts[bi]);
+    if (!s) continue;
+    if (/^(?:单价|数量|单位|规格型号|项目名称)/.test(s)) continue;
+    if (!(s.indexOf('合计') === 0 || s.indexOf('价税合计') >= 0 ||
+          s.indexOf('大写') === 0 || s.indexOf('小写') === 0 || s.indexOf('备注') === 0)) continue;
+    var by = _ofdPagePos(texts[bi])[1];
+    if (by > hy + 0.5 && by < bottom) bottom = by;
+  }
+
+  // 4. 品名列内、表头下方的文字对象
+  var cand = [];
+  for (var ti = 0; ti < texts.length; ti++) {
+    var raw = String(texts[ti].text || '').trim();
+    if (!raw) continue;
+    var tp = _ofdPagePos(texts[ti]);
+    if (tp[1] <= hy + 0.5 || tp[1] >= bottom) continue;
+    if (tp[0] >= colRight - 0.5) continue;
+    if (_isStructuralItemRow(_ofdCompact(texts[ti]))) continue;
+    // 与「规格型号」同串时裁掉尾部
+    var cut = raw.indexOf('规格型号');
+    var body = cut >= 0 ? raw.substring(0, cut) : raw;
+    if (!body.trim()) continue;
+    cand.push({ x: tp[0], y: tp[1], text: body });
+  }
+  if (!cand.length) return '';
+
+  cand.sort(function(a, b) { return a.y - b.y || a.x - b.x; });
+
+  // 5. 按 y 分行，`*` 开头为新条目、否则并回上一条
+  var rows = [];
+  for (var ri = 0; ri < cand.length; ri++) {
+    var last = rows[rows.length - 1];
+    if (last && Math.abs(cand[ri].y - last.y) < OFD_ROW_TOL) last.words.push(cand[ri]);
+    else rows.push({ y: cand[ri].y, words: [cand[ri]] });
+  }
+  var starStyle = false;
+  for (var si = 0; si < rows.length && !starStyle; si++) {
+    for (var sj = 0; sj < rows[si].words.length; sj++) {
+      if (/^[*＊]/.test(rows[si].words[sj].text)) { starStyle = true; break; }
+    }
+  }
+
+  var items = [];
+  var buf = '';
+  for (var yi = 0; yi < rows.length; yi++) {
+    var words = rows[yi].words;
+    words.sort(function(a, b) { return a.x - b.x; });
+    var line = words.map(function(w) { return w.text; }).join('');
+    var isNew = /^[*＊]/.test(line);
+    if (starStyle && buf && !isNew) {
+      buf += line; // 换行续行：同一品名被折行的后半段
+    } else {
+      if (buf) {
+        var n = _cleanItemName(buf);
+        if (n.length >= 2) items.push(n);
+      }
+      buf = line;
+    }
+  }
+  if (buf) {
+    var n2 = _cleanItemName(buf);
+    if (n2.length >= 2) items.push(n2);
+  }
+  return _joinItemNames(items);
+}
+
+/**
+ * OFD 备注：左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上的文字（best-effort）
+ */
+function _extractOfdRemarkByCoords(texts, pageH) {
+  // 标签：整词「备注」或竖排「备」+「注」，取最靠下的一组
+  var label = null; // {x, y}
+  for (var i = 0; i < texts.length; i++) {
+    var c = _ofdCompact(texts[i]);
+    var p = _ofdPagePos(texts[i]);
+    if (c === '备注') {
+      if (!label || p[1] > label.y) label = { x: p[0], y: p[1] };
+      continue;
+    }
+    if (c !== '备') continue;
+    for (var j = 0; j < texts.length; j++) {
+      if (_ofdCompact(texts[j]) !== '注') continue;
+      var q = _ofdPagePos(texts[j]);
+      if (Math.abs(q[0] - p[0]) > 2.0 || q[1] <= p[1] || q[1] > p[1] + 14.0) continue;
+      if (!label || p[1] > label.y) label = { x: p[0], y: p[1] };
+      break;
+    }
+  }
+  if (!label) return '';
+  var ltop = label.y;
+
+  // 上界：标签上方最近的 价税合计/大写/小写/合计 行之下
+  // （标签常在框内垂直居中，不能只从标签顶部算，否则会漏掉比标签更高的备注行）
+  var top = ltop - 6.0;
+  for (var ai = 0; ai < texts.length; ai++) {
+    var s = _ofdCompact(texts[ai]);
+    if (!(s.indexOf('价税合计') >= 0 || s.indexOf('大写') === 0 || s.indexOf('小写') === 0 ||
+          s.indexOf('合计') === 0 || s.indexOf('金额合计') === 0)) continue;
+    var ay = _ofdPagePos(texts[ai])[1];
+    if (ay < ltop && ay + 3.2 > top) top = ay + 3.2;
+  }
+  if (top < 0) top = 0;
+
+  // 下界：标签下方最近的 开票人/收款人/复核人（没有则退到 97% 页高）；
+  // 同时记录落款行的 y，用于剔除与落款标签同行的落款值（如「开票人:」旁的姓名）
+  var bottom = pageH * 0.97;
+  var footerRows = [];
+  for (var fi = 0; fi < texts.length; fi++) {
+    var fs = _ofdCompact(texts[fi]);
+    if (!/^(?:开票人|收款人|复核人)/.test(fs)) continue;
+    var fy = _ofdPagePos(texts[fi])[1];
+    footerRows.push(fy);
+    if (fy > ltop && fy < bottom) bottom = fy;
+  }
+
+  var rx = label.x + 1.6;
+  var rows = [];
+  for (var ti = 0; ti < texts.length; ti++) {
+    var raw = String(texts[ti].text || '').trim();
+    if (!raw) continue;
+    var tp = _ofdPagePos(texts[ti]);
+    if (tp[1] < top || tp[1] > bottom || tp[0] < rx) continue;
+    var nos = _ofdCompact(texts[ti]);
+    if (nos === '备注' || nos === '备' || nos === '注') continue;
+    if (/^(?:开票人|收款人|复核人)/.test(nos)) continue;
+    if (nos.indexOf('价税合计') >= 0 || nos.indexOf('大写') === 0 || nos.indexOf('小写') === 0) continue;
+    var sameFooter = false;
+    for (var fr = 0; fr < footerRows.length; fr++) {
+      if (Math.abs(tp[1] - footerRows[fr]) < 3.0) { sameFooter = true; break; }
+    }
+    if (sameFooter) continue;
+    var last = rows[rows.length - 1];
+    if (last && Math.abs(tp[1] - last.y) < OFD_ROW_TOL) last.words.push({ x: tp[0], text: raw });
+    else rows.push({ y: tp[1], words: [{ x: tp[0], text: raw }] });
+  }
+  if (!rows.length) return '';
+
+  var joined = rows.map(function(r) {
+    r.words.sort(function(a, b) { return a.x - b.x; });
+    return r.words.map(function(w) { return w.text; }).join('');
+  }).join(' ');
+  return _cleanRemark(joined);
 }
 
 // =====================================================
@@ -1065,13 +1350,15 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   var customTagPath = baseDir + '/Tags/CustomTag.xml';
   var ctXml = await zipReadStr(customTagPath);
   var customTag = ctXml ? _parseCustomTag(ctXml) : {};
+  // 明细分组：长品名会被拆成多个文字对象，必须按 <Item> 组拼接
+  var itemGroups = ctXml ? _parseCustomTagItemGroups(ctXml) : [];
 
   // 12. Extract invoice info from structured data
   var invoiceInfo = _extractFromCustomData(customData);
 
   // From CustomTag — only fill fields not already set
   // Rust version only looks up IDs in page_texts (not template texts)
-  var ctInfo = _extractFromCustomTag(customTag, pageTexts);
+  var ctInfo = _extractFromCustomTag(customTag, pageTexts, itemGroups, tplTexts);
   if (!invoiceInfo.invoiceNo && ctInfo.invoiceNo) invoiceInfo.invoiceNo = ctInfo.invoiceNo;
   if (!invoiceInfo.invoiceDate && ctInfo.invoiceDate) invoiceInfo.invoiceDate = ctInfo.invoiceDate;
   if (!invoiceInfo.buyerName && ctInfo.buyerName) invoiceInfo.buyerName = ctInfo.buyerName;
@@ -1081,6 +1368,17 @@ async function parseOfdFromArrayBuffer(arrayBuffer) {
   if (!invoiceInfo.amountNoTax && ctInfo.amountNoTax) invoiceInfo.amountNoTax = ctInfo.amountNoTax;
   if (!invoiceInfo.taxAmount && ctInfo.taxAmount) invoiceInfo.taxAmount = ctInfo.taxAmount;
   if (!invoiceInfo.amountTax && ctInfo.amountTax) invoiceInfo.amountTax = ctInfo.amountTax;
+  if (!invoiceInfo.itemName && ctInfo.itemName) invoiceInfo.itemName = ctInfo.itemName;
+  if (!invoiceInfo.remark && ctInfo.remark) invoiceInfo.remark = ctInfo.remark;
+
+  // 项目名称 / 备注：语义路径（CustomTag 的 Item / Note）优先，缺失时才坐标兜底
+  var layoutTexts = tplTexts.concat(pageTexts);
+  if (!invoiceInfo.itemName) {
+    invoiceInfo.itemName = _extractOfdItemNameByColumn(layoutTexts, pageH) || null;
+  }
+  if (!invoiceInfo.remark) {
+    invoiceInfo.remark = _extractOfdRemarkByCoords(layoutTexts, pageH) || null;
+  }
 
   // 发票类型：模板层 + 数据层文本合并判定（「普通」优先；逐条未命中时用拼接串兜底拆字票）
   if (!invoiceInfo.invoiceType) {
