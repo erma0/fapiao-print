@@ -394,6 +394,12 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
    统一后滑条随面板宽度自适应撑满；内边距收窄让数字居中更好看 */
 .rr input[type="number"] { width: 52px; text-align: center; padding: 6px 4px; }
 .rv { width: 38px; text-align: right; font-size: 12px; color: var(--accent); font-weight: 700; }
+/* 设置页「桌面版」引导卡片 */
+.desk-note { font-size: 11px; color: var(--text-muted); line-height: 1.55; margin-bottom: 8px; }
+.desk-list { margin: 0 0 10px; padding-left: 17px; font-size: 12px; color: var(--text-secondary); line-height: 1.62; }
+.desk-list li { margin-bottom: 2px; }
+.desk-links { display: flex; gap: 6px; }
+.desk-links .btn { flex: 1; text-decoration: none; font-size: 12px; padding: 6px 8px; }
 
 .grid-sel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
 .go {
@@ -539,6 +545,9 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   display: flex; align-items: center; gap: 16px; font-size: 11px; color: var(--text-muted);
 }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 3px; }
+/* 状态栏右侧版本号：点击进 GitHub 仓库 */
+.status-link { margin-left: auto; color: var(--text-muted); text-decoration: none; transition: color 0.15s; }
+.status-link:hover { color: var(--accent); }
 
 /* ===== Empty ===== */
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); padding: 40px; text-align: center; align-self: stretch; }

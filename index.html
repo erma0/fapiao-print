@@ -256,6 +256,20 @@
           <div class="sec-title">🎨 外观</div>
           <div class="row"><label class="lbl">主题</label><div class="ctrl"><select id="themeMode" onchange="applyTheme()"><option value="light">浅色</option><option value="dark">深色</option></select></div></div>
         </div>
+        <div class="sec">
+          <div class="sec-title">💻 桌面版</div>
+          <div class="desk-note">以下能力受浏览器限制无法实现，桌面版已支持：</div>
+          <ul class="desk-list">
+            <li>OCR 识别图片发票，自动填写字段</li>
+            <li>指定打印机 + 静默打印，跳过打印对话框</li>
+            <li>报销单分段、粘贴单、批量重命名</li>
+            <li>矢量 PDF 文字完整保真，无缺字</li>
+          </ul>
+          <div class="desk-links">
+            <a class="btn btn-sm" href="https://github.com/erma0/fapiao-print/releases/latest" target="_blank" rel="noopener">⬇ 下载桌面版</a>
+            <a class="btn btn-sm" href="https://github.com/erma0/fapiao-print" target="_blank" rel="noopener">GitHub 仓库</a>
+          </div>
+        </div>
       </div>
       <div class="sidebar-panel-footer">
         <div class="sec" style="border-bottom:0">
@@ -341,7 +355,7 @@
       <div id="stPages">0 页</div>
       <div id="stLayout">1×1</div>
       <div id="stPaper">A4</div>
-      <div style="margin-left:auto" id="stVersion"></div>
+      <a class="status-link" id="stVersion" href="https://github.com/erma0/fapiao-print" target="_blank" rel="noopener" title="项目源码（GitHub）"></a>
     </div>
   </main>
 </div>
