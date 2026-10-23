@@ -385,7 +385,9 @@ async function _embedForFile(pdfDoc, fileObj, settings) {
   var trimBox = settings.trimWhite ? fileObj.trimmedBox : null;
 
   // Vector path: embed original PDF page (skip if rasterOnly or colorMode needs conversion)
-  if (!settings._rasterOnly && colorMode === 'color'
+  // _forceRaster：字体未嵌入的票种（12306 电子客票）文字是补画在预览位图上的，
+  // 源页本身仍缺字，嵌入源页会把缺字版打出来 → 只能走位图
+  if (!settings._rasterOnly && colorMode === 'color' && !fileObj._forceRaster
       && fileObj.srcPdfBytes && fileObj.srcPageIndex != null) {
     try {
       var srcDoc = await _getOrLoadSrcPdf(fileObj);

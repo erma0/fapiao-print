@@ -129,10 +129,14 @@ async function extractTextWithCoords(pdfPage) {
 
   // 阈值收紧：空串占比 >= 50% 即判定为文字层缺失
   var hasTextLayer = totalItems > 0 && emptyRatio < 0.5;
+  // 只有个别字符残留（如 12306 电子客票只画得出 ¥）同样算文字层不可用：
+  // 这类页面 pdf.js 能返回 items，但绝大多数文字因字体未嵌入被整体丢弃。
+  var textLen = fullTextParts.join('').replace(/\s/g, '').length;
+  var textIncomplete = !hasTextLayer || textLen < 16;
 
   // ---- 字体未嵌入检测层 2：字体元信息（best-effort，pdf.js 私有 API，失败时静默）----
   var fontDiag = null;
-  if (!hasTextLayer && totalItems > 0) {
+  if (textIncomplete && totalItems > 0) {
     fontDiag = _inspectPageFonts(pdfPage, distinctFonts);
   }
 
@@ -142,6 +146,7 @@ async function extractTextWithCoords(pdfPage) {
     imgW: imgW,
     imgH: imgH,
     hasTextLayer: hasTextLayer,
+    textIncomplete: textIncomplete,
     // 文字层缺失诊断（下游可选使用，不破坏现有调用）
     textLayerDiagnostic: {
       totalItems: totalItems,
@@ -188,12 +193,30 @@ export async function loadPdfFromArrayBuffer(arrayBuffer) {
   // fontExtraProperties:true 让 commonObjs 暴露 font.missingFile / toUnicode / cidEncoding
   var pdf = await loadDocument(arrayBuffer, { fontExtraProperties: true });
   var pages = [];
+  var rawBytes = null;
   for (var i = 1; i <= pdf.numPages; i++) {
     var page = await pdf.getPage(i);
     var rendered = await renderPageToCanvas(page, PDF_PREVIEW_DPI);
-    var previewUrl = rendered.canvas.toDataURL('image/jpeg', JPEG_QUALITY);
     var pdfTextResult = await extractTextWithCoords(page);
     var vp = page.getViewport({ scale: 1.0 });
+    // 文字层缺失（字体未嵌入，如 12306 电子客票）→ 内容流兜底：
+    // 补画文字到 canvas，并把还原出的文本行交给字段识别。必须在 toDataURL 之前。
+    if (pdfTextResult.textIncomplete && window.__pdfRawText) {
+      try {
+        // pdf.js 会把传入的 ArrayBuffer 转移给 worker（原 buffer 变 detached），
+        // 原始字节只能从文档里再取一份，且仅兜底路径才付这份开销。
+        rawBytes = rawBytes || (typeof pdf.getData === 'function' ? await pdf.getData() : arrayBuffer.slice(0));
+        var raw = await window.__pdfRawText.extract(rawBytes, i - 1);
+        if (raw.runs.length && Math.abs(raw.widthPt - vp.width) < 1 && Math.abs(raw.heightPt - vp.height) < 1) {
+          window.__pdfRawText.draw(rendered.canvas, raw.runs, vp);
+          pdfTextResult = window.__pdfRawText.buildTextResult(raw, PDF_RENDER_DPI, pdfTextResult);
+          console.info('[PDF加载] 内容流文字兜底: 第' + i + '页 ' + raw.runs.length + ' 段');
+        }
+      } catch (e) {
+        console.warn('[pdf-client] 内容流文字兜底失败:', e);
+      }
+    }
+    var previewUrl = rendered.canvas.toDataURL('image/jpeg', JPEG_QUALITY);
     pages.push({
       pageIndex: i,
       previewUrl: previewUrl,
@@ -202,7 +225,9 @@ export async function loadPdfFromArrayBuffer(arrayBuffer) {
       pdfWidthPt: vp.width,
       pdfHeightPt: vp.height,
       renderDpi: rendered.dpi,
-      pdfTextResult: pdfTextResult
+      pdfTextResult: pdfTextResult,
+      // 文字是补画在预览位图上的，源页仍缺字：导出/打印必须走位图，不能再嵌入源页
+      rawFallback: !!pdfTextResult.rawFallback
     });
     page.cleanup();
   }

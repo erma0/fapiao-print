@@ -689,12 +689,15 @@ async function loadPdfFromFile(file, id, name, size) {
       srcPageWidthPt: pg.pdfWidthPt || 0,
       srcPageHeightPt: pg.pdfHeightPt || 0
     });
+    // 补画的文字只存在于位图预览里：导出/打印必须走位图，否则又会嵌回缺字的源页
+    if (pg.rawFallback) fileObj._forceRaster = true;
 
     // ---- 字体未嵌入检测（如 12306 铁路电子客票）----
     // pdf.js 依赖 ToUnicode CMap 做字形→Unicode 映射，字体未嵌入且无 ToUnicode 时
     // getTextContent() 返回空串，字段识别会全失败。这里检测并提示用户。
     var diag = pg.pdfTextResult && pg.pdfTextResult.textLayerDiagnostic;
-    if (diag && diag.suspectMissingToUnicode) {
+    // 内容流兜底已还原出文字时不再告警：字段能正常识别，只是 pdf.js 画不出字形
+    if (diag && diag.suspectMissingToUnicode && !pg.pdfTextResult.rawFallback) {
       fileObj._pdfTextMissingFonts = true;
       fileObj._pdfTextDiag = diag;
       hadMissingFontInBatch = true;
