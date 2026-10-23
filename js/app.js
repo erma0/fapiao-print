@@ -11,6 +11,9 @@ var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
 var _loadingBatchActive = false;
+var _slotUploadActive = false;   // 空槽上传进行中，防重复触发
+var _insertSlotIdx = -1;         // 空槽上传的目标槽位；-1 = 普通上传（追加到末尾）
+var _lastInsertedId = null;      // 空槽上传完成后用于定位/高亮的新文件 id
 var _printedMap = {};
 // 白边裁剪：R/G/B 均 >= 阈值视为白（严格小于才算内容）。
 // 245 会把发票右侧「下载次数：1」这类 250 上下的浅灰细字当白边裁掉（实测复现）；
@@ -110,6 +113,7 @@ function createFileObj(opts) {
     invoiceRemark: opts.invoiceRemark || '',  // 发票备注（票面「备注」栏，best-effort 识别）
     _isTicket: opts._isTicket || false,
     _loading: opts._loading || false,
+    _placeholder: opts._placeholder || false,
     _xmlInvoice: opts._xmlInvoice || false,
     // Disk path for the original file (when available).
     // Used by Rust to read bytes directly, skipping base64 encode/decode.
@@ -259,6 +263,73 @@ async function triggerUpload() {
   document.getElementById('fileInput').click();
 }
 
+// 槽位上传的插入准备：把「点击的槽位」换算成 S.files 里的落点
+// - 目标槽位已有空白占位 → replaceIdx 命中，新文件直接顶替该占位
+// - 目标槽位在现有文件之后 → insertAt 定位到队尾，blankCount 补齐中间空槽
+function prepareSlotInsertion() {
+  var perPage = getPerPage(getSettings());
+  var pos = S.currentPage * perPage + _insertSlotIdx;
+  if (pos < 0) return { insertAt: S.files.length, blankCount: 0, replaceIdx: -1 };
+  var active = getActiveFiles();
+  var target = pos < active.length ? active[pos] : null;
+  if (target) {
+    var targetIdx = S.files.indexOf(target);
+    if (target._placeholder) return { insertAt: -1, blankCount: 0, replaceIdx: targetIdx };
+    return { insertAt: targetIdx + 1, blankCount: 0, replaceIdx: -1 };
+  }
+  var insertAt = S.files.length;
+  if (active.length > 0) {
+    var last = S.files.indexOf(active[active.length - 1]);
+    if (last >= 0) insertAt = last + 1;
+  }
+  return { insertAt: insertAt, blankCount: pos - active.length, replaceIdx: -1 };
+}
+
+// 在指定位置插入空白占位（版面留白）
+function insertBlankSlots(insertAt, count) {
+  for (var b = 0; b < count; b++) {
+    var blank = createFileObj({ name: '空白占位', _placeholder: true });
+    blank.checked = false;
+    S.files.splice(insertAt + b, 0, blank);
+  }
+}
+
+// 把本批新文件整体挪到点击的槽位，中间空槽补空白占位；返回首个新文件的 id
+function applySlotInsertion(plan, newIds) {
+  var batch = S.files.filter(function(f) { return newIds.indexOf(f.id) >= 0; });
+  if (!batch.length) return null;
+  S.files = S.files.filter(function(f) { return newIds.indexOf(f.id) < 0; });
+  var at;
+  if (plan.replaceIdx >= 0) {
+    at = Math.min(plan.replaceIdx, S.files.length);
+    // 占位让位给新文件：先摘掉它，再插入整批
+    if (S.files[at] && S.files[at]._placeholder) S.files.splice(at, 1);
+  } else {
+    at = plan.insertAt < 0 ? S.files.length : Math.min(plan.insertAt, S.files.length);
+    insertBlankSlots(at, plan.blankCount);
+    at += plan.blankCount;
+  }
+  S.files.splice.apply(S.files, [at, 0].concat(batch));
+  return batch[0].id;
+}
+
+// 槽位上传完成后定位到新插入的文件：翻到它所在页并选中对应槽位
+function locateInsertedFile(id) {
+  if (!id) return;
+  var f = null;
+  for (var i = 0; i < S.files.length; i++) {
+    if (S.files[i].id === id) { f = S.files[i]; break; }
+  }
+  if (!f) return;
+  var active = getActiveFiles();
+  var activeIdx = active.indexOf(f);
+  if (activeIdx < 0) return;
+  var perPage = getPerPage(getSettings());
+  S.currentPage = Math.floor(activeIdx / perPage);
+  _activeFileIdx = S.files.indexOf(f);
+  S.selectedSlot = activeIdx % perPage;
+}
+
 // 版面空槽点击上传：新文件精准落在点击的槽位，中间空隙自动补空白占位
 function addFileToSlot(slotIdx) {
   if (_slotUploadActive || _loadingBatchActive) {
@@ -287,7 +358,11 @@ async function handleFileInput(fl) {
   try {
     await processFileList(Array.from(fl));
   } catch(e) {
+    console.error('processFileList error:', e);
     toast('加载失败: ' + String(e));
+    _loadingBatchActive = false;
+    _slotUploadActive = false;
+    _insertSlotIdx = -1;
   }
   document.getElementById('fileInput').value = '';
 }
@@ -298,6 +373,9 @@ async function processFileList(fileList) {
   var completed = 0;
   var added = 0;
   _loadingBatchActive = true;
+  // 空槽上传：落点在加载前就算好，加载结束后整批搬过去
+  var slotPlan = _insertSlotIdx >= 0 ? prepareSlotInsertion() : null;
+  var batchIds = [];
 
   fileList.forEach(function(file) {
     var ph = createFileObj({
@@ -343,7 +421,7 @@ async function processFileList(fileList) {
 
     if (phIdx >= 0 && r) {
       var items = Array.isArray(r) ? r : [r];
-      items.forEach(function(it) { _newFileIds[it.id] = true; });
+      items.forEach(function(it) { _newFileIds[it.id] = true; batchIds.push(it.id); });
       S.files.splice.apply(S.files, [phIdx, 1].concat(items));
       finalizeMedicalDetailPages(items); // 加入列表后立即排除医疗明细页附件（幂等）
       added += items.length;
@@ -354,9 +432,14 @@ async function processFileList(fileList) {
     renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
     await nextFrame();
   }
-  if (slotInsert) locateInsertedFile(_lastInsertedId);
+  if (slotPlan) {
+    _lastInsertedId = applySlotInsertion(slotPlan, batchIds);
+    locateInsertedFile(_lastInsertedId);
+    renderFileList(); updatePreview();
+  }
   toastLoading('加载完成');
   _loadingBatchActive = false;
+  _slotUploadActive = false;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
   _insertSlotIdx = -1;
   _lastInsertedId = null;
