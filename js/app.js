@@ -709,6 +709,7 @@ async function loadPdfFromFile(file, id, name, size) {
         applyPdfTextResult(fileObj, pg.pdfTextResult);
       }
     }
+    fileObj._diagPage = buildPageDiag(pg.pdfTextResult);
     results.push(fileObj);
   }
 
@@ -1402,6 +1403,172 @@ function ctxCopyInfo() {
     navigator.clipboard.writeText(text).then(function() { toast('已复制发票信息', 2000); }).catch(function() { fallbackCopy(text, null); });
   } else {
     fallbackCopy(text, null);
+  }
+}
+
+// =====================================================
+// 诊断信息（对照桌面版「导出诊断信息」，issue #47）
+// =====================================================
+// 报告会被贴进 GitHub issue，任何用户原文（金额/名称/号码/文件名）都不能出现：
+// 文本一律脱敏（汉字→汉 / 数字→9 / 字母→A / 空白→·，与桌面版
+// invoice_engine::sanitize_text 一致），只保留结构、坐标与「有没有识别到」。
+function sanitizeDiagText(s) {
+  if (s == null) return '';
+  var str = String(s);
+  var out = '';
+  for (var i = 0; i < str.length; i++) {
+    var cp = str.charCodeAt(i);
+    var ch = str[i];
+    if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF)) out += '汉';
+    else if (/[0-9０-９]/.test(ch)) out += '9';
+    else if (/[A-Za-zＡ-Ｚａ-ｚ]/.test(ch)) out += 'A';
+    else if (/\s/.test(ch)) out += '·';
+    else out += ch;
+  }
+  return out;
+}
+
+// 诊断摘要：仅固定词汇（布尔/枚举/计数，不含用户内容），因此不参与脱敏
+// —— 否则「专票 / OFD / 有 / 无」这类枚举词会被打码
+function buildDiagSummary(f) {
+  var parts = [];
+  parts.push('类型=' + (f._xmlInvoice ? 'XML数电票' : (resolveInvoiceType(f) || '未识别')));
+  parts.push('票号=' + (f.invoiceNo ? '有' : '无'));
+  parts.push('日期=' + (f.invoiceDate ? '有' : '无'));
+  parts.push('销方=' + (f.sellerName ? '有' : '无'));
+  parts.push('购方=' + (f.buyerName ? '有' : '无'));
+  parts.push('金额=' + (f.amountTax > 0 ? '有' : '无'));
+  parts.push('文字层=' + (f._diagPage ? (f._diagPage.lineCount ? '有' : '无') : '—'));
+  parts.push('份数=' + (f.copies || 1));
+  parts.push('旋转=' + (f.rotation || 0));
+  return parts.join(' ');
+}
+
+// 每页文字层样本（诊断用）：只留字数/行数与前 40 个词的坐标
+function buildPageDiag(res) {
+  if (!res) return null;
+  var words = [];
+  var total = 0;
+  (res.lines || []).forEach(function(line) {
+    (line.words || []).forEach(function(w) {
+      total++;
+      if (words.length < 40) words.push({ text: w.text, x: w.x, y: w.y, w: w.w, h: w.h });
+    });
+  });
+  return {
+    textLen: (res.text || '').replace(/\s/g, '').length,
+    lineCount: (res.lines || []).length,
+    wordCount: total,
+    raw: !!res.rawFallback,
+    words: words
+  };
+}
+
+function diagEnv() {
+  var ua = navigator.userAgent || '';
+  var m = ua.match(/(Edg|OPR|Chrome|Firefox|Version)\/(\d+)/);
+  var name = m ? m[1] : 'unknown';
+  var major = m ? m[2] : '?';
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  return 'web · ' + name + ' ' + major + (platform ? ' · ' + platform : '');
+}
+
+// 结构化来源（XML/OFD）额外列出解析到的字段形态，值同样脱敏
+function diagFieldLines(f) {
+  var rows = [
+    ['发票号码', f.invoiceNo],
+    ['开票日期', f.invoiceDate],
+    ['票种', f.invoiceType],
+    ['销方名称', f.sellerName],
+    ['销方税号', f.sellerCreditCode],
+    ['购方名称', f.buyerName],
+    ['购方税号', f.buyerCreditCode],
+    ['不含税金额', f.amountNoTax ? f.amountNoTax.toFixed(2) : ''],
+    ['税额', f.taxAmount ? f.taxAmount.toFixed(2) : ''],
+    ['含税金额', f.amountTax ? f.amountTax.toFixed(2) : ''],
+    ['项目名称', f.itemName],
+    ['发票备注', f.invoiceRemark]
+  ];
+  return rows.map(function(r) {
+    return '  ' + r[0] + ': ' + (r[1] ? sanitizeDiagText(r[1]) : '（无）');
+  });
+}
+
+function buildDiagnosticsReport(f) {
+  var out = [];
+  out.push('发票酱 诊断报告');
+  out.push('================');
+  out.push('版本: ' + (APP_VERSION || '?') + ' (web 纯前端)');
+  out.push('环境: ' + diagEnv());
+  out.push('导出时间: ' + new Date().toLocaleString('zh-CN'));
+  out.push('');
+  out.push('说明: 报告已脱敏（汉字→汉 / 数字→9 / 字母→A / 空格→·），不含任何原文内容；');
+  out.push('      数字、标点与坐标结构完整保留，用于定位渲染/识别问题。');
+  out.push('');
+  if (!f) {
+    out.push('（未选中文件）');
+  } else {
+    out.push('【文件】' + sanitizeDiagText(f.name));
+    out.push('大小: ' + (f.size / 1024).toFixed(1) + ' KB');
+    out.push('格式: ' + (f.type || '?') + ' · ' + (f.ow || 0) + 'x' + (f.oh || 0) + 'px · ' + (f.renderDpi || PDF_RENDER_DPI) + 'dpi');
+    out.push('识别摘要: ' + buildDiagSummary(f));
+    if (f._pdfTextMissingFonts) out.push('字体: 未嵌入（pdf.js 无法渲染字形）');
+    if (f._forceRaster) out.push('导出: 位图（文字由内容流兜底补画，源页缺字）');
+    if (f._ofdSvg) out.push('来源: OFD（矢量转 PNG 预览）');
+    if (f._xmlInvoice) out.push('来源: XML 数电票（无预览图，参与排版时按空白处理）');
+    var pg = f._diagPage;
+    if (pg) {
+      out.push('[页] 文字层=' + (pg.lineCount ? '有' : '无') + ' 文本' + pg.textLen + '字 行' + pg.lineCount + ' 词' + pg.wordCount
+        + (pg.raw ? ' 兜底=内容流(GBK)' : ''));
+      pg.words.forEach(function(w) {
+        out.push('  word "' + sanitizeDiagText(w.text) + '" x=' + w.x.toFixed(1) + ' y=' + w.y.toFixed(1)
+          + ' w=' + w.w.toFixed(1) + ' h=' + w.h.toFixed(1));
+      });
+      if (pg.wordCount > pg.words.length) out.push('  …样本截断（最多 ' + pg.words.length + ' 词）');
+    }
+    if (f._xmlInvoice || f._ofdSvg) {
+      out.push('解析字段:');
+      out = out.concat(diagFieldLines(f));
+    }
+    var s = getSettings();
+    out.push('排版: ' + s.paperW + 'x' + s.paperH + 'mm · ' + s.cols + 'x' + s.rows
+      + ' · 适配=' + s.fitMode + ' · 全局旋转=' + s.globalRotation
+      + ' · 裁剪白边=' + (s.trimWhite ? '开' : '关')
+      + ' · 裁切线=' + (s.cutline ? '开' : '关')
+      + ' · 页码=' + (s.pageNum ? '开' : '关'));
+  }
+  return out.join('\n');
+}
+
+function downloadDiagReport(text) {
+  var d = new Date();
+  function p2(n) { return String(n).padStart(2, '0'); }
+  var name = '诊断报告_' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '_' + p2(d.getHours()) + p2(d.getMinutes()) + '.txt';
+  var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(a.href); }, 5000);
+  toast('已下载 ' + name, 2500);
+}
+
+// 复制当前文件的脱敏诊断信息；剪贴板不可用（http/无权限）时退回下载文件
+function ctxDiagnostics() {
+  if (_ctxIdx < 0) return;
+  var f = S.files[_ctxIdx];
+  closeCtxMenu();
+  if (!f) return;
+  var text;
+  try { text = buildDiagnosticsReport(f); } catch (e) { toast('生成诊断信息失败: ' + e); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      toast('已复制诊断信息（' + text.length + ' 字），可直接粘贴到 issue', 2600);
+    }).catch(function() { downloadDiagReport(text); });
+  } else {
+    downloadDiagReport(text);
   }
 }
 
