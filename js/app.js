@@ -3282,7 +3282,7 @@ applyPerSectionLabelWidth();
 (function() {
   function showApp() {
     APP_VERSION = '3.4.2';
-    var el = document.getElementById('stVersion');
+    var el = document.getElementById('stVersionText');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);
   }

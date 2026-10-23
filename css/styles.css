@@ -546,8 +546,9 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 3px; }
 /* 状态栏右侧版本号：点击进 GitHub 仓库 */
-.status-link { margin-left: auto; color: var(--text-muted); text-decoration: none; transition: color 0.15s; }
+.status-link { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); text-decoration: none; transition: color 0.15s; }
 .status-link:hover { color: var(--accent); }
+.status-link svg { display: block; flex-shrink: 0; }
 
 /* ===== Empty ===== */
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); padding: 40px; text-align: center; align-self: stretch; }
