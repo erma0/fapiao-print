@@ -4181,10 +4181,11 @@ function syncPhotoModeUI() {
       var g = getPhotoGrid(s);
       var count = g.cols * g.rows;
       var warn = (g.w > s.paperW || g.h > s.paperH) ? '；照片大于纸张，可能被裁切' : '';
-      hint.textContent = '单张 ' + g.w + '×' + g.h + 'mm · 每页 ' + g.cols + '×' + g.rows + ' = ' + count + ' 张；自动居中排列，页脚 / 页码 / 日期 / 水印 / 白边裁剪不生效' + warn;
+      var clamped = (s.photoCols > g.cols || s.photoRows > g.rows) ? '；手动行列超出纸张，已按上限收敛' : '';
+      hint.textContent = '单张 ' + g.w + '×' + g.h + 'mm · 每页 ' + g.cols + '×' + g.rows + ' = ' + count + ' 张；自动居中排列，页脚 / 页码 / 日期 / 水印 / 白边裁剪不生效' + clamped + warn;
     }
   }
-  syncReimburseUI(); // 重新应用报销单模式的置灰规则
+  syncReimburseUI(); // 同步新版式模式的控件置灰状态（含相纸/报销单）
 }
 function onPhotoOptChange() {
   syncPhotoModeUI();
