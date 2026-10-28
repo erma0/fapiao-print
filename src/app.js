@@ -4088,7 +4088,7 @@ function paperDisplayLabel(ps) {
   if (ps === 'custom') {
     var c = getCustomPaperMm();
     if (document.getElementById('orientation').value === 'landscape') { var t = c.w; c.w = c.h; c.h = t; }
-    return c.w + '×' + c.h + 'mm';
+    return '自定义 ' + c.w + '×' + c.h + 'mm';
   }
   var p = PAPER[ps];
   if (!p) return ps;
