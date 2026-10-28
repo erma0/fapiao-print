@@ -843,6 +843,42 @@ function _cleanName(raw) {
 }
 
 /**
+ * 判断某处文本是否是备注/页脚区的公司名（如「销方开户银行:招商银行…支行」）。
+ * 名称兜底取公司名时必须排除这类候选，否则备注里的银行名会顶替销售方名称。
+ * 判定依据：
+ *   1. 词坐标落在页面下半部（备注区在下部，销售方名称区在上部）；
+ *   2. 文本层中该公司名所在行含开户银行/账号/地址/电话/落款等关键词。
+ *      只查同一行，避免跨行误杀购销方信息块里的「地址电话」标签。
+ *
+ * @param {string} name - 公司名候选
+ * @param {string} text - 全文文本
+ * @param {number} [index] - 候选在 text 中的起始位置（取不到时用 indexOf）
+ * @param {Array} [words] - 带坐标的词数组
+ * @returns {boolean} true = 属于备注/页脚区
+ */
+function _isRemarkAreaName(name, text, index, words) {
+  if (!name) return true;
+  if (words && words.length) {
+    for (var i = 0; i < words.length; i++) {
+      var wt = (words[i].text || '').trim();
+      var wn = (words[i].normText || '').trim();
+      if (wt === name || wn === name ||
+          (name.length >= 4 && (wt.indexOf(name) >= 0 || wn.indexOf(name) >= 0))) {
+        return words[i].ny > 0.55;
+      }
+    }
+  }
+  if (!text) return false;
+  var pos = typeof index === 'number' && index >= 0 ? index : text.indexOf(name);
+  if (pos < 0) return false;
+  var lineStart = text.lastIndexOf('\n', pos) + 1;
+  var lineEnd = text.indexOf('\n', pos);
+  if (lineEnd < 0) lineEnd = text.length;
+  var line = text.substring(lineStart, lineEnd);
+  return /(?:开户银行|开户行|银行账号|账\s*号|地\s*址|电\s*话|收款人|复核人|开票人|备\s*注)/.test(line);
+}
+
+/**
  * 坐标法与跨行法结果择优：
  * - 坐标值含冒号 → 标签残留（脏值），用跨行候选；
  * - 两值互为子串 → 坐标法截断/丢字，取更长的跨行候选；
@@ -900,8 +936,10 @@ function _extractNamesCrossLine(text, result) {
   // Find all potential company names (Chinese strings of reasonable length)
   var potentialNames = [];
   var companyNameRegex = /^[\u4e00-\u9fa5][\u4e00-\u9fa50-9a-zA-Z（）()·\-\.]{2,50}$/;
+  // 备注/页脚行里的公司名（开户银行、账号、地址电话、落款）不能当名称候选
+  var _REMARK_LINE_RE = /开户银行|开户行|银行账号|账\s*号|地\s*址|电\s*话|收款人|复核人|开票人|备\s*注/;
   for (var i = 0; i < lines.length; i++) {
-    if (companyNameRegex.test(lines[i])) {
+    if (companyNameRegex.test(lines[i]) && !_REMARK_LINE_RE.test(lines[i])) {
       var cleaned = _cleanName(lines[i]);
       if (cleaned) {
         potentialNames.push({ line: i, name: cleaned });
@@ -2058,7 +2096,8 @@ function _extractByText(fullText, words) {
     var ccm;
     while ((ccm = allCompRe.exec(text)) !== null) {
       var cn = ccm[1].trim();
-      if (cn.length > 3 && !/^(?:购买方|销售方|信息|名称|地址)/.test(cn)) {
+      if (cn.length > 3 && !/^(?:购买方|销售方|信息|名称|地址)/.test(cn) &&
+          !_isRemarkAreaName(cn, text, ccm.index, words)) {
         allCompMatches.push(cn);
       }
     }
@@ -2111,10 +2150,11 @@ function _extractByText(fullText, words) {
     while ((_fcm = _allCompReFb.exec(text)) !== null) {
       var _fcn = _fcm[1].trim();
       // 最小长度6字(如"无锡天鹏菜篮子工程有限公司"),排除纯后缀如"有限公司"
-      // 同时排除buyerName及其子串,避免重复
+      // 同时排除buyerName及其子串,避免重复；排除备注/页脚里的公司名(如开户银行)
       if (_fcn.length >= 6 && _fcn !== result.buyerName &&
           !result.buyerName.includes(_fcn) && !_fcn.includes(result.buyerName) &&
-          !/^(?:购买方|销售方|信息|名称|地址)/.test(_fcn)) {
+          !/^(?:购买方|销售方|信息|名称|地址)/.test(_fcn) &&
+          !_isRemarkAreaName(_fcn, text, _fcm.index, words)) {
         _fbMatches.push(_fcn);
       }
     }
@@ -3025,6 +3065,7 @@ function _extractSeller(words, imgW, imgH) {
     var companyRe3 = new RegExp('^([\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]+' + csSuffix3 + ')$');
     var sellerCompWords = words.filter(function(w) {
       if (w.nx < 0.4) return false;  // Must be in right portion of page
+      if (w.ny > 0.55) return false;  // 备注区在下半部，不能当销售方名称
       if (_isLabelFragmentWord(w)) return false;
       var t = (w.normText || w.text || '').trim();
       if (t.length < 6) return false;  // 排除"有限公司"等纯后缀片段
@@ -3171,21 +3212,43 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
   var remarkLabel = _findRemarkLabel(words);
   if (remarkLabel) {
     // 下界：备注标签下方最近的 开票人 / 收款人 / 复核人 行（没有则退到 97% 图高）
+    // 文字层可能把页脚拆成单字（开/票/人 各占一词），需先按行合并再识别
     var bottomLimit = imgH * 0.97;
+    var _footerRows = [];
     for (var m = 0; m < words.length; m++) {
       var wm = words[m];
       if (wm.cy <= remarkLabel.cy) continue;
-      if (/开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/.test(wm.normText)) {
-        if (wm.y < bottomLimit) bottomLimit = wm.y;
+      var _row = null;
+      for (var ri = 0; ri < _footerRows.length; ri++) {
+        if (Math.abs(wm.cy - _footerRows[ri].cy) <= Math.max(wm.h, 8) * 0.6) {
+          _row = _footerRows[ri];
+          break;
+        }
+      }
+      if (!_row) {
+        _row = { cy: wm.cy, y: wm.y, words: [] };
+        _footerRows.push(_row);
+      }
+      _row.words.push(wm);
+      if (wm.y < _row.y) _row.y = wm.y;
+    }
+    for (var ri2 = 0; ri2 < _footerRows.length; ri2++) {
+      var _rowWords = _footerRows[ri2].words.slice().sort(function(a, b) { return a.x - b.x; });
+      var _rowText = _rowWords.map(function(w) { return w.normText; }).join('');
+      if (/开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/.test(_rowText) && _footerRows[ri2].y < bottomLimit) {
+        bottomLimit = _footerRows[ri2].y;
       }
     }
     var parts = remarkLabel._parts || [];
     var rx = remarkLabel.x + remarkLabel.w * 0.5;
+    // 标签单字行高：竖排合成标签的 h 覆盖「备+注」两字，不能用于行距离判断
+    var _rmLineH = parts.length ? parts[0].h : remarkLabel.h;
     var rcand = words.filter(function(w) {
       if (w.confidence < 0.3) return false;
       if (w === remarkLabel || parts.indexOf(w) >= 0) return false;
-      // 必须在标签顶部或以下（避免抓到上方的 价税合计 / 大写 / 小写 行）
-      if (w.cy < remarkLabel.y) return false;
+      // 备注内容可能先于「备/注」标签绘制，落在标签上方紧邻一两行（数电票常见）。
+      // 允许标签上方 1.5 倍单字行高，仍排除更上方的 价税合计 / 大写 / 小写 行。
+      if (w.cy < remarkLabel.y - Math.max(_rmLineH, 8) * 1.5) return false;
       if (w.cy > bottomLimit) return false;
       if (w.cx < rx) return false;
       if (/^备\s*注$/.test(w.normText.replace(/\s+/g, ''))) return false;
@@ -3300,6 +3363,8 @@ function _joinItems(items) {
 function _cleanRemark(raw) {
   if (!raw) return '';
   var s = String(raw).replace(/\r/g, '');
+  // 文本层可能带控制字符占位（如 \u0000），直接显示会是乱码
+  s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
   s = s.replace(/^[：:\.\-—\s]+/, '');
   s = s.split('\n').map(function(t) { return t.trim(); }).filter(Boolean).join(' ');
   s = s.replace(/\s{2,}/g, ' ').trim();
@@ -4230,7 +4295,7 @@ function extractByCoordinates(ocrResult) {
   // 任一路缺失由另一路补空。
   var _extra = _extractItemNameRemarkByCoords(words, imgW, imgH);
   var _itemName = _extra.itemName || textInfo.itemName || '';
-  var _invoiceRemark = textInfo.invoiceRemark || _extra.invoiceRemark || '';
+  var _invoiceRemark = _cleanRemark(textInfo.invoiceRemark || _extra.invoiceRemark || '');
 
   console.log('[坐标提取] 结果:', { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: taxAmount,
     sellerName: sellerName || '(空)', sellerCreditCode: sellerCreditCode || '(空)',
