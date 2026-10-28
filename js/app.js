@@ -9,6 +9,8 @@ var APP_VERSION = '';
 // 纸张规格：w/h 为 mm；证件照另带常用像素尺寸（pxW/pxH，证件照按 300DPI，身份证照按 350DPI）
 var PAPER = {
   A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356},
+  photoPaper5:{w:89,h:127,name:'5寸相纸',usage:'3R，证件照拼版常用'},
+  photoPaper6:{w:102,h:152,name:'6寸相纸',usage:'4R，证件照拼版常用'},
   photoSmall1:{w:22,h:32,name:'小一寸',usage:'驾驶证、部分准考证',pxW:260,pxH:378},
   photo1:{w:25,h:35,name:'一寸',usage:'简历、学籍、体检表、教资',pxW:295,pxH:413},
   photoBig1:{w:33,h:48,name:'大一寸',usage:'护照、港澳台通行证',pxW:390,pxH:567},
@@ -18,7 +20,55 @@ var PAPER = {
 };
 var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
 var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
+var PAPER_PHOTO_PAPER = ['photoPaper5','photoPaper6'];
 var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
+
+// 证件照拼版预置：一键设好相纸、行列、边距、间距与切割线。
+// 边距/间距用整数求解，使槽位尽量贴合证件照标称尺寸（误差 ≤0.5mm，宽度均精确）。
+var PHOTO_TILING_PRESETS = {};
+var PHOTO_TILING_ORDER = [];
+(function() {
+  var defs = [
+    ['p6_1in8',       '6寸·一寸×8',    'photoPaper6', 'photo1',      2, 4],
+    ['p6_2in6',       '6寸·二寸×6',    'photoPaper6', 'photo2',      2, 3],
+    ['p6_big1in6',    '6寸·大一寸×6',  'photoPaper6', 'photoBig1',   2, 3],
+    ['p6_small2in6',  '6寸·小二寸×6',  'photoPaper6', 'photoSmall2', 2, 3],
+    ['p6_small1in12', '6寸·小一寸×12', 'photoPaper6', 'photoSmall1', 3, 4],
+    ['p6_id12',       '6寸·身份证×12', 'photoPaper6', 'photoId',     3, 4],
+    ['p5_1in6',       '5寸·一寸×6',    'photoPaper5', 'photo1',      2, 3],
+    ['p5_2in4',       '5寸·二寸×4',    'photoPaper5', 'photo2',      2, 2]
+  ];
+  function solveAxis(avail, count, target) {
+    var bestOver = null, bestUnder = null;
+    for (var m = 1; m <= 20; m++) {
+      for (var g = 0; g <= 20; g++) {
+        var slot = (avail - count * 2 * m - (count - 1) * g) / count;
+        if (slot <= 0) continue;
+        var diff = slot - target;
+        var cand = { m: m, g: g, diff: diff };
+        if (diff >= -1e-9) {
+          if (!bestOver || diff < bestOver.diff - 1e-9 ||
+              (Math.abs(diff - bestOver.diff) <= 1e-9 && (m > bestOver.m || (m === bestOver.m && g < bestOver.g)))) bestOver = cand;
+        } else if (!bestUnder || diff > bestUnder.diff + 1e-9 ||
+              (Math.abs(diff - bestUnder.diff) <= 1e-9 && (m > bestUnder.m || (m === bestUnder.m && g < bestUnder.g)))) {
+          bestUnder = cand;
+        }
+      }
+    }
+    return bestOver || bestUnder || { m: 1, g: 0, diff: 0 };
+  }
+  defs.forEach(function(d) {
+    var paper = PAPER[d[2]], photo = PAPER[d[3]];
+    var cols = d[4], rows = d[5];
+    var hx = solveAxis(paper.w, cols, photo.w);
+    var vy = solveAxis(paper.h, rows, photo.h);
+    PHOTO_TILING_PRESETS[d[0]] = {
+      label: d[1], paper: d[2], photo: d[3], cols: cols, rows: rows,
+      ml: hx.m, mr: hx.m, mt: vy.m, mb: vy.m, gapH: hx.g, gapV: vy.g
+    };
+    PHOTO_TILING_ORDER.push(d[0]);
+  });
+})();
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
@@ -2535,6 +2585,8 @@ function renderPaperOptions() {
   PAPER_STANDARD.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
   html += '</optgroup><optgroup label="证件照 / 证件">';
   PAPER_PHOTO.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
+  html += '</optgroup><optgroup label="相纸">';
+  PAPER_PHOTO_PAPER.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
   html += '</optgroup><option value="custom">自定义</option>';
   sel.innerHTML = html;
   sel.value = (cur === 'custom' || PAPER[cur]) ? cur : 'A4';
@@ -2592,6 +2644,95 @@ function onPaperChange() {
   }
   document.getElementById('customPaperRow').style.display = ps === 'custom' ? 'flex' : 'none';
   updatePreview();
+}
+
+// =====================================================
+// 证件照拼版预置（issue #55）
+// =====================================================
+function renderPhotoTilingOptions() {
+  var sel = document.getElementById('photoTilingPreset');
+  if (!sel) return;
+  var cur = sel.value;
+  var html = '<option value="">证件照拼版（预置）</option>';
+  PHOTO_TILING_ORDER.forEach(function(id) {
+    var p = PHOTO_TILING_PRESETS[id];
+    html += '<option value="' + id + '">' + p.label + '（' + paperDisplayLabel(p.paper) + '）</option>';
+  });
+  sel.innerHTML = html;
+  sel.value = PHOTO_TILING_PRESETS[cur] ? cur : '';
+}
+function onPhotoTilingChange() {
+  var sel = document.getElementById('photoTilingPreset');
+  if (sel && sel.value) applyPhotoTilingPreset(sel.value);
+}
+// 一键拼版：相纸/纵向/行列/整数边距/间距/切割线一次到位；
+// 同时关闭会挤占版心或污染照片的页脚、页码、日期、水印、白边裁剪。
+function applyPhotoTilingPreset(id) {
+  var p = PHOTO_TILING_PRESETS[id];
+  if (!p) return;
+  renderPaperOptions();
+  var psEl = document.getElementById('paperSize');
+  if (psEl) psEl.value = p.paper;
+  document.getElementById('orientation').value = 'portrait';
+  [['marginTop', p.mt], ['marginBottom', p.mb], ['marginLeft', p.ml], ['marginRight', p.mr], ['gapH', p.gapH], ['gapV', p.gapV]].forEach(function(pair) {
+    var r = document.getElementById(pair[0]), n = document.getElementById(pair[0] + 'N');
+    if (r) r.value = pair[1];
+    if (n) n.value = pair[1];
+  });
+  S.layout = { cols: p.cols, rows: p.rows };
+  document.getElementById('customRows').value = p.rows;
+  document.getElementById('customCols').value = p.cols;
+  if (!S.feat.cutline) {
+    S.feat.cutline = true;
+    var cutBtn = document.getElementById('toggleCutline');
+    if (cutBtn) cutBtn.classList.add('on');
+  }
+  var offFeat = { pageNum: 'togglePageNum', printDate: 'toggleDate', footer: 'toggleFooter', watermark: 'toggleWatermark', trimWhite: 'toggleTrimWhite' };
+  Object.keys(offFeat).forEach(function(k) {
+    if (S.feat[k]) {
+      S.feat[k] = false;
+      var b = document.getElementById(offFeat[k]);
+      if (b) b.classList.remove('on');
+    }
+  });
+  document.getElementById('footerOpts').style.display = 'none';
+  document.getElementById('customFMRow').style.display = 'none';
+  document.getElementById('footerMarginRow').style.display = 'none';
+  document.getElementById('wmOpts').style.display = 'none';
+  document.getElementById('trimPadOpts').style.display = 'none';
+  document.getElementById('fitMode').value = 'fit';
+  document.getElementById('customScaleRow').style.display = 'none';
+  document.getElementById('customScaleHint').style.display = 'none';
+  document.getElementById('globalRotation').value = '0';
+  onPaperChange();
+  syncLayoutHighlight();
+  saveSettings();
+  toast('已应用 ' + p.label);
+}
+// 当前版面精确匹配某个拼版预置时，下拉框回显该预置
+function syncPhotoTilingSelect() {
+  var sel = document.getElementById('photoTilingPreset');
+  if (!sel) return;
+  var ps = document.getElementById('paperSize').value;
+  var active = '';
+  if (document.getElementById('orientation').value === 'portrait') {
+    var vals = {
+      marginTop: parseFloat(document.getElementById('marginTop').value) || 0,
+      marginBottom: parseFloat(document.getElementById('marginBottom').value) || 0,
+      marginLeft: parseFloat(document.getElementById('marginLeft').value) || 0,
+      marginRight: parseFloat(document.getElementById('marginRight').value) || 0,
+      gapH: parseFloat(document.getElementById('gapH').value) || 0,
+      gapV: parseFloat(document.getElementById('gapV').value) || 0
+    };
+    for (var i = 0; i < PHOTO_TILING_ORDER.length; i++) {
+      var p = PHOTO_TILING_PRESETS[PHOTO_TILING_ORDER[i]];
+      if (ps === p.paper && S.layout.cols === p.cols && S.layout.rows === p.rows &&
+          vals.marginTop === p.mt && vals.marginBottom === p.mb &&
+          vals.marginLeft === p.ml && vals.marginRight === p.mr &&
+          vals.gapH === p.gapH && vals.gapV === p.gapV) { active = PHOTO_TILING_ORDER[i]; break; }
+    }
+  }
+  if (sel.value !== active) sel.value = active;
 }
 function onFitChange() {
   var isCustom = document.getElementById('fitMode').value === 'custom';
@@ -2835,6 +2976,7 @@ function updatePreview() {
   document.getElementById('stLayout').textContent = S.layout.rows + '\u00D7' + S.layout.cols;
   var ps = document.getElementById('paperSize').value;
   document.getElementById('stPaper').textContent = paperDisplayLabel(ps) + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
+  syncPhotoTilingSelect();
 
   if (!files.length) {
     document.getElementById('emptyState').style.display = 'flex';
@@ -3379,7 +3521,9 @@ document.getElementById('orientation').value = 'landscape';
 
 // Restore all layout & feature settings
 renderPaperOptions();
+renderPhotoTilingOptions();
 loadSettings();
+syncPhotoTilingSelect();
 applyPerSectionLabelWidth();
 
 // =====================================================
