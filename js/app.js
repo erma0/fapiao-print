@@ -2699,6 +2699,12 @@ function togglePhotoMode(btn) {
       S.feat.cutline = true;
       document.getElementById('toggleCutline').classList.add('on');
     }
+    // 相纸模式不做白边裁剪：同步关掉功能开关（getSettings 里也会强制 false）
+    if (S.feat.trimWhite) {
+      S.feat.trimWhite = false;
+      document.getElementById('toggleTrimWhite').classList.remove('on');
+      document.getElementById('trimPadOpts').style.display = 'none';
+    }
     document.getElementById('fitMode').value = 'fit';
     document.getElementById('customScaleRow').style.display = 'none';
     document.getElementById('customScaleHint').style.display = 'none';

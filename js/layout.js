@@ -230,7 +230,8 @@ function renderPage(pageFiles, pi, total, s) {
     var selClass = isSelected ? ' selected' : '';
 
     if (f && f.previewUrl) {
-      var src = S.feat.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
+      // 用 settings.trimWhite：相纸模式强制关闭裁剪，避免预览裁剪图、导出原图
+      var src = s.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
       var rot = getRotation(f, slot, s);
       var filt = s.colorMode === 'grayscale' ? 'filter:grayscale(1);' : s.colorMode === 'bw' ? 'filter:grayscale(1) contrast(1.5);' : '';
       var fit = 'contain';
