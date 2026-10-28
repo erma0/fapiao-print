@@ -110,7 +110,6 @@
           <div class="row"><label class="lbl">规格</label><div class="ctrl"><select id="paperSize" onchange="onPaperChange()"><option value="A4">A4 (210×297mm)</option><option value="A5">A5 (148×210mm)</option><option value="B5">B5 (176×250mm)</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">自定义</option></select></div></div>
           <div class="row"><label class="lbl">单位</label><div class="ctrl"><select id="paperUnit" onchange="onPaperUnitChange()" title="尺寸显示与自定义输入的单位；像素按 300 DPI 换算（与打印渲染一致）"><option value="mm">毫米 (mm)</option><option value="px">像素 (px / 300DPI)</option></select></div></div>
           <div id="customPaperRow" class="row" style="display:none"><label class="lbl" id="customPaperUnit">mm</label><div class="ctrl"><input type="number" id="customW" value="210" min="10" step="1" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="10" step="1" style="width:60px" onchange="updatePreview()"></div></div>
-          <div class="row"><label class="lbl">拼版</label><div class="ctrl"><select id="photoTilingPreset" onchange="onPhotoTilingChange()" title="一键设好相纸、行列、边距、间距与切割线；会关闭页脚/水印/白边裁剪"><option value="">证件照拼版（预置）</option></select></div></div>
           <div class="row"><label class="lbl">方向</label><div class="ctrl"><select id="orientation" onchange="updatePreview();syncLayoutHighlight()"><option value="portrait">纵向</option><option value="landscape" selected>横向</option></select></div></div>
         </div>
         <div class="sec">
@@ -123,7 +122,7 @@
             <div class="go" data-cols="2" data-rows="2" onclick="setLayoutPreset(2,2,null,this)">2×2</div>
             <div class="go" data-cols="3" data-rows="3" onclick="setLayoutPreset(3,3,null,this)">3×3</div>
           </div>
-          <div class="row" style="margin-top:4px;margin-bottom:0">
+          <div class="row" id="customLayoutRow" style="margin-top:4px;margin-bottom:0">
             <label class="lbl" style="font-size:12px;color:var(--text-muted)">自定义</label>
             <div class="ctrl">
               <input type="number" id="customRows" value="1" min="1" max="10" style="width:52px;text-align:center" oninput="applyCustomLayout()" onchange="applyCustomLayout()">
@@ -132,8 +131,17 @@
               <span style="color:var(--text-muted);font-size:13px">列</span>
             </div>
           </div>
+          <div class="trow" style="margin-top:6px"><label class="tlbl">相纸模式</label><button class="tgl" id="togglePhotoMode" onclick="togglePhotoMode(this)"></button></div>
+          <div id="photoModeOpts" style="display:none">
+            <div class="row"><label class="lbl">证件照</label><div class="ctrl"><select id="photoSize" onchange="onPhotoOptChange()"><option value="photo1">一寸 25×35mm（最通用）</option><option value="photo2">二寸 35×49mm</option><option value="photoBig1">大一寸 33×48mm</option><option value="photoSmall2">小二寸 35×45mm</option><option value="photoSmall1">小一寸 22×32mm</option><option value="photoId">身份证/社保卡 26×32mm</option><option value="custom">自定义</option></select></div></div>
+            <div id="photoCustomRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl"><input type="number" id="photoCustomW" value="25" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"> × <input type="number" id="photoCustomH" value="35" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"></div></div>
+            <div class="row"><label class="lbl">间距</label><div class="ctrl"><input type="number" id="photoGap" value="3" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
+            <div class="row"><label class="lbl">留边</label><div class="ctrl"><input type="number" id="photoMargin" value="3" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
+            <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">行（0=自动）</span></div></div>
+            <div id="photoModeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4"></div>
+          </div>
         </div>
-        <div class="sec">
+        <div class="sec" id="marginSec">
           <div class="sec-title">📐 边距 (mm)</div>
           <div class="row"><label class="lbl">上</label><div class="rr ctrl"><input type="range" id="marginTop" min="0" max="30" value="5" oninput="syncSlider(this,'marginTopN');updatePreview()"><input type="number" id="marginTopN" min="0" max="30" value="5" onchange="syncRange(this,'marginTop');updatePreview()"></div></div>
           <div class="row"><label class="lbl">下</label><div class="rr ctrl"><input type="range" id="marginBottom" min="0" max="30" value="5" oninput="syncSlider(this,'marginBottomN');updatePreview()"><input type="number" id="marginBottomN" min="0" max="30" value="5" onchange="syncRange(this,'marginBottom');updatePreview()"></div></div>
@@ -145,7 +153,7 @@
             <button class="btn btn-sm" style="flex:1" onclick="setMP(0,0,0,0)">0</button>
           </div>
         </div>
-        <div class="sec">
+        <div class="sec" id="gapSec">
           <div class="sec-title">↔ 间距 (mm)</div>
           <div class="row"><label class="lbl">列间距</label><div class="rr ctrl"><input type="range" id="gapH" min="0" max="20" value="3" oninput="syncSlider(this,'gapHN');updatePreview()"><input type="number" id="gapHN" min="0" max="20" value="3" onchange="syncRange(this,'gapH');updatePreview()"></div></div>
           <div class="row"><label class="lbl">行间距</label><div class="rr ctrl"><input type="range" id="gapV" min="0" max="20" value="3" oninput="syncSlider(this,'gapVN');updatePreview()"><input type="number" id="gapVN" min="0" max="20" value="3" onchange="syncRange(this,'gapV');updatePreview()"></div></div>
@@ -162,7 +170,7 @@
         </div>
         <div class="sec">
           <div class="sec-title">✂ 辅助选项</div>
-          <div class="trow"><label class="tlbl">裁切线</label><button class="tgl on" id="toggleCutline" onclick="toggleFeature('cutline',this)"></button></div>
+          <div class="trow" id="cutlineRow"><label class="tlbl">裁切线</label><button class="tgl on" id="toggleCutline" onclick="toggleFeature('cutline',this)"></button></div>
           <div class="trow"><label class="tlbl">编号</label><button class="tgl" id="toggleNumber" onclick="toggleFeature('number',this)"></button></div>
           <div class="trow" id="copyBadgeRow"><label class="tlbl">副本标记</label><button class="tgl" id="toggleCopyBadge" onclick="toggleFeature('copyBadge',this)"></button></div>
           <div class="trow"><label class="tlbl">边框</label><button class="tgl" id="toggleBorder" onclick="toggleFeature('border',this)"></button></div>

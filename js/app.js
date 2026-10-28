@@ -22,53 +22,6 @@ var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
 var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
 var PAPER_PHOTO_PAPER = ['photoPaper5','photoPaper6'];
 var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
-
-// 证件照拼版预置：一键设好相纸、行列、边距、间距与切割线。
-// 边距/间距用整数求解，使槽位尽量贴合证件照标称尺寸（误差 ≤0.5mm，宽度均精确）。
-var PHOTO_TILING_PRESETS = {};
-var PHOTO_TILING_ORDER = [];
-(function() {
-  var defs = [
-    ['p6_1in8',       '6寸·一寸×8',    'photoPaper6', 'photo1',      2, 4],
-    ['p6_2in6',       '6寸·二寸×6',    'photoPaper6', 'photo2',      2, 3],
-    ['p6_big1in6',    '6寸·大一寸×6',  'photoPaper6', 'photoBig1',   2, 3],
-    ['p6_small2in6',  '6寸·小二寸×6',  'photoPaper6', 'photoSmall2', 2, 3],
-    ['p6_small1in12', '6寸·小一寸×12', 'photoPaper6', 'photoSmall1', 3, 4],
-    ['p6_id12',       '6寸·身份证×12', 'photoPaper6', 'photoId',     3, 4],
-    ['p5_1in6',       '5寸·一寸×6',    'photoPaper5', 'photo1',      2, 3],
-    ['p5_2in4',       '5寸·二寸×4',    'photoPaper5', 'photo2',      2, 2]
-  ];
-  function solveAxis(avail, count, target) {
-    var bestOver = null, bestUnder = null;
-    for (var m = 1; m <= 20; m++) {
-      for (var g = 0; g <= 20; g++) {
-        var slot = (avail - count * 2 * m - (count - 1) * g) / count;
-        if (slot <= 0) continue;
-        var diff = slot - target;
-        var cand = { m: m, g: g, diff: diff };
-        if (diff >= -1e-9) {
-          if (!bestOver || diff < bestOver.diff - 1e-9 ||
-              (Math.abs(diff - bestOver.diff) <= 1e-9 && (m > bestOver.m || (m === bestOver.m && g < bestOver.g)))) bestOver = cand;
-        } else if (!bestUnder || diff > bestUnder.diff + 1e-9 ||
-              (Math.abs(diff - bestUnder.diff) <= 1e-9 && (m > bestUnder.m || (m === bestUnder.m && g < bestUnder.g)))) {
-          bestUnder = cand;
-        }
-      }
-    }
-    return bestOver || bestUnder || { m: 1, g: 0, diff: 0 };
-  }
-  defs.forEach(function(d) {
-    var paper = PAPER[d[2]], photo = PAPER[d[3]];
-    var cols = d[4], rows = d[5];
-    var hx = solveAxis(paper.w, cols, photo.w);
-    var vy = solveAxis(paper.h, rows, photo.h);
-    PHOTO_TILING_PRESETS[d[0]] = {
-      label: d[1], paper: d[2], photo: d[3], cols: cols, rows: rows,
-      ml: hx.m, mr: hx.m, mt: vy.m, mb: vy.m, gapH: hx.g, gapV: vy.g
-    };
-    PHOTO_TILING_ORDER.push(d[0]);
-  });
-})();
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
@@ -131,7 +84,8 @@ var S = {
     printDate: false, footer: false,
     pdfTextEnabled: true,
     customFM: false,
-    copyBadge: false
+    copyBadge: false,
+    photoMode: false
   }
 };
 
@@ -2647,92 +2601,65 @@ function onPaperChange() {
 }
 
 // =====================================================
-// 证件照拼版预置（issue #55）
+// 相纸模式（issue #55）：按证件照实际尺寸在相纸上整版排列
 // =====================================================
-function renderPhotoTilingOptions() {
-  var sel = document.getElementById('photoTilingPreset');
-  if (!sel) return;
-  var cur = sel.value;
-  var html = '<option value="">证件照拼版（预置）</option>';
-  PHOTO_TILING_ORDER.forEach(function(id) {
-    var p = PHOTO_TILING_PRESETS[id];
-    html += '<option value="' + id + '">' + p.label + '（' + paperDisplayLabel(p.paper) + '）</option>';
-  });
-  sel.innerHTML = html;
-  sel.value = PHOTO_TILING_PRESETS[cur] ? cur : '';
-}
-function onPhotoTilingChange() {
-  var sel = document.getElementById('photoTilingPreset');
-  if (sel && sel.value) applyPhotoTilingPreset(sel.value);
-}
-// 一键拼版：相纸/纵向/行列/整数边距/间距/切割线一次到位；
-// 同时关闭会挤占版心或污染照片的页脚、页码、日期、水印、白边裁剪。
-function applyPhotoTilingPreset(id) {
-  var p = PHOTO_TILING_PRESETS[id];
-  if (!p) return;
-  renderPaperOptions();
-  var psEl = document.getElementById('paperSize');
-  if (psEl) psEl.value = p.paper;
-  document.getElementById('orientation').value = 'portrait';
-  [['marginTop', p.mt], ['marginBottom', p.mb], ['marginLeft', p.ml], ['marginRight', p.mr], ['gapH', p.gapH], ['gapV', p.gapV]].forEach(function(pair) {
-    var r = document.getElementById(pair[0]), n = document.getElementById(pair[0] + 'N');
-    if (r) r.value = pair[1];
-    if (n) n.value = pair[1];
-  });
-  S.layout = { cols: p.cols, rows: p.rows };
-  document.getElementById('customRows').value = p.rows;
-  document.getElementById('customCols').value = p.cols;
-  if (!S.feat.cutline) {
-    S.feat.cutline = true;
-    var cutBtn = document.getElementById('toggleCutline');
-    if (cutBtn) cutBtn.classList.add('on');
+function getPhotoSizeMm() {
+  var id = document.getElementById('photoSize').value;
+  if (id === 'custom') {
+    var w = parseFloat(document.getElementById('photoCustomW').value) || 25;
+    var h = parseFloat(document.getElementById('photoCustomH').value) || 35;
+    return { w: Math.max(1, w), h: Math.max(1, h) };
   }
-  var offFeat = { pageNum: 'togglePageNum', printDate: 'toggleDate', footer: 'toggleFooter', watermark: 'toggleWatermark', trimWhite: 'toggleTrimWhite' };
-  Object.keys(offFeat).forEach(function(k) {
-    if (S.feat[k]) {
-      S.feat[k] = false;
-      var b = document.getElementById(offFeat[k]);
-      if (b) b.classList.remove('on');
-    }
+  var p = PAPER[id] || PAPER.photo1;
+  return { w: p.w, h: p.h };
+}
+function syncPhotoModeUI() {
+  var on = !!S.feat.photoMode;
+  var opts = document.getElementById('photoModeOpts');
+  if (opts) opts.style.display = on ? 'block' : 'none';
+  var btn = document.getElementById('togglePhotoMode');
+  if (btn) btn.classList.toggle('on', on);
+  var ps = document.getElementById('photoSize');
+  var customRow = document.getElementById('photoCustomRow');
+  if (customRow && ps) customRow.style.display = ps.value === 'custom' ? 'flex' : 'none';
+  ['gridSel','customLayoutRow','marginSec','gapSec','cutlineRow'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.style.opacity = on ? '0.4' : '';
+    el.style.pointerEvents = on ? 'none' : '';
   });
-  document.getElementById('footerOpts').style.display = 'none';
-  document.getElementById('customFMRow').style.display = 'none';
-  document.getElementById('footerMarginRow').style.display = 'none';
-  document.getElementById('wmOpts').style.display = 'none';
-  document.getElementById('trimPadOpts').style.display = 'none';
-  document.getElementById('fitMode').value = 'fit';
-  document.getElementById('customScaleRow').style.display = 'none';
-  document.getElementById('customScaleHint').style.display = 'none';
-  document.getElementById('globalRotation').value = '0';
-  onPaperChange();
-  syncLayoutHighlight();
+  var hint = document.getElementById('photoModeHint');
+  if (hint) {
+    if (!on) {
+      hint.textContent = '';
+    } else {
+      var s = getSettings();
+      var g = getPhotoGrid(s);
+      var count = g.cols * g.rows;
+      var warn = (g.w > s.paperW || g.h > s.paperH) ? '；照片大于纸张，可能被裁切' : '';
+      hint.textContent = '单张 ' + g.w + '×' + g.h + 'mm · 每页 ' + g.cols + '×' + g.rows + ' = ' + count + ' 张；自动居中排列，页脚 / 页码 / 日期 / 水印 / 白边裁剪不生效' + warn;
+    }
+  }
+}
+function onPhotoOptChange() {
+  syncPhotoModeUI();
+  updatePreview();
+}
+function togglePhotoMode(btn) {
+  S.feat.photoMode = !S.feat.photoMode;
+  if (S.feat.photoMode) {
+    if (!S.feat.cutline) {
+      S.feat.cutline = true;
+      document.getElementById('toggleCutline').classList.add('on');
+    }
+    document.getElementById('fitMode').value = 'fit';
+    document.getElementById('customScaleRow').style.display = 'none';
+    document.getElementById('customScaleHint').style.display = 'none';
+    document.getElementById('globalRotation').value = '0';
+  }
+  syncPhotoModeUI();
   saveSettings();
-  toast('已应用 ' + p.label);
-}
-// 当前版面精确匹配某个拼版预置时，下拉框回显该预置
-function syncPhotoTilingSelect() {
-  var sel = document.getElementById('photoTilingPreset');
-  if (!sel) return;
-  var ps = document.getElementById('paperSize').value;
-  var active = '';
-  if (document.getElementById('orientation').value === 'portrait') {
-    var vals = {
-      marginTop: parseFloat(document.getElementById('marginTop').value) || 0,
-      marginBottom: parseFloat(document.getElementById('marginBottom').value) || 0,
-      marginLeft: parseFloat(document.getElementById('marginLeft').value) || 0,
-      marginRight: parseFloat(document.getElementById('marginRight').value) || 0,
-      gapH: parseFloat(document.getElementById('gapH').value) || 0,
-      gapV: parseFloat(document.getElementById('gapV').value) || 0
-    };
-    for (var i = 0; i < PHOTO_TILING_ORDER.length; i++) {
-      var p = PHOTO_TILING_PRESETS[PHOTO_TILING_ORDER[i]];
-      if (ps === p.paper && S.layout.cols === p.cols && S.layout.rows === p.rows &&
-          vals.marginTop === p.mt && vals.marginBottom === p.mb &&
-          vals.marginLeft === p.ml && vals.marginRight === p.mr &&
-          vals.gapH === p.gapH && vals.gapV === p.gapV) { active = PHOTO_TILING_ORDER[i]; break; }
-    }
-  }
-  if (sel.value !== active) sel.value = active;
+  updatePreview();
 }
 function onFitChange() {
   var isCustom = document.getElementById('fitMode').value === 'custom';
@@ -2905,6 +2832,8 @@ function getSettings() {
   if (ps === 'custom') { var c = getCustomPaperMm(); pw = c.w; ph = c.h; }
   else { var p = PAPER[ps] || PAPER.A4; pw = p.w; ph = p.h; }
   if (document.getElementById('orientation').value === 'landscape') { var tmp = pw; pw = ph; ph = tmp; }
+  var photoMode = !!S.feat.photoMode;
+  var photoSize = getPhotoSizeMm();
   return {
     paperW: pw, paperH: ph, cols: S.layout.cols, rows: S.layout.rows,
     marginTop: parseFloat(document.getElementById('marginTop').value),
@@ -2913,22 +2842,29 @@ function getSettings() {
     marginRight: parseFloat(document.getElementById('marginRight').value),
     gapH: parseFloat(document.getElementById('gapH').value),
     gapV: parseFloat(document.getElementById('gapV').value),
+    // 相纸模式：按证件照实际尺寸整版排列，忽略普通行列 / 边距 / 间距
+    photoMode: photoMode,
+    photoW: photoSize.w, photoH: photoSize.h,
+    photoGap: parseFloat(document.getElementById('photoGap').value) || 0,
+    photoMargin: parseFloat(document.getElementById('photoMargin').value) || 0,
+    photoCols: parseInt(document.getElementById('photoCols').value) || 0,
+    photoRows: parseInt(document.getElementById('photoRows').value) || 0,
     fitMode: document.getElementById('fitMode').value,
     customScale: parseFloat(document.getElementById('customScale').value) / 100,
     colorMode: 'color',
     globalRotation: document.getElementById('globalRotation').value,
-    cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
-    borderWidth: 1, borderColor: '#000000', trimWhite: S.feat.trimWhite,
+    cutline: photoMode ? true : S.feat.cutline, number: S.feat.number, border: S.feat.border,
+    borderWidth: 1, borderColor: '#000000', trimWhite: photoMode ? false : S.feat.trimWhite,
     copyBadge: S.feat.copyBadge,
-    watermark: S.feat.watermark,
+    watermark: photoMode ? false : S.feat.watermark,
     watermarkText: document.getElementById('wmText').value,
     watermarkOpacity: parseFloat(document.getElementById('wmOpacity').value) / 100,
     watermarkColor: document.getElementById('wmColor').value,
     watermarkAngle: parseFloat(document.getElementById('wmAngle').value),
     watermarkSize: parseFloat(document.getElementById('wmSize').value),
-    pageNum: S.feat.pageNum, printDate: S.feat.printDate,
-    footerText: S.feat.footer ? document.getElementById('footerText').value : '',
-    footerMargin: (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
+    pageNum: photoMode ? false : S.feat.pageNum, printDate: photoMode ? false : S.feat.printDate,
+    footerText: !photoMode && S.feat.footer ? document.getElementById('footerText').value : '',
+    footerMargin: !photoMode && (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
     customFM: S.feat.customFM,
     copies: parseInt(document.getElementById('copies').value) || 1
   };
@@ -2973,10 +2909,15 @@ function updatePreview() {
   _saveTimer = setTimeout(saveSettings, 500);
   var files = getActiveFiles();
   document.getElementById('stFiles').textContent = S.files.filter(function(f) { return f.checked; }).length + ' 张';
-  document.getElementById('stLayout').textContent = S.layout.rows + '\u00D7' + S.layout.cols;
+  var stLayoutText = S.layout.rows + '\u00D7' + S.layout.cols;
+  if (S.feat.photoMode) {
+    syncPhotoModeUI();
+    var _pg = getPhotoGrid(getSettings());
+    stLayoutText = '\u76f8\u7eb8 ' + _pg.cols + '\u00D7' + _pg.rows;
+  }
+  document.getElementById('stLayout').textContent = stLayoutText;
   var ps = document.getElementById('paperSize').value;
   document.getElementById('stPaper').textContent = paperDisplayLabel(ps) + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
-  syncPhotoTilingSelect();
 
   if (!files.length) {
     document.getElementById('emptyState').style.display = 'flex';
@@ -3102,8 +3043,16 @@ function saveSettings() {
     copies: document.getElementById('copies').value,
     feat: {}
   };
-  var featKeys = ['cutline','number','border','trimWhite','trimPad','watermark','pageNum','printDate','footer','customFM','slotAdjMemory','copyBadge'];
+  var featKeys = ['cutline','number','border','trimWhite','trimPad','watermark','pageNum','printDate','footer','customFM','slotAdjMemory','copyBadge','photoMode'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
+  // 相纸模式参数（始终保存，模式关闭时保留用户设置）
+  o.photoSize = document.getElementById('photoSize').value;
+  o.photoCustomW = document.getElementById('photoCustomW').value;
+  o.photoCustomH = document.getElementById('photoCustomH').value;
+  o.photoGap = document.getElementById('photoGap').value;
+  o.photoMargin = document.getElementById('photoMargin').value;
+  o.photoCols = document.getElementById('photoCols').value;
+  o.photoRows = document.getElementById('photoRows').value;
   // Save per-file slot adjustments when memory is enabled
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
@@ -3194,7 +3143,8 @@ function loadSettings() {
       pageNum: 'togglePageNum', printDate: 'toggleDate',
       footer: 'toggleFooter', customFM: 'toggleCustomFM',
       slotAdjMemory: 'toggleSlotAdjMemory',
-      copyBadge: 'toggleCopyBadge'
+      copyBadge: 'toggleCopyBadge',
+      photoMode: 'togglePhotoMode'
     };
     Object.keys(featMap).forEach(function(k) {
       if (o.feat[k] != null) {
@@ -3232,6 +3182,11 @@ function loadSettings() {
     document.getElementById('footerMargin').value = o.footerMargin;
     document.getElementById('footerMarginN').value = o.footerMargin;
   }
+  // 相纸模式参数恢复
+  var photoIds = ['photoSize','photoCustomW','photoCustomH','photoGap','photoMargin','photoCols','photoRows'];
+  photoIds.forEach(function(id) {
+    if (o[id] != null) document.getElementById(id).value = o[id];
+  });
   // Restore summary table column selection
   if (o.summaryCols && Array.isArray(o.summaryCols) && o.summaryCols.length > 0) {
     _summaryActiveCols = o.summaryCols;
@@ -3245,6 +3200,7 @@ function loadSettings() {
   // Restore printed state (always, regardless of switch)
   if (o.printedMap) _printedMap = o.printedMap;
   else _printedMap = {};
+  syncPhotoModeUI();
 }
 
 function togglePref(k, btn) {
@@ -3264,7 +3220,7 @@ function applyTheme() {
 }
 
 function exportSettings() {
-  var data = { layout: S.layout, feat: S.feat, paperSize: document.getElementById('paperSize').value, paperUnit: document.getElementById('paperUnit').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value };
+  var data = { layout: S.layout, feat: S.feat, paperSize: document.getElementById('paperSize').value, paperUnit: document.getElementById('paperUnit').value, orientation: document.getElementById('orientation').value, copies: document.getElementById('copies').value, photoSize: document.getElementById('photoSize').value, photoCustomW: document.getElementById('photoCustomW').value, photoCustomH: document.getElementById('photoCustomH').value, photoGap: document.getElementById('photoGap').value, photoMargin: document.getElementById('photoMargin').value, photoCols: document.getElementById('photoCols').value, photoRows: document.getElementById('photoRows').value };
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = '发票酱设置.json'; a.click();
@@ -3275,10 +3231,10 @@ function resetSettings(scope) {
   // scope='layout'：仅恢复「排版」页（纸张/行列/边距/间距/水印等），不动偏好（同步桌面版 #33）
   var layoutOnly = scope === 'layout';
   if (!confirm(layoutOnly ? '仅恢复「排版」页默认设置（纸张/行列/边距/间距/水印等），不影响主题等偏好？' : '确认恢复所有默认设置？')) return;
-  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, trimPad: 3, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false };
+  var featDefaults = { cutline: true, number: false, border: false, trimWhite: false, trimPad: 3, watermark: false, footer: false, customFM: false, pageNum: false, printDate: false, pdfTextEnabled: true, slotAdjMemory: false, copyBadge: false, photoMode: false };
   S.layout = { cols: 1, rows: 1 };
   if (layoutOnly) {
-    ['cutline','number','border','trimWhite','trimPad','watermark','copyBadge'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
+    ['cutline','number','border','trimWhite','trimPad','watermark','copyBadge','photoMode'].forEach(function(k) { S.feat[k] = featDefaults[k]; });
   } else {
     S.feat = featDefaults;
   }
@@ -3318,6 +3274,16 @@ function resetSettings(scope) {
   document.getElementById('toggleTrimWhite').classList.remove('on');
   document.getElementById('trimPad').value = 3;
   document.getElementById('toggleWatermark').classList.remove('on');
+  // 相纸模式恢复默认
+  document.getElementById('togglePhotoMode').classList.remove('on');
+  document.getElementById('photoSize').value = 'photo1';
+  document.getElementById('photoCustomW').value = 25;
+  document.getElementById('photoCustomH').value = 35;
+  document.getElementById('photoGap').value = 3;
+  document.getElementById('photoMargin').value = 3;
+  document.getElementById('photoCols').value = 0;
+  document.getElementById('photoRows').value = 0;
+  syncPhotoModeUI();
   if (layoutOnly) {
     syncLayoutHighlight();
     updatePreview();
@@ -3521,9 +3487,8 @@ document.getElementById('orientation').value = 'landscape';
 
 // Restore all layout & feature settings
 renderPaperOptions();
-renderPhotoTilingOptions();
 loadSettings();
-syncPhotoTilingSelect();
+syncPhotoModeUI();
 applyPerSectionLabelWidth();
 
 // =====================================================

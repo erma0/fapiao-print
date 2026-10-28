@@ -248,6 +248,8 @@ function _settingsKey(s) {
     marginTop: s.marginTop, marginBottom: s.marginBottom, marginLeft: s.marginLeft, marginRight: s.marginRight,
     gapH: s.gapH, gapV: s.gapV, colorMode: s.colorMode, cutline: s.cutline, border: s.border, number: s.number,
     trimWhite: s.trimWhite,
+    photoMode: s.photoMode, photoW: s.photoW, photoH: s.photoH,
+    photoGap: s.photoGap, photoMargin: s.photoMargin, photoCols: s.photoCols, photoRows: s.photoRows,
     watermark: s.watermark, watermarkText: s.watermarkText, watermarkSize: s.watermarkSize, watermarkOpacity: s.watermarkOpacity,
     watermarkColor: s.watermarkColor, watermarkAngle: s.watermarkAngle,
     globalRotation: s.globalRotation, footerText: s.footerText, pageNum: s.pageNum, customFM: s.customFM,
