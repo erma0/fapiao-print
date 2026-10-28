@@ -13,7 +13,19 @@ var _winrtPdfAvailable = true; // Set to false at startup if WinRT PDF component
 // =====================================================
 // Constants
 // =====================================================
-var PAPER = { A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356} };
+// 纸张规格：w/h 为 mm；证件照另带常用像素尺寸（pxW/pxH，证件照按 300DPI，身份证照按 350DPI）
+var PAPER = {
+  A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356},
+  photoSmall1:{w:22,h:32,name:'小一寸',usage:'驾驶证、部分准考证',pxW:260,pxH:378},
+  photo1:{w:25,h:35,name:'一寸',usage:'简历、学籍、体检表、教资',pxW:295,pxH:413},
+  photoBig1:{w:33,h:48,name:'大一寸',usage:'护照、港澳台通行证',pxW:390,pxH:567},
+  photoSmall2:{w:35,h:45,name:'小二寸',usage:'签证、公考、资格审核',pxW:413,pxH:531},
+  photo2:{w:35,h:49,name:'二寸',usage:'毕业证、职称、考试报名',pxW:413,pxH:579},
+  photoId:{w:26,h:32,name:'身份证/社保卡',usage:'白底有回执，350DPI',pxW:358,pxH:441}
+};
+var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
+var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
+var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Print/save DPI — Must match Rust RENDER_DPI
 var PDF_PREVIEW_DPI = 150;  // Preview DPI — faster loading, lower resolution
@@ -4039,7 +4051,93 @@ function switchTab(n, el) {
     refreshPrinters();
   }
 }
-function onPaperChange() { document.getElementById('customPaperRow').style.display = document.getElementById('paperSize').value === 'custom' ? 'flex' : 'none'; updatePreview(); }
+// =====================================================
+// 纸张规格与单位（issue #55）
+// =====================================================
+function getPaperUnit() {
+  var el = document.getElementById('paperUnit');
+  return el && el.value === 'px' ? 'px' : 'mm';
+}
+function paperMmToPx(mm) { return Math.round(mm * PDF_RENDER_DPI / 25.4); }
+function paperPxToMm(px) { return Math.round(px * 25.4 / PDF_RENDER_DPI * 10) / 10; }
+function getPaperPx(p) {
+  if (p.pxW && p.pxH) return { w: p.pxW, h: p.pxH };
+  return { w: paperMmToPx(p.w), h: paperMmToPx(p.h) };
+}
+function getPaperOptionText(id) {
+  var p = PAPER[id];
+  if (!p) return id;
+  var px = getPaperPx(p);
+  var size = getPaperUnit() === 'px' ? (px.w + '×' + px.h + 'px') : (p.w + '×' + p.h + 'mm');
+  if (p.name) return p.name + ' ' + size + '（' + p.usage + '）';
+  return (PAPER_STANDARD_NAMES[id] || id) + ' (' + size + ')';
+}
+function renderPaperOptions() {
+  var sel = document.getElementById('paperSize');
+  if (!sel) return;
+  var cur = sel.value || 'A4';
+  var html = '<optgroup label="常用纸张">';
+  PAPER_STANDARD.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
+  html += '</optgroup><optgroup label="证件照 / 证件">';
+  PAPER_PHOTO.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
+  html += '</optgroup><option value="custom">自定义</option>';
+  sel.innerHTML = html;
+  sel.value = (cur === 'custom' || PAPER[cur]) ? cur : 'A4';
+}
+function paperDisplayLabel(ps) {
+  if (ps === 'custom') {
+    var c = getCustomPaperMm();
+    if (document.getElementById('orientation').value === 'landscape') { var t = c.w; c.w = c.h; c.h = t; }
+    return c.w + '×' + c.h + 'mm';
+  }
+  var p = PAPER[ps];
+  if (!p) return ps;
+  if (p.name) return p.name + ' ' + p.w + '×' + p.h + 'mm';
+  return PAPER_STANDARD_NAMES[ps] || ps;
+}
+function getCustomPaperMm() {
+  var pxMode = getPaperUnit() === 'px';
+  var w = parseFloat(document.getElementById('customW').value);
+  var h = parseFloat(document.getElementById('customH').value);
+  if (!(w > 0)) w = pxMode ? paperMmToPx(210) : 210;
+  if (!(h > 0)) h = pxMode ? paperMmToPx(297) : 297;
+  if (pxMode) return { w: paperPxToMm(w), h: paperPxToMm(h) };
+  return { w: w, h: h };
+}
+function syncPaperUnitUI() {
+  var pxMode = getPaperUnit() === 'px';
+  var lbl = document.getElementById('customPaperUnit');
+  if (lbl) lbl.textContent = pxMode ? 'px' : 'mm';
+  var min = pxMode ? paperMmToPx(10) : 10;
+  ['customW','customH'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.min = min;
+  });
+}
+function onPaperUnitChange() {
+  var toPx = getPaperUnit() === 'px';
+  var wEl = document.getElementById('customW');
+  var hEl = document.getElementById('customH');
+  var w = parseFloat(wEl.value), h = parseFloat(hEl.value);
+  if (w > 0 && h > 0) {
+    wEl.value = toPx ? paperMmToPx(w) : paperPxToMm(w);
+    hEl.value = toPx ? paperMmToPx(h) : paperPxToMm(h);
+  }
+  syncPaperUnitUI();
+  renderPaperOptions();
+  updatePreview();
+}
+function onPaperChange() {
+  var ps = document.getElementById('paperSize').value;
+  var p = PAPER[ps];
+  // 证件照/证件预设一律纵向，避免 25×35mm 被横向摆成 35×25mm
+  if (p && p.name) {
+    var orEl = document.getElementById('orientation');
+    if (orEl.value !== 'portrait') { orEl.value = 'portrait'; syncLayoutHighlight(); }
+  }
+  document.getElementById('customPaperRow').style.display = ps === 'custom' ? 'flex' : 'none';
+  updatePreview();
+}
 function onFitChange() {
   var isCustom = document.getElementById('fitMode').value === 'custom';
   document.getElementById('customScaleRow').style.display = isCustom ? 'flex' : 'none';
@@ -4113,7 +4211,7 @@ function _autoFooterMargin() {
 function getSettings() {
   var ps = document.getElementById('paperSize').value;
   var pw, ph;
-  if (ps === 'custom') { pw = parseFloat(document.getElementById('customW').value) || 210; ph = parseFloat(document.getElementById('customH').value) || 297; }
+  if (ps === 'custom') { var c = getCustomPaperMm(); pw = c.w; ph = c.h; }
   else { var p = PAPER[ps] || PAPER.A4; pw = p.w; ph = p.h; }
   if (document.getElementById('orientation').value === 'landscape') { var tmp = pw; pw = ph; ph = tmp; }
   return {
@@ -4224,7 +4322,7 @@ function updatePreview() {
   document.getElementById('stFiles').textContent = S.files.filter(function(f) { return f.checked; }).length + ' 张';
   document.getElementById('stLayout').textContent = S.feat.reimburse ? '报销单' : (S.layout.rows + '×' + S.layout.cols);
   var ps = document.getElementById('paperSize').value;
-  document.getElementById('stPaper').textContent = ps + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
+  document.getElementById('stPaper').textContent = paperDisplayLabel(ps) + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
   updatePrintBtn();
 
   if (!files.length) {
@@ -4280,7 +4378,7 @@ function getFitZoom() {
   if (!wrap) return 100;
   var ps = document.getElementById('paperSize').value;
   var pw, ph;
-  if (ps === 'custom') { pw = parseFloat(document.getElementById('customW').value) || 210; ph = parseFloat(document.getElementById('customH').value) || 297; }
+  if (ps === 'custom') { var c = getCustomPaperMm(); pw = c.w; ph = c.h; }
   else { var p = PAPER[ps] || PAPER.A4; pw = p.w; ph = p.h; }
   if (document.getElementById('orientation').value === 'landscape') { var tmp = pw; pw = ph; ph = tmp; }
   var fitScale = Math.min((wrap.clientWidth - 40) / (pw * MM2PX), (wrap.clientHeight - 40) / (ph * MM2PX), 1.2);
@@ -4334,6 +4432,7 @@ function collectSettings() {
   var o = {
     layout: { cols: S.layout.cols, rows: S.layout.rows },
     paperSize: document.getElementById('paperSize').value,
+    paperUnit: document.getElementById('paperUnit').value,
     orientation: document.getElementById('orientation').value,
     customW: document.getElementById('customW').value,
     customH: document.getElementById('customH').value,
@@ -4461,6 +4560,9 @@ function loadSettings() {
   updateFilterSummary();
   document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
   renderQuickLayoutBar();
+  if (o.paperUnit) document.getElementById('paperUnit').value = o.paperUnit === 'px' ? 'px' : 'mm';
+  renderPaperOptions();
+  syncPaperUnitUI();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
   if (o.customW) document.getElementById('customW').value = o.customW;
@@ -4827,6 +4929,9 @@ function resetSettings(scope) {
   document.getElementById('quickLayoutMax').value = 0;
   renderQuickLayoutBar();
   renderQuickLayoutList();
+  document.getElementById('paperUnit').value = 'mm';
+  renderPaperOptions();
+  syncPaperUnitUI();
   document.getElementById('paperSize').value = 'A4';
   document.getElementById('orientation').value = 'landscape';
   document.getElementById('customRows').value = 1;
@@ -5231,6 +5336,7 @@ var _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
 var _renameSeparator = '_';
 
 // Restore all layout & feature settings
+renderPaperOptions();
 loadSettings();
 applyPerSectionLabelWidth();
 

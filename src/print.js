@@ -275,7 +275,8 @@ function showPrintConfirm(files, s) {
   var layout = s.reimburseMode ? ('报销单 ' + (s.reimburseHeight || 120) + 'mm 分段') : (S.layout.rows + '\u00D7' + S.layout.cols);
   var ps = document.getElementById('paperSize').value;
   var orient = document.getElementById('orientation').value === 'portrait' ? '纵向' : '横向';
-  var paper = ps === 'custom' ? (s.paperW + '\u00D7' + s.paperH + 'mm') : ps.toUpperCase();
+  var paper = ps === 'custom' ? (s.paperW + '\u00D7' + s.paperH + 'mm')
+    : (PAPER[ps] && PAPER[ps].name ? (PAPER[ps].name + ' ' + PAPER[ps].w + '\u00D7' + PAPER[ps].h + 'mm') : ps.toUpperCase());
   var copies = s.copies || 1;
   var colorMode = document.getElementById('colorMode').value;
   var colorLabel = colorMode === 'color' ? '彩色' : colorMode === 'grayscale' ? '灰度' : '黑白';
