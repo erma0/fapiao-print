@@ -108,7 +108,8 @@
         <div class="sec">
           <div class="sec-title">📄 纸张设置</div>
           <div class="row"><label class="lbl">规格</label><div class="ctrl"><select id="paperSize" onchange="onPaperChange()"><option value="A4">A4 (210×297mm)</option><option value="A5">A5 (148×210mm)</option><option value="B5">B5 (176×250mm)</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">自定义</option></select></div></div>
-          <div id="customPaperRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl"><input type="number" id="customW" value="210" min="50" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="50" style="width:60px" onchange="updatePreview()"></div></div>
+          <div class="row"><label class="lbl">单位</label><div class="ctrl"><select id="paperUnit" onchange="onPaperUnitChange()" title="尺寸显示与自定义输入的单位；像素按 300 DPI 换算（与打印渲染一致）"><option value="mm">毫米 (mm)</option><option value="px">像素 (px / 300DPI)</option></select></div></div>
+          <div id="customPaperRow" class="row" style="display:none"><label class="lbl" id="customPaperUnit">mm</label><div class="ctrl"><input type="number" id="customW" value="210" min="10" step="1" style="width:60px" onchange="updatePreview()"> × <input type="number" id="customH" value="297" min="10" step="1" style="width:60px" onchange="updatePreview()"></div></div>
           <div class="row"><label class="lbl">方向</label><div class="ctrl"><select id="orientation" onchange="updatePreview();syncLayoutHighlight()"><option value="portrait">纵向</option><option value="landscape" selected>横向</option></select></div></div>
         </div>
         <div class="sec">
