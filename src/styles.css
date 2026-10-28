@@ -423,9 +423,6 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   background: var(--surface); color: var(--text-primary); font-size: 12px;
 }
 .ql-x { color: var(--text-muted); font-size: 12px; }
-.ql-group-title { font-size: 11px; color: var(--text-muted); margin: 8px 0 4px; }
-.ql-preset { flex: 1; min-width: 0; font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ql-preset small { color: var(--text-muted); font-size: 10px; margin-left: 4px; }
 .custom-layout-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
 
 .trow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }

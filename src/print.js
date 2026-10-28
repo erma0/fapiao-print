@@ -272,7 +272,15 @@ async function doPrint() {
 
 function showPrintConfirm(files, s) {
   var printerName = s.printerName || '默认打印机';
-  var layout = s.reimburseMode ? ('报销单 ' + (s.reimburseHeight || 120) + 'mm 分段') : (S.layout.rows + '\u00D7' + S.layout.cols);
+  var layout;
+  if (s.photoMode) {
+    var pg = getPhotoGrid(s);
+    layout = '相纸 ' + pg.cols + '\u00D7' + pg.rows + ' \u00B7 单张 ' + s.photoW + '\u00D7' + s.photoH + 'mm';
+  } else if (s.reimburseMode) {
+    layout = '报销单 ' + (s.reimburseHeight || 120) + 'mm 分段';
+  } else {
+    layout = S.layout.rows + '\u00D7' + S.layout.cols;
+  }
   var ps = document.getElementById('paperSize').value;
   var orient = document.getElementById('orientation').value === 'portrait' ? '纵向' : '横向';
   var paper = ps === 'custom' ? (s.paperW + '\u00D7' + s.paperH + 'mm')
@@ -287,6 +295,9 @@ function showPrintConfirm(files, s) {
 
   var fitLabel = s.fitMode === 'contain' ? '适应' : s.fitMode === 'cover' ? '填充' : (Math.round(s.customScale * 100) + '%');
   var rotLabel = s.globalRotation === 'auto' ? '自动' : s.globalRotation + '\u00B0';
+  var marginInfo = s.photoMode
+    ? ('留边 ' + s.photoMargin + 'mm \u00B7 间距 ' + s.photoGap + 'mm')
+    : (s.marginTop + '/' + s.marginBottom + '/' + s.marginLeft + '/' + s.marginRight + 'mm \u00B7 间距 ' + s.gapH + '/' + s.gapV + 'mm');
 
   var row = function(lbl, val, cls) {
     return '<div class="modal-row compact' + (cls ? ' ' + cls : '') + '"><span class="modal-lbl">' + lbl + '</span><span class="modal-val">' + val + '</span></div>';
@@ -301,7 +312,7 @@ function showPrintConfirm(files, s) {
     + row('引擎', engineSelect)
     + row('发票', activeCount + ' 张 \u00D7 ' + copies + ' 份 \u2192 ' + totalPages + ' 页', 'highlight')
     + row('布局', layout + ' \u00B7 ' + paper + orient + ' \u00B7 ' + fitLabel + ' \u00B7 ' + rotLabel)
-    + row('边距', s.marginTop + '/' + s.marginBottom + '/' + s.marginLeft + '/' + s.marginRight + 'mm \u00B7 间距 ' + s.gapH + '/' + s.gapV + 'mm')
+    + row('边距', marginInfo)
     + row('选项', colorLabel + ' \u00B7 ' + (s.duplex ? '双面' : '单面') + ' \u00B7 ' + (s.cutline ? '切割线' : '无切割线'));
 
   document.getElementById('printConfirmBody').innerHTML = html;

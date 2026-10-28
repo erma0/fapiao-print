@@ -3610,6 +3610,25 @@ pub struct RenderSettings {
     /// 签字栏与票据区之间的间距（mm），默认 2
     #[serde(default)]
     pub paste_sig_gap: Option<f32>,
+    /// 相纸模式：按证件照实际尺寸整版排列，忽略普通行列 / 边距 / 间距 / 页脚
+    #[serde(default)]
+    pub photo_mode: bool,
+    /// 证件照宽/高（mm）
+    #[serde(default)]
+    pub photo_w: Option<f32>,
+    #[serde(default)]
+    pub photo_h: Option<f32>,
+    /// 证件照之间的间距（mm）
+    #[serde(default)]
+    pub photo_gap: Option<f32>,
+    /// 相纸四周留边（mm）
+    #[serde(default)]
+    pub photo_margin: Option<f32>,
+    /// 手动列/行（0 或缺省 = 自动铺满）
+    #[serde(default)]
+    pub photo_cols: Option<u32>,
+    #[serde(default)]
+    pub photo_rows: Option<u32>,
     /// 打印时自动增强低清晰度位图源（清晰度优化，issue #39）
     #[serde(default)]
     pub auto_enhance: bool,
@@ -3725,6 +3744,45 @@ struct LayoutSlotMm {
 fn calculate_layout_mm(settings: &RenderSettings) -> (Vec<LayoutSlotMm>, f32, f32) {
     let pw = settings.paper_w;
     let ph = settings.paper_h;
+
+    // 相纸模式：槽位严格等于证件照实际尺寸，整版居中；忽略普通行列/边距/间距/页脚。
+    // 与 JS calculateLayout 的 photo 分支逐字对应。
+    if settings.photo_mode {
+        let w = settings.photo_w.unwrap_or(25.0).max(1.0);
+        let h = settings.photo_h.unwrap_or(35.0).max(1.0);
+        let gap = settings.photo_gap.unwrap_or(0.0).max(0.0);
+        let margin = settings.photo_margin.unwrap_or(0.0).max(0.0);
+        let mx = margin.min(((pw - w) / 2.0).max(0.0));
+        let my = margin.min(((ph - h) / 2.0).max(0.0));
+        let avail_w = (pw - 2.0 * mx).max(1.0);
+        let avail_h = (ph - 2.0 * my).max(1.0);
+        let max_cols = (((avail_w + gap) / (w + gap)).floor() as u32).max(1);
+        let max_rows = (((avail_h + gap) / (h + gap)).floor() as u32).max(1);
+        let fit_cols = (((pw + gap) / (w + gap)).floor() as u32).max(1);
+        let fit_rows = (((ph + gap) / (h + gap)).floor() as u32).max(1);
+        let cols = settings.photo_cols.filter(|v| *v > 0).unwrap_or(max_cols).min(fit_cols);
+        let rows = settings.photo_rows.filter(|v| *v > 0).unwrap_or(max_rows).min(fit_rows);
+        let grid_w = cols as f32 * w + cols.saturating_sub(1) as f32 * gap;
+        let grid_h = rows as f32 * h + rows.saturating_sub(1) as f32 * gap;
+        let start_x = (pw - grid_w) / 2.0;
+        let start_y_top = (ph - grid_h) / 2.0;
+        let mut slots = Vec::new();
+        for r in 0..rows {
+            let top_down_y = start_y_top + r as f32 * (h + gap);
+            let y_mm = ph - top_down_y - h;
+            for c in 0..cols {
+                slots.push(LayoutSlotMm {
+                    x_mm: start_x + c as f32 * (w + gap),
+                    y_mm,
+                    w_mm: w,
+                    h_mm: h,
+                });
+            }
+        }
+        log::info!("calculate_layout_mm [photo]: pw={pw} ph={ph} photo={w}x{h} gap={gap} cols={cols} rows={rows} grid={grid_w}x{grid_h}");
+        return (slots, pw, ph);
+    }
+
     // 粘贴单模式：改用独立边距（上边距 = 装订区高度），与 JS getSettings() 口径一致
     let mt = if settings.paste_mode { settings.paste_top.unwrap_or(20.8) } else { settings.margin_top };
     let mb = if settings.paste_mode { settings.paste_bottom.unwrap_or(4.1) } else { settings.margin_bottom };
@@ -3836,6 +3894,13 @@ pub(crate) fn effective_dpi_px(src_w: u32, src_h: u32, slot_mm: (f32, f32)) -> f
 /// 槽位物理尺寸（mm）。与 JS calculateLayout / Rust calculate_layout_mm 的
 /// 几何公式保持一致，保证审计口径 = 发票实际放进去的槽。
 pub(crate) fn slot_size_mm(settings: &RenderSettings) -> (f32, f32) {
+    // 相纸模式：槽位即证件照实际尺寸
+    if settings.photo_mode {
+        return (
+            settings.photo_w.unwrap_or(25.0).max(1.0),
+            settings.photo_h.unwrap_or(35.0).max(1.0),
+        );
+    }
     // 报销单分段：单列、段高固定，mt/mb 为段内安全边距
     if settings.reimburse_mode {
         let seg = settings.reimburse_height.unwrap_or(120.0).max(10.0);

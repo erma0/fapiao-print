@@ -4,13 +4,44 @@
 // Dependencies (global): S, MM2PX, PDF_RENDER_DPI, MIN_RENDER_PX
 
 /**
- * Slots per page — reimburse mode: fixed-height segments, otherwise cols*rows.
+ * Slots per page — photo mode: photo grid capacity; reimburse: fixed-height segments; otherwise cols*rows.
  */
 function getPerPage(s) {
+  if (s.photoMode) {
+    var pg = getPhotoGrid(s);
+    return Math.max(1, pg.cols * pg.rows);
+  }
   if (s.reimburseMode) {
     return Math.max(1, Math.floor(s.paperH / (s.reimburseHeight || 120)));
   }
   return s.cols * s.rows;
+}
+
+/**
+ * 相纸模式网格（mm）：按证件照实际尺寸推算每页列/行、间距、留边与居中栅格。
+ * 手动列/行（>0）超出可容纳数量时收敛到上限，防止栅格溢出纸张。
+ */
+function getPhotoGrid(s) {
+  var w = Math.max(1, parseFloat(s.photoW) || 25);
+  var h = Math.max(1, parseFloat(s.photoH) || 35);
+  var gap = Math.max(0, parseFloat(s.photoGap) || 0);
+  var margin = Math.max(0, parseFloat(s.photoMargin) || 0);
+  var pw = s.paperW, ph = s.paperH;
+  // 留边不能把照片挤出纸张；纸张本身小于照片时留边归零（UI 另行提示可能被裁切）
+  var mx = Math.min(margin, Math.max(0, (pw - w) / 2));
+  var my = Math.min(margin, Math.max(0, (ph - h) / 2));
+  var availW = Math.max(1, pw - 2 * mx);
+  var availH = Math.max(1, ph - 2 * my);
+  // 自动铺满：按留边计算；手动列/行：只受纸张物理尺寸约束（留边可被压缩，栅格仍居中）
+  var maxCols = Math.max(1, Math.floor((availW + gap) / (w + gap)));
+  var maxRows = Math.max(1, Math.floor((availH + gap) / (h + gap)));
+  var fitCols = Math.max(1, Math.floor((pw + gap) / (w + gap)));
+  var fitRows = Math.max(1, Math.floor((ph + gap) / (h + gap)));
+  var cols = s.photoCols > 0 ? Math.min(s.photoCols, fitCols) : maxCols;
+  var rows = s.photoRows > 0 ? Math.min(s.photoRows, fitRows) : maxRows;
+  var gridW = cols * w + (cols - 1) * gap;
+  var gridH = rows * h + (rows - 1) * gap;
+  return { w: w, h: h, gap: gap, cols: cols, rows: rows, maxCols: maxCols, maxRows: maxRows, gridW: gridW, gridH: gridH };
 }
 
 /**
@@ -25,6 +56,42 @@ function calculateLayout(settings, pxPerMm) {
 
   var pw = settings.paperW * pxPerMm;
   var ph = settings.paperH * pxPerMm;
+
+  // 相纸模式：槽位严格等于证件照实际尺寸，整版居中；普通行列/边距/间距/页脚全部忽略。
+  // 与 Rust calculate_layout_mm 的 photo 分支逐字对应。
+  if (settings.photoMode) {
+    var pg = getPhotoGrid(settings);
+    var startX = (settings.paperW - pg.gridW) / 2;
+    var startY = (settings.paperH - pg.gridH) / 2;
+    var pSlots = [];
+    for (var pr = 0; pr < pg.rows; pr++) {
+      for (var pc = 0; pc < pg.cols; pc++) {
+        pSlots.push({
+          row: pr, col: pc,
+          x: (startX + pc * (pg.w + pg.gap)) * pxPerMm,
+          y: (startY + pr * (pg.h + pg.gap)) * pxPerMm,
+          w: pg.w * pxPerMm,
+          h: pg.h * pxPerMm
+        });
+      }
+    }
+    var pCuts = [];
+    for (var pcx = 1; pcx < pg.cols; pcx++) {
+      pCuts.push({ type: 'vertical', pos: (startX + pcx * (pg.w + pg.gap) - pg.gap / 2) * pxPerMm, endY: ph });
+    }
+    for (var pry = 1; pry < pg.rows; pry++) {
+      pCuts.push({ type: 'horizontal', pos: (startY + pry * (pg.h + pg.gap) - pg.gap / 2) * pxPerMm });
+    }
+    return {
+      pw: pw, ph: ph,
+      mt: startY * pxPerMm, mb: (settings.paperH - startY - pg.gridH) * pxPerMm, fm: 0,
+      ml: startX * pxPerMm, mr: (settings.paperW - startX - pg.gridW) * pxPerMm,
+      gh: pg.gap * pxPerMm, gv: pg.gap * pxPerMm,
+      sw: pg.w * pxPerMm, sh: pg.h * pxPerMm,
+      slots: pSlots, cutLines: pCuts, photo: true
+    };
+  }
+
   var mt = settings.marginTop * pxPerMm;
   var mb = settings.marginBottom * pxPerMm;
   var fm = (settings.footerMargin || 0) * pxPerMm; // 页脚边距（独立于发票边距）
