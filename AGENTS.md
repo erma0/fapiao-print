@@ -214,7 +214,9 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **设置持久化**：`saveSettings()`/`loadSettings()` — `ticketchan-settings` JSON，覆盖排版/纸张/边距/缩放/旋转/水印/页脚/筛选/视图等；`updatePreview()` 500ms 防抖自动保存；恢复默认清空全部。⚠️ **var 提升坑**：被 `loadSettings()` 恢复的 JS 变量的 `var x = 默认值` 声明必须在调用点之前（声明提升、赋值不提升，曾致 issue #7）。
 
-**纸张规格与单位**（v2.6.16，issue #55）：`PAPER` 在标准纸张外新增证件照预设（`name`/`usage`/`pxW`/`pxH`），下拉选项由 `renderPaperOptions()` 按 `paperUnit`（mm/px）动态生成，`paperSize` 的 value 保持稳定（A4 / photo1 / custom …）；自定义尺寸一律经 `getCustomPaperMm()` 换算成 mm 再进 `getSettings()`（px 按 300DPI，与 PDF 渲染一致），禁止各处自行解析 `customW/customH`。调用顺序：`renderPaperOptions()` 必须先于 `loadSettings()` 里恢复 `paperSize`（否则 restore 到不存在的 option 会静默回落 A4）。证件照预设选中时 `onPaperChange()` 自动切纵向。改动需同步 web 分支同套实现。
+**纸张规格与单位**（v2.6.16，issue #55）：`PAPER` 在标准纸张外新增证件照与 5寸/6寸相纸预设（`name`/`usage`/`pxW`/`pxH`），下拉选项由 `renderPaperOptions()` 按 `paperUnit`（mm/px）动态生成，`paperSize` 的 value 保持稳定（A4 / photo1 / photoPaper6 / custom …）；自定义尺寸一律经 `getCustomPaperMm()` 换算成 mm 再进 `getSettings()`（px 按 300DPI，与 PDF 渲染一致），禁止各处自行解析 `customW/customH`。调用顺序：`renderPaperOptions()` 必须先于 `loadSettings()` 里恢复 `paperSize`（否则 restore 到不存在的 option 会静默回落 A4）。证件照预设选中时 `onPaperChange()` 自动切纵向。改动需同步 web 分支同套实现。
+
+**证件照拼版预置**（v2.6.16）：`PHOTO_TILING_PRESETS` 在启动 IIFE 中用 `solveAxis()` 按「每格独立边距」公式（槽位＝(纸宽−列数×2m−(列数−1)×g)/列数）求整数边距/间距，使槽位尽量贴合证件照标称尺寸；个别组合高度误差 ≤0.5mm，宽度均精确。`applyPhotoTilingPreset()` 一次设好相纸/纵向/行列/边距/间距/切割线，并关闭页脚/页码/日期/水印/白边裁剪、退出报销单/粘贴单模式（这些都会挤占版心或污染照片）。预置条目带 `preset` 字段，顶栏用短名、管理器显示完整名且不可编辑行列；`cloneQuickLayouts()` 必须保留 `preset`。**默认不占顶部**靠 `seedPhotoTilingPresets()` 实现：首次运行/升级追加 8 个预置到列表末尾，并把 `quickLayoutMax` 固定为原有可见条数（0=全部时取原列表长度），顶部外观不变；`quickPresetsSeeded` 持久化，保证用户删除后不被自动加回，缺失项通过「拼版预置」区手动加回。⚠️ 不要改用「迁移默认列表」方式注入——本机制只追加预置并保持顶部可见集合不变。
 
 **导出 / 导入配置**（`exportSettings()`/`importSettings()`，issue #50）：数据同源——`collectSettings()`（saveSettings 的收集逻辑抽出共用）+ 独立存储的偏好键（theme/amtMode/ocrEnabled/pdfTextEnabled/ocrPrecision/saveDir）；导出经原生「另存为」写 JSON（含 `_meta` 头）；导入校验 `_meta.app`（或 layout+feat）→ 写回同名 localStorage 键 → **`location.reload()` 重载生效**（不重载会被下次自动保存覆盖回去），Rust 侧 `read_text_file` 与之配套。
 

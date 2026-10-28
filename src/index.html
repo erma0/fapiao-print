@@ -164,9 +164,11 @@
               <span style="color:var(--text-muted);font-size:11px">0=全部</span>
             </div>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin:2px 0 6px 70px">顶部工具栏快捷排版按钮，可增删改、排序、限制显示数量</div>
+          <div style="font-size:11px;color:var(--text-muted);margin:2px 0 6px 70px">顶部工具栏快捷排版按钮，可增删改、排序、限制显示数量；证件照拼版预置在列表底部，默认不占顶部位置</div>
           <div id="quickLayoutList"></div>
           <button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="addQuickLayout()">＋ 添加布局</button>
+          <div id="photoTilingHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:10px">证件照拼版（可重新加入已删除的预置）</div>
+          <div id="photoTilingChips" style="display:none;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
         </div>
         <div class="sec">
           <div class="sec-title">📐 边距 (mm)</div>

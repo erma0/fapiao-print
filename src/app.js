@@ -16,6 +16,8 @@ var _winrtPdfAvailable = true; // Set to false at startup if WinRT PDF component
 // 纸张规格：w/h 为 mm；证件照另带常用像素尺寸（pxW/pxH，证件照按 300DPI，身份证照按 350DPI）
 var PAPER = {
   A4:{w:210,h:297}, A5:{w:148,h:210}, B5:{w:176,h:250}, letter:{w:216,h:279}, legal:{w:216,h:356},
+  photoPaper5:{w:89,h:127,name:'5寸相纸',usage:'3R，证件照拼版常用'},
+  photoPaper6:{w:102,h:152,name:'6寸相纸',usage:'4R，证件照拼版常用'},
   photoSmall1:{w:22,h:32,name:'小一寸',usage:'驾驶证、部分准考证',pxW:260,pxH:378},
   photo1:{w:25,h:35,name:'一寸',usage:'简历、学籍、体检表、教资',pxW:295,pxH:413},
   photoBig1:{w:33,h:48,name:'大一寸',usage:'护照、港澳台通行证',pxW:390,pxH:567},
@@ -25,12 +27,66 @@ var PAPER = {
 };
 var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
 var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
+var PAPER_PHOTO_PAPER = ['photoPaper5','photoPaper6'];
 var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Print/save DPI — Must match Rust RENDER_DPI
 var PDF_PREVIEW_DPI = 150;  // Preview DPI — faster loading, lower resolution
 var MIN_RENDER_PX = 3508;  // A4 long side at 300 DPI — minimum rendered pixels
 var WHITE_THRESHOLD = 245; // Pixel value threshold for white-edge trimming
+
+// =====================================================
+// 证件照拼版预置（issue #55 延伸）
+// 一键设好相纸、行列、边距、间距与切割线。边距/间距用整数求解，
+// 使槽位宽高尽量贴合证件照标称尺寸（受「每格独立边距」模型限制，个别组合误差 ≤0.5mm）。
+// =====================================================
+var PHOTO_TILING_PRESETS = {};
+var PHOTO_TILING_ORDER = [];
+(function() {
+  // [id, 列表名, 顶栏短名, 相纸, 证件照, 列, 行]
+  var defs = [
+    ['p6_1in8',       '6寸·一寸×8',    '一寸×8',    'photoPaper6', 'photo1',      2, 4],
+    ['p6_2in6',       '6寸·二寸×6',    '二寸×6',    'photoPaper6', 'photo2',      2, 3],
+    ['p6_big1in6',    '6寸·大一寸×6',  '大一寸×6',  'photoPaper6', 'photoBig1',   2, 3],
+    ['p6_small2in6',  '6寸·小二寸×6',  '小二寸×6',  'photoPaper6', 'photoSmall2', 2, 3],
+    ['p6_small1in12', '6寸·小一寸×12', '小一寸×12', 'photoPaper6', 'photoSmall1', 3, 4],
+    ['p6_id12',       '6寸·身份证×12', '身份证×12', 'photoPaper6', 'photoId',     3, 4],
+    ['p5_1in6',       '5寸·一寸×6',    '5寸一寸×6', 'photoPaper5', 'photo1',      2, 3],
+    ['p5_2in4',       '5寸·二寸×4',    '5寸二寸×4', 'photoPaper5', 'photo2',      2, 2]
+  ];
+  // 求整数边距 m（每格四周各 m）与间距 g：槽位 = (纸宽 - 列数×2m - (列数-1)×g) / 列数。
+  // 优先「槽位 ≥ 目标且误差最小」（照片按宽度/高度贴合时，多出的部分只是留白），无解再取最接近的偏小值。
+  function solveAxis(avail, count, target) {
+    var bestOver = null, bestUnder = null;
+    for (var m = 1; m <= 20; m++) {
+      for (var g = 0; g <= 20; g++) {
+        var slot = (avail - count * 2 * m - (count - 1) * g) / count;
+        if (slot <= 0) continue;
+        var diff = slot - target;
+        var cand = { m: m, g: g, diff: diff };
+        if (diff >= -1e-9) {
+          if (!bestOver || diff < bestOver.diff - 1e-9 ||
+              (Math.abs(diff - bestOver.diff) <= 1e-9 && (m > bestOver.m || (m === bestOver.m && g < bestOver.g)))) bestOver = cand;
+        } else if (!bestUnder || diff > bestUnder.diff + 1e-9 ||
+              (Math.abs(diff - bestUnder.diff) <= 1e-9 && (m > bestUnder.m || (m === bestUnder.m && g < bestUnder.g)))) {
+          bestUnder = cand;
+        }
+      }
+    }
+    return bestOver || bestUnder || { m: 1, g: 0, diff: 0 };
+  }
+  defs.forEach(function(d) {
+    var paper = PAPER[d[3]], photo = PAPER[d[4]];
+    var cols = d[5], rows = d[6];
+    var hx = solveAxis(paper.w, cols, photo.w);
+    var vy = solveAxis(paper.h, rows, photo.h);
+    PHOTO_TILING_PRESETS[d[0]] = {
+      label: d[1], btn: d[2], paper: d[3], photo: d[4], cols: cols, rows: rows,
+      ml: hx.m, mr: hx.m, mt: vy.m, mb: vy.m, gapH: hx.g, gapV: vy.g
+    };
+    PHOTO_TILING_ORDER.push(d[0]);
+  });
+})();
 
 // =====================================================
 // State
@@ -54,10 +110,12 @@ function normalizeQuickLayoutMax(value) {
 function cloneQuickLayouts(items) {
   if (!Array.isArray(items)) return [];
   return items.map(function(q) {
-    return {
+    var item = {
       cols: normalizeQuickLayoutValue(q && q.cols),
       rows: normalizeQuickLayoutValue(q && q.rows)
     };
+    if (q && q.preset && PHOTO_TILING_PRESETS[q.preset]) item.preset = q.preset;
+    return item;
   });
 }
 function defaultQuickLayouts() {
@@ -72,6 +130,7 @@ var S = {
   // 顶部工具栏快捷排版按钮（可插拔）：内置 7 个，可增删改、排序
   quickLayouts: defaultQuickLayouts(),
   quickLayoutMax: 0,  // 顶部显示数量，0=全部
+  quickPresetsSeeded: false,  // 证件照拼版预置是否已注入（只注入一次，尊重用户删除）
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
   amtMode: 'tax',
@@ -3923,6 +3982,9 @@ function applyCustomLayout() {
   saveSettings();
   updatePreview();
 }
+// 当前版面命中的拼版预置 id（同步顶栏高亮；预置按钮不在可见数量内也能抑制普通按钮误高亮）
+var _activePhotoTilingPresetId = null;
+
 // 渲染顶部工具栏快捷排版按钮（可插拔，数量受 quickLayoutMax 限制）
 function renderQuickLayoutBar() {
   var bar = document.getElementById('quickLayoutBar');
@@ -3933,10 +3995,16 @@ function renderQuickLayoutBar() {
   items.forEach(function(q, i) {
     if (max > 0 && i >= max) return;
     var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
-    html += '<button class="btn btn-sm ql-btn" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
+    if (q.preset && PHOTO_TILING_PRESETS[q.preset]) {
+      var pp = PHOTO_TILING_PRESETS[q.preset];
+      html += '<button class="btn btn-sm ql-btn" data-preset="' + q.preset + '" onclick="applyPhotoTilingPreset(\'' + q.preset + '\')" title="' + pp.label + ' · ' + paperDisplayLabel(pp.paper) + ' · ' + pp.cols + '列×' + pp.rows + '行（一键设好边距与切割线）">' + pp.btn + '</button>';
+    } else {
+      html += '<button class="btn btn-sm ql-btn" data-cols="' + c + '" data-rows="' + r + '" onclick="quickLayout(' + c + ',' + r + ')" title="' + r + '行' + c + '列">' + r + '×' + c + '</button>';
+    }
   });
   html += '<button class="btn btn-sm ql-btn ql-custom" onclick="openQuickLayoutManager()" title="管理快捷布局" style="font-size:12px">⚙</button>';
   bar.innerHTML = html;
+  syncPhotoTilingHighlight();
   syncToolbarHighlight(S.layout.cols, S.layout.rows);
 }
 
@@ -3954,8 +4022,24 @@ function renderQuickLayoutList() {
   if (!list) return;
   var items = S.quickLayouts || [];
   var html = '';
+  var presetHeader = false;
   items.forEach(function(q, i) {
     var c = parseInt(q.cols) || 1, r = parseInt(q.rows) || 1;
+    var isPreset = q.preset && PHOTO_TILING_PRESETS[q.preset];
+    if (isPreset && !presetHeader) {
+      html += '<div class="ql-group-title">证件照拼版（预置）</div>';
+      presetHeader = true;
+    }
+    if (isPreset) {
+      var pp = PHOTO_TILING_PRESETS[q.preset];
+      html += '<div class="ql-item">' +
+        '<span class="ql-preset" title="' + pp.label + ' · ' + paperDisplayLabel(pp.paper) + ' · ' + pp.cols + '列×' + pp.rows + '行">' + pp.label + '<small>' + pp.cols + '列×' + pp.rows + '行</small></span>' +
+        '<button class="ib" onclick="moveQuickLayout(' + i + ',-1)" title="上移"' + (i === 0 ? ' disabled' : '') + '>⬆</button>' +
+        '<button class="ib" onclick="moveQuickLayout(' + i + ',1)" title="下移"' + (i === items.length - 1 ? ' disabled' : '') + '>⬇</button>' +
+        '<button class="ib danger" onclick="removeQuickLayout(' + i + ')" title="删除">✕</button>' +
+        '</div>';
+      return;
+    }
     html += '<div class="ql-item">' +
       '<input type="number" min="1" max="10" value="' + r + '" class="ql-in" onchange="updateQuickLayout(' + i + ',\'rows\',this.value)" title="行数">' +
       '<span class="ql-x">×</span>' +
@@ -3967,6 +4051,7 @@ function renderQuickLayoutList() {
   });
   if (!html) html = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">暂无快捷布局，点击下方添加</div>';
   list.innerHTML = html;
+  renderPhotoTilingChips();
 }
 
 function addQuickLayout() {
@@ -3977,9 +4062,159 @@ function addQuickLayout() {
   saveSettings();
 }
 
+// 证件照拼版：加入快捷布局（追加到末尾，顶部是否出现由显示数量/顺序决定）
+function addPhotoTilingPreset(id) {
+  var p = PHOTO_TILING_PRESETS[id];
+  if (!p) return;
+  if (!S.quickLayouts) S.quickLayouts = [];
+  if (S.quickLayouts.some(function(q) { return q.preset === id; })) { toast('该拼版已在快捷布局中'); return; }
+  S.quickLayouts.push({ cols: p.cols, rows: p.rows, preset: id });
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  var visible = S.quickLayoutMax === 0 || (S.quickLayouts.length - 1) < S.quickLayoutMax;
+  toast(visible ? '已加入快捷布局' : '已加入快捷布局，可在列表中上移显示到顶部');
+  saveSettings();
+}
+
+// 渲染缺失的拼版预置（正常已预置，只有删除后才会出现，供重新加入）
+function renderPhotoTilingChips() {
+  var box = document.getElementById('photoTilingChips');
+  var hint = document.getElementById('photoTilingHint');
+  if (!box) return;
+  var used = {};
+  (S.quickLayouts || []).forEach(function(q) { if (q.preset) used[q.preset] = true; });
+  var missing = PHOTO_TILING_ORDER.filter(function(id) { return !used[id]; });
+  if (!missing.length) {
+    box.innerHTML = '';
+    box.style.display = 'none';
+    if (hint) hint.style.display = 'none';
+    return;
+  }
+  box.style.display = 'flex';
+  if (hint) hint.style.display = 'block';
+  box.innerHTML = missing.map(function(id) {
+    var p = PHOTO_TILING_PRESETS[id];
+    return '<button class="btn btn-sm" onclick="addPhotoTilingPreset(\'' + id + '\')" title="' + p.label + ' · ' + paperDisplayLabel(p.paper) + ' · ' + p.cols + '列×' + p.rows + '行">＋ ' + p.label + '</button>';
+  }).join('');
+}
+
+// 首次升级注入拼版预置：追加到快捷布局末尾，并把「显示数量」固定为原有可见条数，
+// 保证顶部工具栏外观不变；用户上移或提高显示数量后拼版才会出现。
+function seedPhotoTilingPresets() {
+  if (S.quickPresetsSeeded) return;
+  S.quickPresetsSeeded = true;
+  if (!S.quickLayouts) S.quickLayouts = [];
+  var plainCount = 0, existing = {};
+  S.quickLayouts.forEach(function(q) { if (q.preset) existing[q.preset] = true; else plainCount++; });
+  if (plainCount > 0) {
+    var oldLen = S.quickLayouts.length;
+    var prevVisible = S.quickLayoutMax === 0 ? oldLen : Math.min(S.quickLayoutMax, oldLen);
+    var added = 0;
+    PHOTO_TILING_ORDER.forEach(function(id) {
+      if (!existing[id]) {
+        var p = PHOTO_TILING_PRESETS[id];
+        S.quickLayouts.push({ cols: p.cols, rows: p.rows, preset: id });
+        added++;
+      }
+    });
+    if (added > 0 && prevVisible > 0) {
+      S.quickLayoutMax = Math.min(20, prevVisible);
+      document.getElementById('quickLayoutMax').value = S.quickLayoutMax;
+    }
+  }
+  renderQuickLayoutList();
+  renderQuickLayoutBar();
+  renderPhotoTilingChips();
+  saveSettings();
+}
+
+// 应用拼版预置：相纸/纵向/行列/整数边距/间距/切割线一次到位；
+// 同时关闭会挤占版心或污染照片的页脚、页码、日期、水印、白边裁剪，并退出报销单/粘贴单模式。
+function applyPhotoTilingPreset(id) {
+  var p = PHOTO_TILING_PRESETS[id];
+  if (!p) return;
+  renderPaperOptions();
+  var psEl = document.getElementById('paperSize');
+  if (psEl) psEl.value = p.paper;
+  document.getElementById('orientation').value = 'portrait';
+  [['marginTop', p.mt], ['marginBottom', p.mb], ['marginLeft', p.ml], ['marginRight', p.mr], ['gapH', p.gapH], ['gapV', p.gapV]].forEach(function(pair) {
+    var r = document.getElementById(pair[0]), n = document.getElementById(pair[0] + 'N');
+    if (r) r.value = pair[1];
+    if (n) n.value = pair[1];
+  });
+  S.layout = { cols: p.cols, rows: p.rows };
+  document.getElementById('customRows').value = p.rows;
+  document.getElementById('customCols').value = p.cols;
+  if (!S.feat.cutline) {
+    S.feat.cutline = true;
+    var cutBtn = document.getElementById('toggleCutline');
+    if (cutBtn) cutBtn.classList.add('on');
+  }
+  var offFeat = { pageNum: 'togglePageNum', printDate: 'toggleDate', footer: 'toggleFooter', watermark: 'toggleWatermark', trimWhite: 'toggleTrimWhite' };
+  Object.keys(offFeat).forEach(function(k) {
+    if (S.feat[k]) {
+      S.feat[k] = false;
+      var b = document.getElementById(offFeat[k]);
+      if (b) b.classList.remove('on');
+    }
+  });
+  document.getElementById('footerOpts').style.display = 'none';
+  document.getElementById('customFMRow').style.display = 'none';
+  document.getElementById('footerMarginRow').style.display = 'none';
+  document.getElementById('wmOpts').style.display = 'none';
+  document.getElementById('trimPadOpts').style.display = 'none';
+  if (S.feat.reimburse) {
+    S.feat.reimburse = false;
+    document.getElementById('toggleReimburse').classList.remove('on');
+    syncReimburseUI();
+  }
+  if (S.feat.pasteMode) {
+    S.feat.pasteMode = false;
+    document.getElementById('togglePasteMode').classList.remove('on');
+    document.getElementById('pasteOpts').style.display = 'none';
+  }
+  document.getElementById('fitMode').value = 'fit';
+  document.getElementById('customScaleRow').style.display = 'none';
+  document.getElementById('customScaleHint').style.display = 'none';
+  document.getElementById('globalRotation').value = '0';
+  onPaperChange();
+  syncLayoutHighlight();
+  saveSettings();
+  toast('已应用 ' + p.label);
+}
+
+// 当前版面精确匹配某个拼版预置时高亮顶栏按钮
+function syncPhotoTilingHighlight() {
+  var ps = document.getElementById('paperSize').value;
+  var orient = document.getElementById('orientation').value;
+  var active = null;
+  if (orient === 'portrait') {
+    var vals = {
+      marginTop: parseFloat(document.getElementById('marginTop').value) || 0,
+      marginBottom: parseFloat(document.getElementById('marginBottom').value) || 0,
+      marginLeft: parseFloat(document.getElementById('marginLeft').value) || 0,
+      marginRight: parseFloat(document.getElementById('marginRight').value) || 0,
+      gapH: parseFloat(document.getElementById('gapH').value) || 0,
+      gapV: parseFloat(document.getElementById('gapV').value) || 0
+    };
+    for (var i = 0; i < PHOTO_TILING_ORDER.length; i++) {
+      var p = PHOTO_TILING_PRESETS[PHOTO_TILING_ORDER[i]];
+      if (ps === p.paper && S.layout.cols === p.cols && S.layout.rows === p.rows &&
+          vals.marginTop === p.mt && vals.marginBottom === p.mb &&
+          vals.marginLeft === p.ml && vals.marginRight === p.mr &&
+          vals.gapH === p.gapH && vals.gapV === p.gapV) { active = PHOTO_TILING_ORDER[i]; break; }
+    }
+  }
+  document.querySelectorAll('.ql-btn[data-preset]').forEach(function(e) {
+    e.classList.toggle('active', e.dataset.preset === active);
+  });
+  _activePhotoTilingPresetId = active;
+}
+
 function updateQuickLayout(i, field, val) {
   if (!S.quickLayouts || !S.quickLayouts[i]) return;
   var q = S.quickLayouts[i];
+  if (q.preset) return; // 拼版预置参数由预置定义，不允许改行列
   var oldC = parseInt(q.cols) || 1, oldR = parseInt(q.rows) || 1;
   var v = normalizeQuickLayoutValue(val);
   q[field] = v;
@@ -4021,8 +4256,11 @@ function setQuickLayoutMax(v) {
   saveSettings();
 }
 function syncToolbarHighlight(c, r) {
+  var presetActive = !!_activePhotoTilingPresetId;
   document.querySelectorAll('.ql-btn').forEach(function(e) {
+    if (e.dataset.preset) return; // 拼版预置由 syncPhotoTilingHighlight 维护
     e.classList.remove('active');
+    if (presetActive) return; // 拼版预置激活时不再高亮同行列的普通按钮
     if (!e.classList.contains('ql-custom') && parseInt(e.dataset.cols) === c && parseInt(e.dataset.rows) === r) {
       e.classList.add('active');
     }
@@ -4080,6 +4318,8 @@ function renderPaperOptions() {
   PAPER_STANDARD.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
   html += '</optgroup><optgroup label="证件照 / 证件">';
   PAPER_PHOTO.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
+  html += '</optgroup><optgroup label="相纸">';
+  PAPER_PHOTO_PAPER.forEach(function(id) { html += '<option value="' + id + '">' + getPaperOptionText(id) + '</option>'; });
   html += '</optgroup><option value="custom">自定义</option>';
   sel.innerHTML = html;
   sel.value = (cur === 'custom' || PAPER[cur]) ? cur : 'A4';
@@ -4324,6 +4564,8 @@ function updatePreview() {
   var ps = document.getElementById('paperSize').value;
   document.getElementById('stPaper').textContent = paperDisplayLabel(ps) + ' ' + (document.getElementById('orientation').value === 'portrait' ? '纵' : '横');
   updatePrintBtn();
+  syncPhotoTilingHighlight();
+  syncToolbarHighlight(S.layout.cols, S.layout.rows);
 
   if (!files.length) {
     document.getElementById('emptyState').style.display = 'flex';
@@ -4457,6 +4699,7 @@ function collectSettings() {
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
   o.trimPad = getTrimPad();
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
+  o.quickPresetsSeeded = !!S.quickPresetsSeeded;
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
   o.filterCollapsed = S.filterCollapsed;
@@ -4552,6 +4795,7 @@ function loadSettings() {
   // Older configs have no reliable marker distinguishing the old defaults
   // from a user-customized three-item list, so do not overwrite them.
   if (Array.isArray(o.quickLayouts)) S.quickLayouts = cloneQuickLayouts(o.quickLayouts);
+  if (o.quickPresetsSeeded) S.quickPresetsSeeded = true;
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   if (o.fileView === 'grid') S.fileView = 'grid';
   if (o.filterCollapsed === false) S.filterCollapsed = false;
@@ -4926,9 +5170,11 @@ function resetSettings(scope) {
   S.viewZoom = 0;
   S.quickLayouts = defaultQuickLayouts();
   S.quickLayoutMax = 0;
+  S.quickPresetsSeeded = false;
   document.getElementById('quickLayoutMax').value = 0;
   renderQuickLayoutBar();
   renderQuickLayoutList();
+  seedPhotoTilingPresets();
   document.getElementById('paperUnit').value = 'mm';
   renderPaperOptions();
   syncPaperUnitUI();
@@ -5341,8 +5587,10 @@ loadSettings();
 applyPerSectionLabelWidth();
 
 // Render quick layout buttons — also covers first run (loadSettings returns early with no saved data)
+seedPhotoTilingPresets();
 renderQuickLayoutBar();
 renderQuickLayoutList();
+renderPhotoTilingChips();
 
 // =====================================================
 // Show main window after DOM is ready (window starts hidden via visible:false)
