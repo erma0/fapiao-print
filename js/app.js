@@ -2641,10 +2641,56 @@ function syncPhotoModeUI() {
       hint.textContent = '单张 ' + g.w + '×' + g.h + 'mm · 每页 ' + g.cols + '×' + g.rows + ' = ' + count + ' 张；自动居中排列，页脚 / 页码 / 日期 / 水印 / 白边裁剪不生效' + clamped + warn;
     }
   }
+  if (on) renderPhotoCountPresets();
 }
 function onPhotoOptChange() {
   syncPhotoModeUI();
   updatePreview();
+}
+// 按目标张数寻找能放下的最顺眼排列（列×行），找不到返回 null
+function findPhotoCountGrid(s, n) {
+  var w = Math.max(1, parseFloat(s.photoW) || 25);
+  var h = Math.max(1, parseFloat(s.photoH) || 35);
+  var gap = Math.max(0, parseFloat(s.photoGap) || 0);
+  var pw = s.paperW, ph = s.paperH;
+  var best = null;
+  for (var c = 1; c <= n; c++) {
+    if (n % c !== 0) continue;
+    var r = n / c;
+    var gw = c * w + (c - 1) * gap;
+    var gh = r * h + (r - 1) * gap;
+    if (gw > pw + 1e-6 || gh > ph + 1e-6) continue;
+    var score = Math.abs(gw / gh - pw / ph);
+    if (!best || score < best.score) best = { cols: c, rows: r, score: score };
+  }
+  return best;
+}
+function renderPhotoCountPresets() {
+  var box = document.getElementById('photoCountPresets');
+  if (!box) return;
+  var s = getSettings();
+  var curC = parseInt(s.photoCols) || 0, curR = parseInt(s.photoRows) || 0;
+  var counts = [0, 4, 6, 8, 9, 12, 16];
+  box.innerHTML = counts.map(function(n) {
+    var active = n === 0 ? (curC === 0 && curR === 0) : (curC * curR === n);
+    var fit = n === 0 || !!findPhotoCountGrid(s, n);
+    var title = n === 0 ? '自动铺满' : (fit ? ('每页 ' + n + ' 张') : ('当前纸张放不下 ' + n + ' 张，可减小间距/留边'));
+    return '<button class="btn btn-sm' + (active ? ' btn-primary' : '') + '" ' + (fit ? '' : 'disabled') +
+      ' onclick="setPhotoCount(' + n + ')" title="' + title + '">' + (n === 0 ? '自动' : n) + '</button>';
+  }).join('');
+}
+function setPhotoCount(n) {
+  var s = getSettings();
+  if (n === 0) {
+    document.getElementById('photoCols').value = 0;
+    document.getElementById('photoRows').value = 0;
+  } else {
+    var grid = findPhotoCountGrid(s, n);
+    if (!grid) { toast('当前纸张放不下 ' + n + ' 张，可减小间距 / 留边或换相纸'); return; }
+    document.getElementById('photoCols').value = grid.cols;
+    document.getElementById('photoRows').value = grid.rows;
+  }
+  onPhotoOptChange();
 }
 function togglePhotoMode(btn) {
   S.feat.photoMode = !S.feat.photoMode;
@@ -3280,7 +3326,7 @@ function resetSettings(scope) {
   document.getElementById('photoSize').value = 'photo1';
   document.getElementById('photoCustomW').value = 25;
   document.getElementById('photoCustomH').value = 35;
-  document.getElementById('photoGap').value = 3;
+  document.getElementById('photoGap').value = 2;
   document.getElementById('photoMargin').value = 3;
   document.getElementById('photoCols').value = 0;
   document.getElementById('photoRows').value = 0;
