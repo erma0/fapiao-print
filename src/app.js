@@ -4103,7 +4103,12 @@ function paperDisplayLabel(ps) {
   }
   var p = PAPER[ps];
   if (!p) return ps;
-  if (p.name) return p.name + ' ' + p.w + '×' + p.h + 'mm';
+  if (p.name) {
+    // 预设尺寸随方向翻转，避免横向时显示 102×152 却实际是 152×102
+    var w = p.w, h = p.h;
+    if (document.getElementById('orientation').value === 'landscape') { var t = w; w = h; h = t; }
+    return p.name + ' ' + w + '×' + h + 'mm';
+  }
   return PAPER_STANDARD_NAMES[ps] || ps;
 }
 function getCustomPaperMm() {

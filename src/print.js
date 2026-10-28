@@ -284,7 +284,7 @@ function showPrintConfirm(files, s) {
   var ps = document.getElementById('paperSize').value;
   var orient = document.getElementById('orientation').value === 'portrait' ? '纵向' : '横向';
   var paper = ps === 'custom' ? (s.paperW + '\u00D7' + s.paperH + 'mm')
-    : (PAPER[ps] && PAPER[ps].name ? (PAPER[ps].name + ' ' + PAPER[ps].w + '\u00D7' + PAPER[ps].h + 'mm') : ps.toUpperCase());
+    : (PAPER[ps] && PAPER[ps].name ? (PAPER[ps].name + ' ' + s.paperW + '\u00D7' + s.paperH + 'mm') : ps.toUpperCase());
   var copies = s.copies || 1;
   var colorMode = document.getElementById('colorMode').value;
   var colorLabel = colorMode === 'color' ? '彩色' : colorMode === 'grayscale' ? '灰度' : '黑白';
@@ -293,7 +293,8 @@ function showPrintConfirm(files, s) {
   var pages = buildPages(files, s);
   var totalPages = pages.length;
 
-  var fitLabel = s.fitMode === 'contain' ? '适应' : s.fitMode === 'cover' ? '填充' : (Math.round(s.customScale * 100) + '%');
+  var fitLabel = s.fitMode === 'fit' ? '自适应' : s.fitMode === 'fill' ? '拉伸填充'
+    : s.fitMode === 'original' ? '原始大小' : (Math.round(s.customScale * 100) + '%');
   var rotLabel = s.globalRotation === 'auto' ? '自动' : s.globalRotation + '\u00B0';
   var marginInfo = s.photoMode
     ? ('留边 ' + s.photoMargin + 'mm \u00B7 间距 ' + s.photoGap + 'mm')
@@ -822,12 +823,20 @@ function fallbackPrint(files, s) {
       }
     }
     var isReimb = !!s.reimburseMode;
+    var isPhoto = !!s.photoMode;
     var segMm = s.reimburseHeight || 120;
     var segCount = isReimb ? Math.max(1, Math.floor(s.paperH / segMm)) : 0;
-    var effRows = isReimb ? segCount : s.rows;
-    var effCols = isReimb ? 1 : s.cols;
+    // 相纸模式：槽位严格等于证件照实际尺寸、整版居中（与 calculateLayout / Rust 同源）
+    var pg = isPhoto ? getPhotoGrid(s) : null;
+    var photoStartX = pg ? (s.paperW - pg.gridW) / 2 : 0;
+    var photoStartY = pg ? (s.paperH - pg.gridH) / 2 : 0;
+    var effRows = isPhoto ? pg.rows : (isReimb ? segCount : s.rows);
+    var effCols = isPhoto ? pg.cols : (isReimb ? 1 : s.cols);
     var slotW, slotH;
-    if (isReimb) {
+    if (isPhoto) {
+      slotW = pg.w;
+      slotH = pg.h;
+    } else if (isReimb) {
       // 报销单分段：段高固定，mt/mb 为段内安全边距，裁切线在段边界绝对位置
       slotW = s.paperW - ml - mr;
       slotH = Math.max(10, segMm - mt - mb);
@@ -836,7 +845,15 @@ function fallbackPrint(files, s) {
       slotH = (s.paperH - s.rows * (mt + mb) - (s.rows - 1) * s.gapV - fm - sigPx) / s.rows;
     }
     // Draw cut lines (vertical + horizontal) between slots
-    if (isReimb) {
+    if (isPhoto) {
+      // 裁切线画在间距中线，与 calculateLayout photo 分支同口径
+      for (var pc2 = 1; pc2 < pg.cols; pc2++) {
+        html += '<div class="cutline-v" style="left:' + (photoStartX + pc2 * (pg.w + pg.gap) - pg.gap / 2) + 'mm;height:' + s.paperH + 'mm"></div>';
+      }
+      for (var pr2 = 1; pr2 < pg.rows; pr2++) {
+        html += '<div class="cutline-h" style="top:' + (photoStartY + pr2 * (pg.h + pg.gap) - pg.gap / 2) + 'mm"></div>';
+      }
+    } else if (isReimb) {
       // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段）
       for (var k = 1; k <= segCount; k++) {
         html += '<div class="cutline-h" style="top:' + (k * segMm) + 'mm"></div>';
@@ -857,7 +874,9 @@ function fallbackPrint(files, s) {
     for (var r = 0; r < effRows; r++) for (var c = 0; c < effCols; c++) {
       var f = page[r * effCols + c];
       var x, y;
-      if (isReimb) {
+      if (isPhoto) {
+        x = photoStartX + c * (pg.w + pg.gap); y = photoStartY + r * (pg.h + pg.gap);
+      } else if (isReimb) {
         x = ml; y = r * segMm + mt;
       } else {
         x = ml + c * (slotW + ml + mr + s.gapH); y = mt + r * (slotH + mt + mb + s.gapV);
