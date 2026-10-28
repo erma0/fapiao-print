@@ -3365,6 +3365,8 @@ function _cleanRemark(raw) {
   var s = String(raw).replace(/\r/g, '');
   // 文本层可能带控制字符占位（如 \u0000），直接显示会是乱码
   s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  // PDF 字体映射缺失时解码出替换字符，保留无意义
+  s = s.replace(/\uFFFD/g, '');
   s = s.replace(/^[：:\.\-—\s]+/, '');
   s = s.split('\n').map(function(t) { return t.trim(); }).filter(Boolean).join(' ');
   s = s.replace(/\s{2,}/g, ' ').trim();
