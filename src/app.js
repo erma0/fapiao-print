@@ -4254,6 +4254,12 @@ function togglePhotoMode(btn) {
       S.feat.cutline = true;
       document.getElementById('toggleCutline').classList.add('on');
     }
+    // 相纸模式不做白边裁剪：同步关掉功能开关（getSettings 里也会强制 false）
+    if (S.feat.trimWhite) {
+      S.feat.trimWhite = false;
+      document.getElementById('toggleTrimWhite').classList.remove('on');
+      document.getElementById('trimPadOpts').style.display = 'none';
+    }
     // 照片必须按原比例完整显示，且不能侧放
     document.getElementById('fitMode').value = 'fit';
     document.getElementById('customScaleRow').style.display = 'none';

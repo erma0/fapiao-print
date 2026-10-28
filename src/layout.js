@@ -338,7 +338,9 @@ function renderPage(pageFiles, pi, total, s) {
     var selClass = isSelected ? ' selected' : '';
 
     if (f && f.previewUrl) {
-      var src = S.feat.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
+      // 用 settings.trimWhite 而非 S.feat.trimWhite：相纸模式在 getSettings 里强制关闭裁剪，
+      // 若这里仍看功能开关，会出现「预览是裁剪图、PDF 未裁剪」的不一致。
+      var src = s.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
       var rot = getRotation(f, slot, s);
       var filt = s.colorMode === 'grayscale' ? 'filter:grayscale(1);' : s.colorMode === 'bw' ? 'filter:grayscale(1) contrast(1.5);' : '';
       var fit = 'contain';

@@ -863,7 +863,7 @@ function fallbackPrint(files, s) {
         x = ml + c * (slotW + ml + mr + s.gapH); y = mt + r * (slotH + mt + mb + s.gapV);
       }
       if (f && f.previewUrl) {
-        var src = S.feat.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
+        var src = s.trimWhite && f.trimmedUrl ? f.trimmedUrl : f.previewUrl;
         // Compute effective rotation (same logic as layout.js getRotation)
         var rot = 0;
         var slot = { w: slotW, h: slotH };
