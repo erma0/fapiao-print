@@ -89,7 +89,8 @@ fn build_report(files: &[DiagItem], exported_at: &str) -> String {
     r
 }
 
-/// PDF：页数 + 文字层提取结果（前 3 页、每页最多 40 个词的脱敏文本与坐标）
+/// PDF：页数 + 文字层提取结果（前 3 页、每页最多 300 个词的脱敏文本与坐标）
+/// 词样本按行顺序输出，300 词可覆盖标题、购销方信息块与备注/页脚区
 fn dump_pdf(path: &str) -> Result<String, String> {
     let doc = lopdf::Document::load(path).map_err(|e| format!("PDF 加载失败: {}", e))?;
     let total = doc.get_pages().len() as u32;
@@ -109,7 +110,7 @@ fn dump_pdf(path: &str) -> Result<String, String> {
                     let mut n = 0usize;
                     'outer: for line in &res.lines {
                         for w in &line.words {
-                            if n >= 40 {
+                            if n >= 300 {
                                 break 'outer;
                             }
                             r.push_str(&format!(
@@ -120,8 +121,8 @@ fn dump_pdf(path: &str) -> Result<String, String> {
                             n += 1;
                         }
                     }
-                    if n >= 40 {
-                        r.push_str("  …样本截断（每页最多 40 词）\n");
+                    if n >= 300 {
+                        r.push_str("  …样本截断（每页最多 300 词）\n");
                     }
                 }
             }
