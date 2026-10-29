@@ -386,8 +386,8 @@
         </div>
         <div class="sec">
           <div class="sec-title">ℹ 关于</div>
-          <div class="about-row"><span class="about-label">当前版本</span><span class="about-value" id="prefsCurrentVersion">v—</span></div>
-          <div class="about-row"><span class="about-label">更新源</span><span class="about-value">GitHub Release</span></div>
+          <div class="about-row"><span class="about-label">当前版本</span><span class="about-value"><span id="prefsCurrentVersion">v—</span><span class="ver-badge" id="prefsChannelBadge">—</span></span></div>
+          <div class="about-row"><span class="about-label">更新渠道</span><span class="about-value" id="prefsChannelDesc">—</span></div>
           <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="checkForUpdates(false)">🔄 检查更新</button>
           <div class="trow" style="margin-top:8px"><label class="tlbl">自动检查更新</label><button class="tgl on" id="toggleAutoUpdate" onclick="toggleAutoUpdateCheck(this)"></button></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">启动时自动检查（每小时最多一次），有新版弹窗提示；关闭后仍可手动检查。</div>
@@ -505,7 +505,7 @@
 <!-- Update available modal -->
 <div class="modal-bg hidden" id="updateModal" onclick="closeUpdateModal()">
   <div class="modal update-modal" onclick="event.stopPropagation()">
-    <div class="modal-title">🆕 发现新版本</div>
+    <div class="modal-title"><span id="updateModalTitle">🆕 发现新版本</span><span class="ver-badge hidden" id="updateChannelBadge"></span></div>
     <div class="modal-body">
       <div class="update-version-row">
         <span class="update-ver-old" id="updateCurrentVersion">v—</span>
@@ -518,10 +518,12 @@
       <div id="updateAssets"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn" onclick="ignoreUpdateVersion()">忽略此版本</button>
-      <button class="btn" onclick="ignoreAllUpdates()">忽略所有更新</button>
-      <button class="btn" onclick="closeUpdateModal()">稍后再说</button>
-      <button class="btn btn-primary" id="updateOpenBtn">前往 GitHub 下载</button>
+      <button class="btn btn-primary" id="updateOpenBtn">⬇️ 前往 GitHub 下载</button>
+      <div class="update-secondary-actions">
+        <button class="btn" onclick="ignoreUpdateVersion()">跳过此版本</button>
+        <button class="btn" onclick="closeUpdateModal()">稍后再说</button>
+        <button class="btn" onclick="ignoreAllUpdates()">不再提醒</button>
+      </div>
     </div>
   </div>
 </div>

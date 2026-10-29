@@ -433,13 +433,62 @@ struct UpdateInfo {
     release_url: String,
     published_at: String,
     assets: Vec<UpdateAsset>,
+    /// 当前安装版本所属渠道："stable"（正式版）/ "beta"（测试版）
+    channel: String,
+    /// 候选版本本身是否为预发布（测试版）
+    is_prerelease: bool,
+}
+
+/// 拆分版本号为「主版本数字段 + 预发布标识段」。
+/// semver 约定 `2.6.16-beta.3` 的主版本是 [2,6,16]、预发布标识是 ["beta","3"]，
+/// 主版本相同时「无预发布 > 有预发布」（2.6.16 > 2.6.16-beta.3）。
+fn split_version(v: &str) -> (Vec<u64>, Option<Vec<String>>) {
+    let s = v.trim().trim_start_matches(|c| c == 'v' || c == 'V');
+    let (core, pre) = match s.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (s, None),
+    };
+    let nums = core.split('.').filter_map(|x| x.parse::<u64>().ok()).collect();
+    let ids = pre.map(|p| p.split('.').map(|x| x.to_string()).collect::<Vec<_>>());
+    (nums, ids)
+}
+
+/// 比较预发布标识段（semver 2.0 规则）：
+/// 数字标识符按数值比较且优先级低于字母标识符；标识符少的一方更小。
+fn cmp_prerelease(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> i32 {
+    match (a, b) {
+        (None, None) => 0,
+        (None, Some(_)) => 1,
+        (Some(_), None) => -1,
+        (Some(x), Some(y)) => {
+            for (xi, yi) in x.iter().zip(y.iter()) {
+                let nx = xi.parse::<u64>().ok();
+                let ny = yi.parse::<u64>().ok();
+                let ord = match (nx, ny) {
+                    (Some(va), Some(vb)) => va.cmp(&vb),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => xi.cmp(yi),
+                };
+                if ord != std::cmp::Ordering::Equal {
+                    return if ord == std::cmp::Ordering::Less { -1 } else { 1 };
+                }
+            }
+            // 共同前缀相同：标识符少的一方更小（beta < beta.1）
+            if x.len() != y.len() {
+                return if x.len() < y.len() { -1 } else { 1 };
+            }
+            0
+        }
+    }
 }
 
 /// Compare two semver-like version strings (e.g. "2.0.9" vs "2.1.0").
 /// Returns -1 if a < b, 0 if equal, 1 if a > b.
+/// 支持预发布后缀：2.6.16-beta.3 < 2.6.16，且 2.6.16-beta.3 > 2.6.14。
 fn compare_versions(a: &str, b: &str) -> i32 {
-    let pa: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
-    let pb: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    let (pa, pre_a) = split_version(a);
+    let (pb, pre_b) = split_version(b);
     let n = std::cmp::max(pa.len(), pb.len());
     for i in 0..n {
         let va = *pa.get(i).unwrap_or(&0);
@@ -447,7 +496,7 @@ fn compare_versions(a: &str, b: &str) -> i32 {
         if va < vb { return -1; }
         if va > vb { return 1; }
     }
-    0
+    cmp_prerelease(&pre_a, &pre_b)
 }
 
 /// 构建带 TLS 的 ureq agent（统一超时配置）。
@@ -465,9 +514,71 @@ fn build_http_agent(timeout: std::time::Duration) -> Result<ureq::Agent, String>
         .build())
 }
 
-/// Check for updates by querying GitHub Releases API (latest release).
+/// GitHub Release 的统一解析结果（/releases/latest 与 /releases 列表项结构相同）
+struct ReleaseEntry {
+    tag: String,
+    notes: String,
+    url: String,
+    published_at: String,
+    assets: Vec<UpdateAsset>,
+    prerelease: bool,
+}
+
+fn parse_release(json: &serde_json::Value) -> ReleaseEntry {
+    let mut assets = Vec::new();
+    if let Some(arr) = json["assets"].as_array() {
+        for a in arr {
+            assets.push(UpdateAsset {
+                name: a["name"].as_str().unwrap_or("").to_string(),
+                download_url: a["browser_download_url"].as_str().unwrap_or("").to_string(),
+                size: a["size"].as_u64().unwrap_or(0),
+            });
+        }
+    }
+    ReleaseEntry {
+        tag: json["tag_name"].as_str().unwrap_or("").to_string(),
+        notes: json["body"].as_str().unwrap_or("").to_string(),
+        url: json["html_url"].as_str().unwrap_or("").to_string(),
+        published_at: json["published_at"].as_str().unwrap_or("").to_string(),
+        assets,
+        prerelease: json["prerelease"].as_bool().unwrap_or(false),
+    }
+}
+
+/// 主备双源 GET：依次尝试 URLs，返回第一个成功解析的 JSON。
+fn fetch_releases_json(agent: &ureq::Agent, urls: &[String]) -> Result<serde_json::Value, String> {
+    let mut last_err = String::new();
+    for url in urls {
+        match agent
+            .get(url)
+            .set("User-Agent", "ticketchan-updater")
+            .set("Accept", "application/vnd.github+json")
+            .call()
+        {
+            Ok(resp) => match resp.into_string() {
+                Ok(text) => match serde_json::from_str(&text) {
+                    Ok(v) => return Ok(v),
+                    Err(e) => last_err = format!("解析响应失败: {}", e),
+                },
+                Err(e) => last_err = format!("读取响应失败: {}", e),
+            },
+            Err(ureq::Error::Status(code, _)) => last_err = format!("API返回状态: {}", code),
+            Err(e) => last_err = format!("请求失败: {}", e),
+        }
+    }
+    Err(format!("GitHub更新检查失败: {}", last_err))
+}
+
+/// Check for updates by querying GitHub Releases API.
 /// Returns update info including latest version, release notes, and download assets.
 /// Uses blocking ureq offloaded to the blocking thread pool.
+///
+/// 更新渠道按当前安装版本自动分流（issue #58）：
+/// - 正式版（版本号无 `-`）：只查 `/releases/latest`，GitHub 该接口天然排除预发布，
+///   因此正式版用户不会收到测试版提示；
+/// - 测试版（版本号带 `-`，如 `2.6.16-beta.3`）：查 `/releases` 列表，按 semver 规则
+///   选出高于当前版本的最大者——既能收到更新的 beta，也能在同版本转正后提示正式版，
+///   但绝不会把旧正式版（如 2.6.14）当成「新版本」。
 ///
 /// 主备双源: 先尝试直连 api.github.com,失败后 fallback 到 gh-proxy.com 加速代理。
 /// 保证大陆网络环境下更新检查可用,网络通畅时直连最快。
@@ -478,61 +589,67 @@ async fn check_for_updates() -> Result<UpdateInfo, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<UpdateInfo, String> {
         let agent = build_http_agent(std::time::Duration::from_secs(15))?;
 
-        // 主备双源: 直连 → gh-proxy.com 代理
+        let is_beta_channel = current.contains('-');
+        let path = if is_beta_channel {
+            "/releases?per_page=20"
+        } else {
+            "/releases/latest"
+        };
         let urls = [
-            "https://api.github.com/repos/erma0/fapiao-print/releases/latest",
-            "https://gh-proxy.com/https://api.github.com/repos/erma0/fapiao-print/releases/latest",
+            format!("https://api.github.com/repos/erma0/fapiao-print{}", path),
+            format!("https://gh-proxy.com/https://api.github.com/repos/erma0/fapiao-print{}", path),
         ];
+        let json = fetch_releases_json(&agent, &urls)?;
 
-        let mut body: Option<String> = None;
-        let mut last_err = String::new();
-        for url in &urls {
-            match agent
-                .get(url)
-                .set("User-Agent", "ticketchan-updater")
-                .set("Accept", "application/vnd.github+json")
-                .call()
-            {
-                Ok(resp) => match resp.into_string() {
-                    Ok(text) => { body = Some(text); break; }
-                    Err(e) => last_err = format!("读取响应失败: {}", e),
-                },
-                Err(ureq::Error::Status(code, _)) => last_err = format!("API返回状态: {}", code),
-                Err(e) => last_err = format!("请求失败: {}", e),
+        // /releases/latest 返回单个对象，/releases 返回数组；draft 一律忽略
+        let entries: Vec<ReleaseEntry> = if let Some(arr) = json.as_array() {
+            arr.iter()
+                .filter(|r| !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false))
+                .map(parse_release)
+                .collect()
+        } else {
+            vec![parse_release(&json)]
+        };
+
+        // 选出高于当前版本的最新版本
+        let mut best: Option<(String, ReleaseEntry)> = None;
+        for e in entries {
+            let ver = e.tag.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
+            if ver.is_empty() || compare_versions(&current, &ver) >= 0 {
+                continue;
             }
-        }
-        let body = body.ok_or_else(|| format!("GitHub更新检查失败: {}", last_err))?;
-
-        let json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("解析响应失败: {}", e))?;
-
-        let tag = json["tag_name"].as_str().unwrap_or("").to_string();
-        let latest = tag.trim_start_matches('v').to_string();
-        let release_notes = json["body"].as_str().unwrap_or("").to_string();
-        let release_url = json["html_url"].as_str().unwrap_or("").to_string();
-        let published_at = json["published_at"].as_str().unwrap_or("").to_string();
-
-        let mut assets = Vec::new();
-        if let Some(arr) = json["assets"].as_array() {
-            for a in arr {
-                assets.push(UpdateAsset {
-                    name: a["name"].as_str().unwrap_or("").to_string(),
-                    download_url: a["browser_download_url"].as_str().unwrap_or("").to_string(),
-                    size: a["size"].as_u64().unwrap_or(0),
-                });
-            }
+            let better = match &best {
+                Some((bv, _)) => compare_versions(&ver, bv) > 0,
+                None => true,
+            };
+            if better { best = Some((ver, e)); }
         }
 
-        let has_update = compare_versions(&current, &latest) < 0;
+        let channel = if is_beta_channel { "beta" } else { "stable" }.to_string();
 
-        Ok(UpdateInfo {
-            has_update,
-            current_version: current,
-            latest_version: latest,
-            release_notes,
-            release_url,
-            published_at,
-            assets,
+        Ok(match best {
+            Some((ver, e)) => UpdateInfo {
+                has_update: true,
+                current_version: current,
+                latest_version: ver,
+                release_notes: e.notes,
+                release_url: e.url,
+                published_at: e.published_at,
+                assets: e.assets,
+                channel,
+                is_prerelease: e.prerelease,
+            },
+            None => UpdateInfo {
+                has_update: false,
+                current_version: current.clone(),
+                latest_version: current,
+                release_notes: String::new(),
+                release_url: String::new(),
+                published_at: String::new(),
+                assets: Vec::new(),
+                channel,
+                is_prerelease: false,
+            },
         })
     })
     .await

@@ -752,13 +752,30 @@ html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #
   border-radius: 8px; cursor: pointer; transition: all 0.15s; font-size: 13px;
 }
 .update-asset:hover { border-color: var(--accent); background: var(--accent-light); }
+.update-asset.recommended { border-color: var(--accent); }
+.update-asset-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .update-asset-name { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-asset-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.update-asset-rec { font-size: 10px; font-weight: 700; color: var(--accent); background: var(--accent-light); border-radius: 3px; padding: 0 5px; }
 .update-asset-size { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 
-/* 四个操作按钮单行放不下（内容区 470px < 按钮总宽 518px）：三个次要按钮一行 + 主按钮独占一行 */
-.update-modal .modal-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.update-modal .modal-actions .btn { padding: 9px 6px; font-size: 13px; white-space: nowrap; }
-.update-modal .modal-actions #updateOpenBtn { grid-column: 1 / -1; }
+/* 更新内容 Markdown 渲染后的基础排版 */
+.update-notes p { margin: 0 0 6px; }
+.update-notes p:last-child { margin-bottom: 0; }
+.update-notes h4 { margin: 12px 0 6px; font-size: 13px; color: var(--text-primary); }
+.update-notes h4:first-child { margin-top: 0; }
+.update-notes ul { margin: 0 0 6px; padding-left: 18px; }
+.update-notes li { margin: 2px 0; }
+.update-notes a { color: var(--accent); text-decoration: none; }
+.update-notes a:hover { text-decoration: underline; }
+.update-notes code { font-family: Consolas, monospace; font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 3px; }
+.update-notes hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.update-notes .update-quote { color: var(--text-muted); font-size: 12px; margin-bottom: 6px; }
+
+/* 主操作（前往下载）独占一行置顶，三个次要按钮一行平铺 */
+.update-modal .modal-actions { display: flex; flex-direction: column; gap: 8px; }
+.update-modal .modal-actions .btn { padding: 9px 10px; font-size: 13px; white-space: nowrap; }
+.update-modal .update-secondary-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 
 /* Statusbar version — clickable */
 #stVersion { display: flex; align-items: center; gap: 6px; transition: color 0.15s; }
@@ -770,6 +787,15 @@ html.dark .toast-spinner { border-color: rgba(26,26,46,0.3); border-top-color: #
 .about-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 4px 0; }
 .about-label { color: var(--text-muted); }
 .about-value { color: var(--text-primary); font-weight: 500; }
+
+/* 版本渠道徽章（设置→关于 / 更新弹窗共用） */
+.ver-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; line-height: 1.6; vertical-align: middle;
+  color: var(--accent); background: var(--accent-light);
+}
+.ver-badge.beta { color: var(--warning); background: var(--warning-light); }
+.about-value .ver-badge { margin-left: 8px; }
 
 /* ===== Summary Table (导出汇总表) ===== */
 .summary-modal { width: 820px; max-width: 95vw; }

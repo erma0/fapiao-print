@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.6.16-beta.2（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.6.16-beta.4（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -220,7 +220,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **导出 / 导入配置**（`exportSettings()`/`importSettings()`，issue #50）：数据同源——`collectSettings()`（saveSettings 的收集逻辑抽出共用）+ 独立存储的偏好键（theme/amtMode/ocrEnabled/pdfTextEnabled/ocrPrecision/saveDir）；导出经原生「另存为」写 JSON（含 `_meta` 头）；导入校验 `_meta.app`（或 layout+feat）→ 写回同名 localStorage 键 → **`location.reload()` 重载生效**（不重载会被下次自动保存覆盖回去），Rust 侧 `read_text_file` 与之配套。
 
-**更新检查**：`check_for_updates`（reqwest 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal`。**忽略体系**（v2.6.0）：`shouldAutoShowUpdate()` 只拦静默弹窗——`ticketchan-update-ignore`（忽略此版本，弹窗按钮）+ `ticketchan-update-ignore-all`（忽略所有，弹窗按钮 + 设置→关于「自动检查更新」开关 `toggleAutoUpdateCheck`，`showApp` 里 `syncAutoUpdateCheckUI()` 同步）；手动检查不受忽略影响。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
+**更新检查**：`check_for_updates`（ureq 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；**双更新渠道**（v2.6.16-beta.4，issue #58）——渠道由当前安装版本自动判定：版本号无预发布后缀走**正式线**，只查 `/releases/latest`（GitHub 该接口天然排除预发布，正式版用户不会收到 beta）；版本号含 `-`（如 `2.6.16-beta.3`）走**测试线**，查 `/releases?per_page=20` 并按 semver 取「高于当前版本的最大项」（能收到新 beta，也能在同版本转正后提示正式版，但绝不会把旧正式版 2.6.14 当成新版本）。`compare_versions()` 支持预发布语义（`2.6.16-beta.3 < 2.6.16` 且 `> 2.6.14`），**禁止**退回纯数字分段比较（曾把 `2.6.16-beta.2` 解析成 `2.6.2`）。启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal` 展示渠道徽章（`is_prerelease`）、Markdown 更新说明（前端 `renderReleaseNotes()`）、与当前安装类型（`hasOcr`）匹配的推荐产物（`getAssetVariant()`）。**忽略体系**（v2.6.0）：`shouldAutoShowUpdate()` 只拦静默弹窗——`ticketchan-update-ignore`（忽略此版本，弹窗按钮）+ `ticketchan-update-ignore-all`（忽略所有，弹窗按钮 + 设置→关于「自动检查更新」开关 `toggleAutoUpdateCheck`，`showApp` 里 `syncAutoUpdateCheckUI()` 同步）；手动检查不受忽略影响。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
 
 ## 前端模块
 

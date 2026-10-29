@@ -5600,6 +5600,7 @@ renderQuickLayoutList();
         // Update version display in prefs panel too
         var pv = document.getElementById('prefsCurrentVersion');
         if (pv) pv.textContent = 'v' + v;
+        syncUpdateChannelUI();
         console.log('发票酱 v' + v + ' | isTauri:', isTauri);
         // Auto-check for updates 5s after startup (silent — only shows modal if update exists)
         setTimeout(function() { checkForUpdates(true); }, 5000);
@@ -5635,6 +5636,26 @@ var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
 var _UPDATE_IGNORE_ALL_KEY = 'ticketchan-update-ignore-all';
 var _updateChecking = false;
 var _lastUpdateInfo = null;
+
+/**
+ * 更新渠道由安装版本自动决定：版本号带预发布后缀（如 2.6.16-beta.3）即测试版。
+ * 正式版只查 GitHub /releases/latest（不含预发布）；测试版查完整 release 列表，
+ * 按 semver 取高于当前版本的最大者——避免旧正式版被当成新版本提示（issue #58）。
+ */
+function getUpdateChannel() {
+  return APP_VERSION.indexOf('-') >= 0 ? 'beta' : 'stable';
+}
+
+function syncUpdateChannelUI() {
+  var isBeta = getUpdateChannel() === 'beta';
+  var badge = document.getElementById('prefsChannelBadge');
+  if (badge) {
+    badge.textContent = isBeta ? '测试版' : '正式版';
+    badge.classList.toggle('beta', isBeta);
+  }
+  var desc = document.getElementById('prefsChannelDesc');
+  if (desc) desc.textContent = isBeta ? '测试版（beta + 正式版）' : '正式版（仅稳定版本）';
+}
 
 function getIgnoredUpdateVersion() {
   try { return localStorage.getItem(_UPDATE_IGNORE_KEY) || ''; } catch(e) { return ''; }
@@ -5697,7 +5718,7 @@ function checkForUpdates(silent) {
         showUpdateModal(info);
       }
     } else if (!silent) {
-      toast('已是最新版本 v' + info.current_version, 2500);
+      toast((getUpdateChannel() === 'beta' ? '已是最新测试版 v' : '已是最新版本 v') + info.current_version, 2500);
     }
   }).catch(function(err) {
     _updateChecking = false;
@@ -5714,7 +5735,7 @@ function ignoreUpdateVersion() {
   var v = (_lastUpdateInfo && _lastUpdateInfo.latest_version) || '';
   if (v) {
     try { localStorage.setItem(_UPDATE_IGNORE_KEY, v); } catch(e) {}
-    toast('已忽略 v' + v + '，发布更新版本后会再次提醒', 3000);
+    toast('已跳过 v' + v + '，发布更新版本后会再次提醒', 3000);
   }
   closeUpdateModal();
 }
@@ -5744,12 +5765,86 @@ function syncAutoUpdateCheckUI() {
 }
 
 /**
+ * Release notes 轻量 Markdown 渲染（更新说明来自 CHANGELOG 段落）：
+ * 支持 ### 小标题、- 列表、> 引用、--- 分隔、粗体、代码与 http(s) 链接。
+ * 先整体转义 HTML 再做行内替换，避免说明文本注入。
+ */
+function renderReleaseNotes(text) {
+  function inline(s) {
+    return s
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(m, label, url) {
+        // 链接走系统浏览器打开，避免 WebView 内导航离开应用
+        return '<a href="#" onclick="openUpdateAsset(\'' + url.replace(/'/g, "\\'") + '\');return false;">' + label + '</a>';
+      })
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+  var lines = escHtml(text || '').replace(/\r\n/g, '\n').split('\n');
+  var out = [];
+  var listOpen = false;
+  function closeList() { if (listOpen) { out.push('</ul>'); listOpen = false; } }
+
+  lines.forEach(function(raw) {
+    var line = raw.trim();
+    if (!line) { closeList(); return; }
+    // 版本标题（## vX.Y.Z — …）直接跳过，弹窗顶部已展示
+    if (/^##\s/.test(line)) { closeList(); return; }
+    if (/^_.*_$/.test(line)) {        // _2026-10-29_ 日期行
+      closeList();
+      out.push('<div class="update-quote">' + inline(line.replace(/^_+|_+$/g, '')) + '</div>');
+      return;
+    }
+    if (/^-{3,}$/.test(line)) { closeList(); out.push('<hr>'); return; }
+    var h = line.match(/^#{3,}\s*(.*)$/);
+    if (h) { closeList(); out.push('<h4>' + inline(h[1]) + '</h4>'); return; }
+    if (/^&gt;\s?/.test(line)) {
+      closeList();
+      out.push('<div class="update-quote">' + inline(line.replace(/^&gt;\s?/, '')) + '</div>');
+      return;
+    }
+    var li = line.match(/^(?:[-*•]|\d+\.)\s+(.*)$/);
+    if (li) {
+      if (!listOpen) { out.push('<ul>'); listOpen = true; }
+      out.push('<li>' + inline(li[1]) + '</li>');
+      return;
+    }
+    closeList();
+    out.push('<p>' + inline(line) + '</p>');
+  });
+  closeList();
+  return out.join('') || '<p>（无更新说明）</p>';
+}
+
+function formatUpdateSize(size) {
+  return size > 1048576
+    ? (size / 1048576).toFixed(1) + ' MB'
+    : size > 1024
+      ? (size / 1024).toFixed(0) + ' KB'
+      : size + ' B';
+}
+
+/** 从产物文件名推断版本类型：轻量/OCR × 安装包/绿色版 */
+function getAssetVariant(name) {
+  var n = String(name || '').toLowerCase();
+  var ocr = n.indexOf('_ocr') >= 0;
+  var kind = n.indexOf('-setup') >= 0 ? '安装包' : (n.indexOf('portable') >= 0 ? '绿色版' : '');
+  return { ocr: ocr, label: (ocr ? 'OCR 版' : '轻量版') + (kind ? ' · ' + kind : '') };
+}
+
+/**
  * Render the update modal with release info.
  */
 function showUpdateModal(info) {
   var modal = document.getElementById('updateModal');
   if (!modal) return;
   _lastUpdateInfo = info;
+
+  document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '🧪 发现新测试版' : '🆕 发现新版本';
+  var badge = document.getElementById('updateChannelBadge');
+  if (badge) {
+    badge.textContent = info.is_prerelease ? '测试版' : '正式版';
+    badge.className = 'ver-badge' + (info.is_prerelease ? ' beta' : '');
+  }
 
   document.getElementById('updateCurrentVersion').textContent = 'v' + info.current_version;
   document.getElementById('updateLatestVersion').textContent = 'v' + info.latest_version;
@@ -5763,29 +5858,23 @@ function showUpdateModal(info) {
   }
   document.getElementById('updatePubDate').textContent = dateStr;
 
-  // Release notes — escape HTML then convert basic markdown
-  var notes = info.release_notes || '（无更新说明）';
-  var escaped = notes
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\r\n/g, '\n')
-    .replace(/\n/g, '<br>');
-  document.getElementById('updateNotes').innerHTML = escaped;
+  document.getElementById('updateNotes').innerHTML = renderReleaseNotes(info.release_notes);
 
-  // Build asset list (download links)
+  // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」
   var assetsHtml = '';
   if (info.assets && info.assets.length) {
     assetsHtml = '<div class="update-assets-title">下载文件：</div><ul class="update-assets">';
     info.assets.forEach(function(a) {
-      var sizeStr = a.size > 1048576
-        ? (a.size / 1048576).toFixed(1) + ' MB'
-        : a.size > 1024
-          ? (a.size / 1024).toFixed(0) + ' KB'
-          : a.size + ' B';
-      assetsHtml += '<li class="update-asset" onclick="openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')">' +
-        '<span class="update-asset-name">📥 ' + a.name + '</span>' +
-        '<span class="update-asset-size">' + sizeStr + '</span></li>';
+      var variant = getAssetVariant(a.name);
+      var recommended = hasOcr ? variant.ocr : !variant.ocr;
+      assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + '" onclick="openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')">' +
+        '<div class="update-asset-info">' +
+          '<span class="update-asset-name">📥 ' + escHtml(a.name) + '</span>' +
+          '<span class="update-asset-meta">' + variant.label +
+            (recommended ? '<span class="update-asset-rec">推荐</span>' : '') +
+          '</span>' +
+        '</div>' +
+        '<span class="update-asset-size">' + formatUpdateSize(a.size) + '</span></li>';
     });
     assetsHtml += '</ul>';
   }
