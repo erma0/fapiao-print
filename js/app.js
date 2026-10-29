@@ -3568,7 +3568,7 @@ applyPerSectionLabelWidth();
 (function() {
   function showApp() {
     // 与 package.json 的 version 保持一致（纯静态站点无构建步骤，需手动同步）
-    APP_VERSION = '3.4.9';
+    APP_VERSION = '3.4.10';
     var el = document.getElementById('stVersionText');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);
