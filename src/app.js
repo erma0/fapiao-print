@@ -23,12 +23,15 @@ var PAPER = {
   photoBig1:{w:33,h:48,name:'大一寸',usage:'护照、港澳台通行证',pxW:390,pxH:567},
   photoSmall2:{w:35,h:45,name:'小二寸',usage:'签证、公考、资格审核',pxW:413,pxH:531},
   photo2:{w:35,h:49,name:'二寸',usage:'毕业证、职称、考试报名',pxW:413,pxH:579},
-  photoId:{w:26,h:32,name:'身份证/社保卡',usage:'白底有回执，350DPI',pxW:358,pxH:441}
+  photoId:{w:26,h:32,name:'身份证照片/社保卡',usage:'白底有回执，350DPI',pxW:358,pxH:441},
+  // 身份证/银行卡实际卡片尺寸（85.6×54mm），只用于相纸模式的照片规格，不进纸张规格
+  photoCard:{w:85.6,h:54,name:'身份证',usage:'实际卡片尺寸，可拼 A4 打印'}
 };
 var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
 var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
 var PAPER_PHOTO_PAPER = ['photoPaper5','photoPaper6'];
 var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
+var PAPER_PHOTO_SIZES = PAPER_PHOTO.concat(['photoCard']);
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Print/save DPI — Must match Rust RENDER_DPI
 var PDF_PREVIEW_DPI = 150;  // Preview DPI — faster loading, lower resolution
@@ -4081,6 +4084,22 @@ function getPaperOptionText(id) {
   if (p.name) return p.name + ' ' + size + '（' + p.usage + '）';
   return (PAPER_STANDARD_NAMES[id] || id) + ' (' + size + ')';
 }
+function getPhotoSizeOptionText(id) {
+  var p = PAPER[id];
+  if (!p) return id;
+  return p.name + ' ' + p.w + '×' + p.h + 'mm（' + p.usage + '）';
+}
+// 相纸模式的证件照规格下拉：与纸张规格一致，括号内标注常用场景
+function renderPhotoSizeOptions() {
+  var sel = document.getElementById('photoSize');
+  if (!sel) return;
+  var cur = sel.value || 'photo1';
+  var html = '';
+  PAPER_PHOTO_SIZES.forEach(function(id) { html += '<option value="' + id + '">' + getPhotoSizeOptionText(id) + '</option>'; });
+  html += '<option value="custom">自定义</option>';
+  sel.innerHTML = html;
+  sel.value = (cur === 'custom' || PAPER[cur]) ? cur : 'photo1';
+}
 function renderPaperOptions() {
   var sel = document.getElementById('paperSize');
   if (!sel) return;
@@ -4255,10 +4274,6 @@ function togglePhotoMode(btn) {
       document.getElementById('togglePasteMode').classList.remove('on');
       document.getElementById('pasteOpts').style.display = 'none';
     }
-    if (!S.feat.cutline) {
-      S.feat.cutline = true;
-      document.getElementById('toggleCutline').classList.add('on');
-    }
     // 相纸模式不做白边裁剪：同步关掉功能开关（getSettings 里也会强制 false）
     if (S.feat.trimWhite) {
       S.feat.trimWhite = false;
@@ -4396,7 +4411,7 @@ function getSettings() {
     photoMargin: parseFloat(document.getElementById('photoMargin').value) || 0,
     photoCols: parseInt(document.getElementById('photoCols').value) || 0,
     photoRows: parseInt(document.getElementById('photoRows').value) || 0,
-    cutline: photoMode ? true : S.feat.cutline, number: S.feat.number, border: S.feat.border,
+    cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
     borderWidth: 1, borderColor: '#000000', trimWhite: photoMode ? false : S.feat.trimWhite,
     trimPad: getTrimPad(),
     copyBadge: S.feat.copyBadge,
@@ -4724,6 +4739,7 @@ function loadSettings() {
   renderQuickLayoutBar();
   if (o.paperUnit) document.getElementById('paperUnit').value = o.paperUnit === 'px' ? 'px' : 'mm';
   renderPaperOptions();
+  renderPhotoSizeOptions();
   syncPaperUnitUI();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
@@ -4899,13 +4915,19 @@ function syncReimburseUI() {
   var photo = !!S.feat.photoMode;
   document.getElementById('reimburseOpts').style.display = on ? 'block' : 'none';
   var lockGrid = on || photo;
-  ['gridSel', 'customLayoutRow', 'gapSec', 'cutlineRow'].forEach(function(id) {
+  ['gridSel', 'customLayoutRow', 'gapSec'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) {
       el.style.opacity = lockGrid ? '0.4' : '';
       el.style.pointerEvents = lockGrid ? 'none' : '';
     }
   });
+  // 裁切线：相纸模式保留开关（issue #57），报销单模式段边界强制绘制才置灰
+  var cutRow = document.getElementById('cutlineRow');
+  if (cutRow) {
+    cutRow.style.opacity = on ? '0.4' : '';
+    cutRow.style.pointerEvents = on ? 'none' : '';
+  }
   // 相纸模式接管普通边距；报销单模式仍需边距作为段内安全边距，不能置灰
   var marginSec = document.getElementById('marginSec');
   if (marginSec) {
@@ -5527,6 +5549,7 @@ var _renameSeparator = '_';
 
 // Restore all layout & feature settings
 renderPaperOptions();
+renderPhotoSizeOptions();
 loadSettings();
 syncPhotoModeUI();
 applyPerSectionLabelWidth();

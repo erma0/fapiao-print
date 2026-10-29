@@ -846,12 +846,14 @@ function fallbackPrint(files, s) {
     }
     // Draw cut lines (vertical + horizontal) between slots
     if (isPhoto) {
-      // 裁切线画在间距中线，与 calculateLayout photo 分支同口径
-      for (var pc2 = 1; pc2 < pg.cols; pc2++) {
-        html += '<div class="cutline-v" style="left:' + (photoStartX + pc2 * (pg.w + pg.gap) - pg.gap / 2) + 'mm;height:' + s.paperH + 'mm"></div>';
-      }
-      for (var pr2 = 1; pr2 < pg.rows; pr2++) {
-        html += '<div class="cutline-h" style="top:' + (photoStartY + pr2 * (pg.h + pg.gap) - pg.gap / 2) + 'mm"></div>';
+      // 裁切线画在间距中线，与 calculateLayout photo 分支同口径；沿用全局裁切线开关
+      if (s.cutline) {
+        for (var pc2 = 1; pc2 < pg.cols; pc2++) {
+          html += '<div class="cutline-v" style="left:' + (photoStartX + pc2 * (pg.w + pg.gap) - pg.gap / 2) + 'mm;height:' + s.paperH + 'mm"></div>';
+        }
+        for (var pr2 = 1; pr2 < pg.rows; pr2++) {
+          html += '<div class="cutline-h" style="top:' + (photoStartY + pr2 * (pg.h + pg.gap) - pg.gap / 2) + 'mm"></div>';
+        }
       }
     } else if (isReimb) {
       // 段底裁切线：k = 1..segCount，每段底部一条（含最后一段）
