@@ -515,6 +515,8 @@ var _slotTempDrag = null; // 尾部空槽拖拽的临时占位对象（未移动
 
 var _slotSuppressClick = false; // 槽位拖拽松手后吞掉浏览器合成的 click
 
+var _lastSlotDown = null; // 上一次槽位按下：自判双击（系统双击位移容差只有几个像素，手抖会退化成两次单击）
+
 var DRAG_THRESHOLD_PX = 4; // 位移阈值：小于它不算拖拽，避免微小抖动吞掉 click
 
 /**
@@ -602,13 +604,26 @@ function onSlotMouseDown(e) {
   if (!f && !pendingTail) return;
 
   // 双击票面 = 设置份数（issue #59）：在 mousedown 阶段判定，避开 mouseup 重建预览 DOM 导致
-  // click / dblclick 目标丢失（拖拽阈值仅 4px，双击时的轻微位移就会触发重建）
-  if (!pendingTail && e.detail >= 2) {
+  // click / dblclick 目标丢失（拖拽阈值仅 4px，双击时的轻微位移就会触发重建）。
+  // 不能只看 e.detail：系统双击允许的位移仅几个像素，手抖时第二下 detail 仍是 1，
+  // 这里按时间 + 距离自行判定，第一下未发生拖拽才算。
+  var isDouble = e.detail >= 2;
+  if (!isDouble && _lastSlotDown && !_lastSlotDown.moved && _lastSlotDown.idx === idx &&
+      Date.now() - _lastSlotDown.time <= 500 &&
+      Math.abs(e.clientX - _lastSlotDown.x) <= 12 && Math.abs(e.clientY - _lastSlotDown.y) <= 12) {
+    isDouble = true;
+  }
+  if (!pendingTail && isDouble) {
     e.preventDefault();
     selectSlot(idx);
     openSlotCopyMenu();
+    _lastSlotDown = null;
+    // 第二次 mouseup 后浏览器会补发 click，落到槽位上会被「点空白处关菜单」立即关掉。
+    // 用时间窗拦截这一下（不能等 click 再判断：第二次按下到松开的时间不确定）
+    _slotCopyMenuGuardUntil = Date.now() + 500;
     return;
   }
+  _lastSlotDown = { idx: idx, time: Date.now(), x: e.clientX, y: e.clientY, moved: false };
 
   // Otherwise: click to select + drag to move
   // 尾部空槽的纯点击不进拖拽：不 preventDefault、不加 dragging，保证 click 正常派发
@@ -777,6 +792,7 @@ function onSlotMouseMove(e) {
 
 function onSlotMouseUp(e) {
   if (!_slotDrag) return;
+  if (_lastSlotDown) _lastSlotDown.moved = !!_slotDrag.moved;
   _slotDrag.slotEl.classList.remove('dragging');
   var d = _slotDrag;
   _slotDrag = null;

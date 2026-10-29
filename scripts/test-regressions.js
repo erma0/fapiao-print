@@ -175,6 +175,15 @@ async function run() {
     await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...rect, button: 'left', clickCount: count });
   }
   equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '双击打开份数菜单');
+  // 手抖双击：第二下偏移 8px 时系统可能不判双击（detail=1），仍应按时间 + 距离识别
+  await evaluate(() => { closeSlotCopyMenu(); S.selectedSlot = -1; });
+  for (let count = 1; count <= 2; count++) {
+    const p = { x: rect.x + (count === 2 ? 8 : 0), y: rect.y + (count === 2 ? 8 : 0) };
+    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', clickCount: 1 });
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', clickCount: 1 });
+    await delay(120);
+  }
+  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '手抖双击也弹份数菜单');
   const item = await evaluate(() => { var r = document.querySelector('#slotCopyMenu [data-n="3"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...item, button: 'left', clickCount: 1 });
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...item, button: 'left', clickCount: 1 });
