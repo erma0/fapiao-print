@@ -3501,9 +3501,15 @@ window.addEventListener('resize', syncSlotToolbar);
 function toggleSlotCopyMenu(e) {
   if (e) e.stopPropagation();
   var menu = document.getElementById('slotCopyMenu');
+  if (!menu) return;
+  if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
+  openSlotCopyMenu();
+}
+// 打开菜单（幂等）：双击与工具条按钮共用，避免双击时二次 toggle 又把菜单关掉
+function openSlotCopyMenu() {
+  var menu = document.getElementById('slotCopyMenu');
   var btn = document.getElementById('slotCopiesBtn');
   if (!menu || !btn) return;
-  if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
   var f = getSelectedFileObj();
   if (!f) return;
   var cur = f.copies || 1;
@@ -5426,7 +5432,7 @@ document.getElementById('previewWrap').addEventListener('dblclick', function(e) 
     var idx = parseInt(slotEl.dataset.slotIdx);
     if (idx >= 0) {
       if (S.selectedSlot !== idx) selectSlot(idx);
-      if (getSelectedFileObj()) { toggleSlotCopyMenu(); return; }
+      if (getSelectedFileObj()) { openSlotCopyMenu(); return; }
     }
   }
   if (S.viewZoom !== 0) { setZoom('fit'); }

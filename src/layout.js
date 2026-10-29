@@ -536,7 +536,7 @@ function initSlotInteraction() {
   }, true);
   // Click on empty area deselects (floating slot toolbar excluded, issue #33)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar')) {
+    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar') && !e.target.closest('#slotCopyMenu')) {
       selectSlot(-1);
     }
   });
@@ -600,6 +600,15 @@ function onSlotMouseDown(e) {
     // 空白占位（slot-blank）：与常规文件一样可拖拽排序，click 仍触发上传
   }
   if (!f && !pendingTail) return;
+
+  // 双击票面 = 设置份数（issue #59）：在 mousedown 阶段判定，避开 mouseup 重建预览 DOM 导致
+  // click / dblclick 目标丢失（拖拽阈值仅 4px，双击时的轻微位移就会触发重建）
+  if (!pendingTail && e.detail >= 2) {
+    e.preventDefault();
+    selectSlot(idx);
+    openSlotCopyMenu();
+    return;
+  }
 
   // Otherwise: click to select + drag to move
   // 尾部空槽的纯点击不进拖拽：不 preventDefault、不加 dragging，保证 click 正常派发
