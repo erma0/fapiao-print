@@ -52,7 +52,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 关键分层约定：
 
 - **预览与导出必须语义一致**：预览（CSS）与 PDF 生成（Rust/web）对旋转、缩放、偏移、适配的计算公式互为镜像，任何一方改动必须同步另一方（见「旋转与适配语义」）
-- **桌面/web 双分支同步**：字段提取（`ocr.js` ↔ `js/pdf-text.js`）、预览布局（`layout.js` ↔ `js/layout.js`）逻辑一致，识别与排版改动必须双向同步
+- **桌面/web 双分支同步**：字段提取（`ocr.js` ↔ `js/pdf-text.js`）、预览布局（`layout.js` ↔ `js/layout.js`）逻辑一致；日常改动先落桌面端，**web 分支独立发布，在 web 发版前统一同步即可**，不要求每次改动即时同步
 - **坐标体系**: JS 端 top-down（y 向下），PDF 端 bottom-up（y 向上，PDF 标准），各自独立计算，**不做相互转换**
 
 ## 核心机制
@@ -278,7 +278,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 改动前自查，违反即引入 bug：
 
 1. 每页 slot 数一律 `getPerPage(s)`，禁止 `cols * rows`（所有分页计算点）
-2. 旋转适配改动必须同步：预览 renderPage / 拖拽约束 / setSlotAlignment / Rust 矩阵 / web 分支，共五处
+2. 旋转适配改动必须同步：预览 renderPage / 拖拽约束 / setSlotAlignment / Rust 矩阵（web 分支在同一轮 web 发版前同步）
 3. CPU 密集 IPC 命令必须 `async fn` + `spawn_blocking`
 4. 顶层变量用 `var`；被 `loadSettings()` 恢复的变量声明必须在调用点之前
 5. `defaultQuickLayouts()` 取深拷贝；空列表按 `Array.isArray` 恢复；不迁移旧默认布局
@@ -286,7 +286,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 7. 自动去重只删 `no:` key，`sum:` 仅标记
 8. 类型/格式筛选切换后必须重算勾选集合（`selectFilteredOnly()` / `applyFilterSelection()`）
 9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）
-10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）改动双向同步
+10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）逻辑保持一致，同步时机为 **web 发版前**，日常修复不必即时同步
 11. 新增 http 请求一律走 `build_http_agent()`；裸建 `ureq::AgentBuilder` 会丢 TLS 后端（见「关键踩坑」）
 
 ## Git 工作流
