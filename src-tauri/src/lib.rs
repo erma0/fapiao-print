@@ -573,23 +573,28 @@ fn fetch_releases_json(agent: &ureq::Agent, urls: &[String]) -> Result<serde_jso
 /// Returns update info including latest version, release notes, and download assets.
 /// Uses blocking ureq offloaded to the blocking thread pool.
 ///
-/// 更新渠道按当前安装版本自动分流（issue #58）：
-/// - 正式版（版本号无 `-`）：只查 `/releases/latest`，GitHub 该接口天然排除预发布，
-///   因此正式版用户不会收到测试版提示；
-/// - 测试版（版本号带 `-`，如 `2.6.16-beta.3`）：查 `/releases` 列表，按 semver 规则
-///   选出高于当前版本的最大者——既能收到更新的 beta，也能在同版本转正后提示正式版，
+/// 更新渠道按前端选择分流（设置→关于可切换，默认按安装版本，issue #58）：
+/// - `stable`：只查 `/releases/latest`，GitHub 该接口天然排除预发布，
+///   因此正式版渠道不会收到测试版提示；
+/// - `beta`：查 `/releases` 列表，按 semver 规则选出高于当前版本的最大者——
+///   既能收到更新的 beta，也能在同版本转正后提示正式版，
 ///   但绝不会把旧正式版（如 2.6.14）当成「新版本」。
+/// `channel` 未传时按安装版本判定（版本号含 `-` 即测试版）。
 ///
 /// 主备双源: 先尝试直连 api.github.com,失败后 fallback 到 gh-proxy.com 加速代理。
 /// 保证大陆网络环境下更新检查可用,网络通畅时直连最快。
 #[command]
-async fn check_for_updates() -> Result<UpdateInfo, String> {
+async fn check_for_updates(channel: Option<String>) -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<UpdateInfo, String> {
         let agent = build_http_agent(std::time::Duration::from_secs(15))?;
 
-        let is_beta_channel = current.contains('-');
+        let is_beta_channel = match channel.as_deref() {
+            Some("beta") => true,
+            Some("stable") => false,
+            _ => current.contains('-'),
+        };
         let path = if is_beta_channel {
             "/releases?per_page=20"
         } else {

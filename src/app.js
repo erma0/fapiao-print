@@ -2813,11 +2813,13 @@ async function ctxExportDiagnostics() {
   closeCtxMenu();
   if (!f) return;
   if (!isTauri || !invoke) { toast('诊断导出仅桌面版支持'); return; }
-  if (!f._filePath) { toast('该文件缺少本地路径，无法导出'); return; }
+  // PDF 页对象只有 _pdfPath（多页共享），图片/OFD 才有 _filePath
+  var srcPath = f._filePath || f._pdfPath;
+  if (!srcPath) { toast('该文件缺少本地路径，无法导出'); return; }
   try {
     toast('正在生成诊断报告...');
     var report = await invoke('export_diagnostics', {
-      files: [{ path: f._filePath, summary: buildDiagSummary(f) }],
+      files: [{ path: srcPath, summary: buildDiagSummary(f) }],
       exportedAt: new Date().toLocaleString('zh-CN')
     });
     var defaultDir = '';
@@ -5068,6 +5070,7 @@ async function exportSettings() {
   data.pdfTextEnabled = !!S.feat.pdfTextEnabled;
   data.ocrPrecision = S.ocrPrecision;
   data.saveDir = getSaveDir();
+  data.updateChannel = getUpdateChannel();
   var json = JSON.stringify(data, null, 2);
   if (isTauri && invoke) {
     try {
@@ -5144,7 +5147,7 @@ async function importSettings() {
   }
   if (!confirm('导入将覆盖当前全部设置与本地记忆（已打印标记 / 文件列表 / 单票调整 / 备注），并重新加载界面，确认继续？')) return;
   // 设置主体写回 ticketchan-settings；独立存储的偏好项写回各自的 key
-  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir'];
+  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir', 'updateChannel'];
   var settings = {};
   Object.keys(data).forEach(function(k) { if (extraKeys.indexOf(k) < 0) settings[k] = data[k]; });
   _importingSettings = true; // 写入期间起锁：清挂起的防抖保存 + 拦截重载窗口内新触发的自动保存
@@ -5156,6 +5159,7 @@ async function importSettings() {
     if (typeof data.pdfTextEnabled === 'boolean') localStorage.setItem('ticketchan-pdf-text-enabled', data.pdfTextEnabled ? '1' : '0');
     if (data.ocrPrecision === 'fast' || data.ocrPrecision === 'standard' || data.ocrPrecision === 'precise') localStorage.setItem('ticketchan-ocr-precision', data.ocrPrecision);
     if (typeof data.saveDir === 'string') localStorage.setItem('ticketchan-save-dir', data.saveDir);
+    if (data.updateChannel === 'stable' || data.updateChannel === 'beta') localStorage.setItem('ticketchan-update-channel', data.updateChannel);
   } catch(e) {
     _importingSettings = false; // 写入失败解锁，恢复自动保存
     toast('导入失败: ' + e);
@@ -5295,6 +5299,8 @@ function resetSettings(scope) {
   try { localStorage.removeItem('ticketchan-ocr-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-ocr-precision'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
+  try { localStorage.removeItem('ticketchan-update-channel'); } catch(e) {}
+  syncUpdateChannelUI();
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-print-mode'); } catch(e) {}
   _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
@@ -5689,25 +5695,51 @@ var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
 var _UPDATE_IGNORE_ALL_KEY = 'ticketchan-update-ignore-all';
 var _updateChecking = false;
 var _lastUpdateInfo = null;
+var _UPDATE_CHANNEL_KEY = 'ticketchan-update-channel';
 
-/**
- * 更新渠道由安装版本自动决定：版本号带预发布后缀（如 2.6.16-beta.3）即测试版。
- * 正式版只查 GitHub /releases/latest（不含预发布）；测试版查完整 release 列表，
- * 按 semver 取高于当前版本的最大者——避免旧正式版被当成新版本提示（issue #58）。
- */
-function getUpdateChannel() {
+/** 安装版本的默认渠道：版本号带预发布后缀（如 2.6.16-beta.3）即测试版 */
+function getDefaultUpdateChannel() {
   return APP_VERSION.indexOf('-') >= 0 ? 'beta' : 'stable';
 }
 
+/**
+ * 当前使用的更新渠道：设置→关于可手动切换并持久化，未选择时按安装版本。
+ * 正式版渠道只查 GitHub /releases/latest（不含预发布）；
+ * 测试版渠道查完整 release 列表，按 semver 取高于当前版本的最大者——
+ * 避免旧正式版被当成新版本提示（issue #58）。
+ */
+function getUpdateChannel() {
+  try {
+    var saved = localStorage.getItem(_UPDATE_CHANNEL_KEY);
+    if (saved === 'stable' || saved === 'beta') return saved;
+  } catch(e) {}
+  return getDefaultUpdateChannel();
+}
+
+function setUpdateChannel(v) {
+  if (v !== 'stable' && v !== 'beta') return;
+  try { localStorage.setItem(_UPDATE_CHANNEL_KEY, v); } catch(e) {}
+  // 渠道变了旧检查结果不再适用
+  try { localStorage.removeItem(_UPDATE_CACHE_KEY); } catch(e) {}
+  syncUpdateChannelUI();
+  toast(v === 'beta' ? '已切换到测试版更新渠道' : '已切换到正式版更新渠道', 2500);
+}
+
 function syncUpdateChannelUI() {
-  var isBeta = getUpdateChannel() === 'beta';
+  var ch = getUpdateChannel();
+  var sel = document.getElementById('updateChannel');
+  if (sel) sel.value = ch;
+  // 徽章标示「安装的版本类型」，与可切换的检查渠道相互独立
+  var isBetaInstall = getDefaultUpdateChannel() === 'beta';
   var badge = document.getElementById('prefsChannelBadge');
   if (badge) {
-    badge.textContent = isBeta ? '测试版' : '正式版';
-    badge.classList.toggle('beta', isBeta);
+    badge.textContent = isBetaInstall ? '测试版' : '正式版';
+    badge.classList.toggle('beta', isBetaInstall);
   }
   var desc = document.getElementById('prefsChannelDesc');
-  if (desc) desc.textContent = isBeta ? '测试版（beta + 正式版）' : '正式版（仅稳定版本）';
+  if (desc) desc.textContent = ch === 'beta'
+    ? '检查测试版与正式版中版本更高的一个；正式版用户不会收到测试版提示'
+    : '只检查稳定版本，不会收到测试版更新提示';
 }
 
 function getIgnoredUpdateVersion() {
@@ -5738,14 +5770,14 @@ function checkForUpdates(silent) {
   _updateChecking = true;
 
   // Silent auto-check: respect cache TTL to avoid rate limits.
-  // 缓存必须属于当前版本（data.ver）：升级后旧缓存的 has_update 是对旧版本算的，
-  // 沿用会导致已升级用户被误弹"发现新版本"（issue #30）
+  // 缓存必须属于当前版本（data.ver）与当前渠道（data.channel）：升级或切换渠道后
+  // 旧缓存的 has_update 是针对旧状态算的，沿用会导致误弹/漏弹
   if (silent) {
     try {
       var cached = localStorage.getItem(_UPDATE_CACHE_KEY);
       if (cached) {
         var data = JSON.parse(cached);
-        if (data.ver === APP_VERSION && Date.now() - data.ts < _UPDATE_CACHE_TTL) {
+        if (data.ver === APP_VERSION && data.channel === getUpdateChannel() && Date.now() - data.ts < _UPDATE_CACHE_TTL) {
           _updateChecking = false;
           if (shouldAutoShowUpdate(data.info)) {
             showUpdateModal(data.info);
@@ -5758,11 +5790,11 @@ function checkForUpdates(silent) {
 
   if (!silent) toast('正在检查更新...', 1500);
 
-  invoke('check_for_updates').then(function(info) {
+  invoke('check_for_updates', { channel: getUpdateChannel() }).then(function(info) {
     _updateChecking = false;
     // Cache result for silent auto-check
     try {
-      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: APP_VERSION, info: info }));
+      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: APP_VERSION, channel: getUpdateChannel(), info: info }));
     } catch(e) {}
 
     if (info.has_update) {
@@ -5771,7 +5803,7 @@ function checkForUpdates(silent) {
         showUpdateModal(info);
       }
     } else if (!silent) {
-      toast((getUpdateChannel() === 'beta' ? '已是最新测试版 v' : '已是最新版本 v') + info.current_version, 2500);
+      toast((getDefaultUpdateChannel() === 'beta' ? '已是最新测试版 v' : '已是最新版本 v') + info.current_version, 2500);
     }
   }).catch(function(err) {
     _updateChecking = false;
