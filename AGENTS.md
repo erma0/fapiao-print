@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.6.16-beta.6（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.6.16-beta.7（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -52,7 +52,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 关键分层约定：
 
 - **预览与导出必须语义一致**：预览（CSS）与 PDF 生成（Rust/web）对旋转、缩放、偏移、适配的计算公式互为镜像，任何一方改动必须同步另一方（见「旋转与适配语义」）
-- **桌面/web 双分支同步**：字段提取（`ocr.js` ↔ `js/pdf-text.js`）、预览布局（`layout.js` ↔ `js/layout.js`）逻辑一致；日常改动先落桌面端，**web 分支独立发布，在 web 发版前统一同步即可**，不要求每次改动即时同步
+- **桌面/web 双分支同步**：字段提取（`ocr.js` ↔ `js/pdf-text.js`）、预览布局（`layout.js` ↔ `js/layout.js`）逻辑一致；日常改动先落桌面端，**桌面端 release 前同步到 web 分支一次，web 端可随该轮一起发新版**，日常修复不必即时同步
 - **坐标体系**: JS 端 top-down（y 向下），PDF 端 bottom-up（y 向上，PDF 标准），各自独立计算，**不做相互转换**
 
 ## 核心机制
@@ -278,7 +278,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 改动前自查，违反即引入 bug：
 
 1. 每页 slot 数一律 `getPerPage(s)`，禁止 `cols * rows`（所有分页计算点）
-2. 旋转适配改动必须同步：预览 renderPage / 拖拽约束 / setSlotAlignment / Rust 矩阵（web 分支在同一轮 web 发版前同步）
+2. 旋转适配改动必须同步：预览 renderPage / 拖拽约束 / setSlotAlignment / Rust 矩阵（web 分支在桌面端 release 前同步）
 3. CPU 密集 IPC 命令必须 `async fn` + `spawn_blocking`
 4. 顶层变量用 `var`；被 `loadSettings()` 恢复的变量声明必须在调用点之前
 5. `defaultQuickLayouts()` 取深拷贝；空列表按 `Array.isArray` 恢复；不迁移旧默认布局
@@ -286,7 +286,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 7. 自动去重只删 `no:` key，`sum:` 仅标记
 8. 类型/格式筛选切换后必须重算勾选集合（`selectFilteredOnly()` / `applyFilterSelection()`）
 9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）
-10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）逻辑保持一致，同步时机为 **web 发版前**，日常修复不必即时同步
+10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）逻辑保持一致，同步时机为 **桌面端 release 前**，日常修复不必即时同步
 11. 新增 http 请求一律走 `build_http_agent()`；裸建 `ureq::AgentBuilder` 会丢 TLS 后端（见「关键踩坑」）
 
 ## Git 工作流
@@ -310,4 +310,5 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 1. **README.md**：功能描述、技术栈版本与当前版本一致
 2. **CHANGELOG.md**：新版本更新日志（新功能/修复/优化/依赖变更）
 3. **AGENTS.md**：版本号、架构要点（如有变更）
-4. **其他文档**：新增配置/命令/架构变更同步更新
+4. **web 分支**：把桌面端自上次同步以来的识别 / 布局改动同步到 `web`，web 端可随该轮一起发新版
+5. **其他文档**：新增配置/命令/架构变更同步更新
