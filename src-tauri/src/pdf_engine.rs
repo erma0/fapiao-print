@@ -1663,8 +1663,92 @@ pub fn extract_pdf_texts(pdf_path: &str, page_indices: &[u32]) -> Result<std::co
     Ok(map)
 }
 
+fn pdf_resource_dict<'a>(doc: &'a lopdf::Document, object: &'a lopdf::Object) -> Option<&'a lopdf::Dictionary> {
+    doc.dereference(object).ok()?.1.as_dict().ok()
+}
+
+/// 在 Do 的原位置展开 Form，保留父 CTM、重复绘制和嵌套 Resources。
+/// 字体名只在各自 Resources 内有效，展开时重命名以免不同 Form 的 /F1 相互覆盖。
+fn expand_pdf_text_content<'a>(
+    doc: &'a lopdf::Document,
+    operations: &[lopdf::content::Operation],
+    resources: Option<&'a lopdf::Dictionary>,
+    fonts: &mut std::collections::BTreeMap<Vec<u8>, &'a lopdf::Dictionary>,
+) -> Result<lopdf::content::Content, String> {
+    use lopdf::{content::Operation, Object};
+
+    fn expand<'a>(
+        doc: &'a lopdf::Document,
+        operations: &[Operation],
+        resources: Option<&'a lopdf::Dictionary>,
+        scope: usize,
+        next_scope: &mut usize,
+        fonts: &mut std::collections::BTreeMap<Vec<u8>, &'a lopdf::Dictionary>,
+        active: &mut Vec<lopdf::ObjectId>,
+        depth: usize,
+        output: &mut Vec<Operation>,
+    ) -> Result<(), String> {
+        if depth > 32 { return Err("PDF Form嵌套层数过多".into()); }
+        let mut aliases = std::collections::BTreeMap::new();
+        if let Some(font_dict) = resources.and_then(|r| r.get(b"Font").ok()).and_then(|o| pdf_resource_dict(doc, o)) {
+            for (name, font) in font_dict.iter() {
+                if let Some(font) = pdf_resource_dict(doc, font) {
+                    let mut alias = format!("__text_{}_", scope).into_bytes();
+                    alias.extend_from_slice(name);
+                    fonts.insert(alias.clone(), font);
+                    aliases.insert(name.clone(), alias);
+                }
+            }
+        }
+        let xobjects = resources.and_then(|r| r.get(b"XObject").ok()).and_then(|o| pdf_resource_dict(doc, o));
+        for op in operations {
+            if output.len() >= 1_000_000 { return Err("PDF展开内容过大".into()); }
+            if op.operator == "Do" {
+                let object = op.operands.first().and_then(|o| o.as_name().ok())
+                    .and_then(|name| xobjects.and_then(|x| x.get(name).ok()));
+                if let Some(object) = object {
+                    let (id, resolved) = doc.dereference(object).map_err(|e| format!("PDF Form引用失败: {}", e))?;
+                    if let Ok(stream) = resolved.as_stream() {
+                        if stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form") {
+                            if id.is_some_and(|id| active.contains(&id)) { return Err("PDF Form循环引用".into()); }
+                            if let Some(id) = id { active.push(id); }
+                            let bytes = stream.get_plain_content().map_err(|e| format!("PDF Form解压失败: {}", e))?;
+                            let fixed_bytes = escape_backslashes_in_literal_strings(&bytes);
+                            let content = lopdf::content::Content::decode(&fixed_bytes).map_err(|e| format!("PDF Form解码失败: {}", e))?;
+                            output.push(Operation::new("q", vec![]));
+                            if let Ok(matrix) = stream.dict.get(b"Matrix").and_then(Object::as_array) {
+                                if matrix.len() == 6 { output.push(Operation::new("cm", matrix.clone())); }
+                            }
+                            let form_resources = stream.dict.get(b"Resources").ok()
+                                .and_then(|o| pdf_resource_dict(doc, o)).or(resources);
+                            *next_scope += 1;
+                            expand(doc, &content.operations, form_resources, *next_scope, next_scope, fonts, active, depth + 1, output)?;
+                            output.push(Operation::new("Q", vec![]));
+                            if id.is_some() { active.pop(); }
+                            continue;
+                        }
+                    }
+                }
+            }
+            let mut op = op.clone();
+            if op.operator == "Tf" {
+                if let Some(Object::Name(name)) = op.operands.first_mut() {
+                    if let Some(alias) = aliases.get(name) { *name = alias.clone(); }
+                }
+            }
+            output.push(op);
+        }
+        Ok(())
+    }
+
+    let mut output = Vec::new();
+    let mut next_scope = 0;
+    expand(doc, operations, resources, 0, &mut next_scope, fonts, &mut Vec::new(), 0, &mut output)?;
+    Ok(lopdf::content::Content { operations: output })
+}
+
 /// Helper function to extract text from a single page of an already-loaded PDF document.
-fn extract_pdf_text_from_doc(doc: &lopdf::Document, pdf_path: &str, page_idx: u32) -> Result<PdfTextResult, String> {
+fn extract_pdf_text_from_doc(doc: &lopdf::Document, _pdf_path: &str, page_idx: u32) -> Result<PdfTextResult, String> {
     use lopdf::Object;
 
     let pages: std::collections::BTreeMap<u32, lopdf::ObjectId> = doc.get_pages();
@@ -1727,313 +1811,29 @@ fn extract_pdf_text_from_doc(doc: &lopdf::Document, pdf_path: &str, page_idx: u3
         parse_cmap(&content)
     }
 
-    // Step 1: Load fonts from page-level Resources
-    let page_fonts = doc.get_page_fonts(page_id).unwrap_or_default();
-    for (name, font_dict) in &page_fonts {
-        // Record the raw Encoding name for GBK/CJK decoding fallback
-        if let Ok(enc_name) = font_dict.get(b"Encoding").and_then(|e| e.as_name().map(|n| n.to_vec())) {
-            font_encoding_names.insert(name.clone(), enc_name);
+    // Resources 是页面树继承属性；取最近一层，兼容父节点内联字典。
+    let mut node_id = page_id;
+    let mut visited = std::collections::HashSet::new();
+    let resources = loop {
+        if !visited.insert(node_id) { return Err("PDF页面树循环引用".into()); }
+        let node = doc.get_dictionary(node_id).map_err(|e| format!("PDF页面资源读取失败: {}", e))?;
+        if let Ok(object) = node.get(b"Resources") { break pdf_resource_dict(doc, object); }
+        match node.get(b"Parent").and_then(Object::as_reference) {
+            Ok(parent) => node_id = parent,
+            Err(_) => break None,
         }
-        // Try lopdf's get_font_encoding first (handles WinAnsi, Identity-H→CMap, etc.)
-        if let Ok(enc) = font_dict.get_font_encoding(&doc) {
-            lopdf_encodings.insert(name.clone(), enc);
-        }
-        // Also try our own CMap parser (works for all CID fonts with ToUnicode)
-        if let Some(cmap) = load_cmap_from_font(&doc, font_dict) {
-            tounicode_cmaps.insert(name.clone(), cmap);
-        }
-    }
-
-    // Step 2: Look for Form XObjects and load fonts from their embedded Resources.
-    // IMPORTANT: We must ALWAYS scan Form XObjects, not just when page-level fonts are empty.
-    // Many PDFs (e.g., dzcp-format VAT invoices) have page-level label text (STKaiti fonts for
-    // "名称:", "统一社会信用代码/" etc.) AND Form XObjects containing the actual values
-    // (company names in SimSun, credit codes in CourierNew, amounts, etc.).
-    // If we skip Form XObject font loading when page-level fonts exist, the value text
-    // in Form XObjects can't be decoded and is silently lost.
-    let mut form_xobject_ids: Vec<lopdf::ObjectId> = Vec::new();
-    {
-        if let Ok(page_dict) = doc.get_dictionary(page_id) {
-            if let Ok(resources) = page_dict.get(b"Resources") {
-                let resolved_res = match resources {
-                    lopdf::Object::Reference(id) => doc.get_dictionary(*id).ok(),
-                    _ => resources.as_dict().ok(),
-                };
-                if let Some(res_dict) = resolved_res {
-                    // Check XObject dictionary for Form XObjects
-                    if let Ok(xobj_val) = res_dict.get(b"XObject") {
-                        let resolved_xobj = match xobj_val {
-                            lopdf::Object::Reference(id) => doc.get_dictionary(*id).ok(),
-                            _ => xobj_val.as_dict().ok(),
-                        };
-                        if let Some(xobj_dict) = resolved_xobj {
-                            for (_xobj_name, xobj_ref) in xobj_dict.iter() {
-                                let xobj_id = match xobj_ref {
-                                    lopdf::Object::Reference(id) => Some(*id),
-                                    _ => None,
-                                };
-                                if let Some(id) = xobj_id {
-                                    if let Ok(obj) = doc.get_object(id) {
-                                        if let Ok(stream) = obj.as_stream() {
-                                            // Check if this is a Form XObject
-                                            let subtype = stream.dict.get(b"Subtype")
-                                                .and_then(|s| s.as_name()).ok();
-                                            if subtype == Some(b"Form") {
-                                                form_xobject_ids.push(id);
-                                                // Get fonts from Form XObject's Resources
-                                                // Only load fonts that aren't already in the page-level set
-                                                if let Ok(form_res) = stream.dict.get(b"Resources") {
-                                                    let resolved_form_res = match form_res {
-                                                        lopdf::Object::Reference(rid) => doc.get_dictionary(*rid).ok(),
-                                                        _ => form_res.as_dict().ok(),
-                                                    };
-                                                    if let Some(form_res_dict) = resolved_form_res {
-                                                        if let Ok(form_font_dict) = form_res_dict.get(b"Font") {
-                                                            let resolved_fonts = match form_font_dict {
-                                                                lopdf::Object::Reference(rid) => doc.get_dictionary(*rid).ok(),
-                                                                _ => form_font_dict.as_dict().ok(),
-                                                            };
-                                                            if let Some(fonts_dict) = resolved_fonts {
-                                                                for (fname, fref) in fonts_dict.iter() {
-                                                                    // Skip if this font name is already loaded from page-level
-                                                                    if lopdf_encodings.contains_key(fname) && tounicode_cmaps.contains_key(fname) {
-                                                                        continue;
-                                                                    }
-                                                                    let font_dict = match fref {
-                                                                        lopdf::Object::Reference(fid) => doc.get_dictionary(*fid).ok(),
-                                                                        lopdf::Object::Dictionary(d) => Some(d),
-                                                                        _ => None,
-                                                                    };
-                                                                    if let Some(fd) = font_dict {
-                                                                        // Record raw Encoding name for GBK/CJK fallback
-                                                                        if let Ok(enc_name) = fd.get(b"Encoding").and_then(|e| e.as_name().map(|n| n.to_vec())) {
-                                                                            font_encoding_names.insert(fname.clone(), enc_name);
-                                                                        }
-                                                                        if !lopdf_encodings.contains_key(fname) {
-                                                                            if let Ok(enc) = fd.get_font_encoding(&doc) {
-                                                                                lopdf_encodings.insert(fname.clone(), enc);
-                                                                            }
-                                                                        }
-                                                                        if !tounicode_cmaps.contains_key(fname) {
-                                                                            if let Some(cmap) = load_cmap_from_font(&doc, fd) {
-                                                                                tounicode_cmaps.insert(fname.clone(), cmap);
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Debug: write log file
-    let _debug_log_path = std::env::temp_dir().join("ticketchan_text_extract_debug.txt");
-    let mut _debug_log = String::new();
-    _debug_log.push_str(&format!("PDF: {}, page: {}\n", pdf_path, page_idx));
-    _debug_log.push_str(&format!("LopdfEncodings: {}, CMaps: {}, FormXObjs: {}\n",
-        lopdf_encodings.len(), tounicode_cmaps.len(), form_xobject_ids.len()));
-    let _ = std::fs::write(&_debug_log_path, &_debug_log);
-
-    log::info!("PDF文本提取: {} lopdf encodings, {} ToUnicode CMaps, {} Form XObjects",
-        lopdf_encodings.len(), tounicode_cmaps.len(), form_xobject_ids.len());
-
-    // Get the content stream to parse
-    // IMPORTANT: Always expand Form XObject content streams when they exist.
-    // Many PDFs (e.g., dzcp-format invoices) have both page-level label text AND
-    // Form XObjects containing the actual values (company names, amounts, credit codes).
-    // We must append Form XObject text operations AFTER the page-level text operations,
-    // so that both labels and values are extracted.
+    };
     let page_content = doc.get_and_decode_page_content(page_id)
         .map_err(|e| format!("PDF内容流解码失败: {}", e))?;
-
-    // Build a mapping: XObject name → Form XObject ObjectId
-    // This is needed to match "Do" operations in the page content to their Form XObjects.
-    let mut xobj_name_to_id: std::collections::HashMap<Vec<u8>, lopdf::ObjectId> = std::collections::HashMap::new();
-    {
-        if let Ok(page_dict) = doc.get_dictionary(page_id) {
-            if let Ok(resources) = page_dict.get(b"Resources") {
-                let resolved_res = match resources {
-                    lopdf::Object::Reference(id) => doc.get_dictionary(*id).ok(),
-                    _ => resources.as_dict().ok(),
-                };
-                if let Some(res_dict) = resolved_res {
-                    if let Ok(xobj_val) = res_dict.get(b"XObject") {
-                        let resolved_xobj = match xobj_val {
-                            lopdf::Object::Reference(id) => doc.get_dictionary(*id).ok(),
-                            _ => xobj_val.as_dict().ok(),
-                        };
-                        if let Some(xobj_dict) = resolved_xobj {
-                            for (xobj_name, xobj_ref) in xobj_dict.iter() {
-                                if let lopdf::Object::Reference(id) = xobj_ref {
-                                    xobj_name_to_id.insert(xobj_name.clone(), *id);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    let mut fonts = std::collections::BTreeMap::new();
+    let content = expand_pdf_text_content(doc, &page_content.operations, resources, &mut fonts)?;
+    for (name, font_dict) in fonts {
+        if let Ok(enc_name) = font_dict.get(b"Encoding").and_then(Object::as_name) {
+            font_encoding_names.insert(name.clone(), enc_name.to_vec());
         }
+        if let Ok(enc) = font_dict.get_font_encoding(doc) { lopdf_encodings.insert(name.clone(), enc); }
+        if let Some(cmap) = load_cmap_from_font(doc, font_dict) { tounicode_cmaps.insert(name, cmap); }
     }
-
-    // Scan the page content to find cm operations that precede Do operations for Form XObjects.
-    // Pattern: q [cm] /Name Do Q
-    // We record the cm parameters for each Form XObject name so we can apply them when
-    // processing the Form XObject's content.
-    let mut form_cm_params: std::collections::HashMap<Vec<u8>, [f64; 6]> = std::collections::HashMap::new();
-    {
-        let ops = &page_content.operations;
-        let mut i = 0;
-        while i < ops.len() {
-            // Look for "Do" operations
-            if ops[i].operator == "Do" {
-                if let Some(name_obj) = ops[i].operands.first() {
-                    if let lopdf::Object::Name(name) = name_obj {
-                        // Check if this Do references a Form XObject
-                        if xobj_name_to_id.contains_key(name) {
-                            // Look backwards for a preceding "cm" operation (skip "q" if present)
-                            let j = if i > 0 && ops[i - 1].operator == "cm" { i - 1 }
-                                        else if i > 1 && ops[i - 1].operator == "q" && ops[i - 2].operator == "cm" { i - 2 }
-                                        else { i };
-                            if j < i && ops[j].operator == "cm" && ops[j].operands.len() == 6 {
-                                let params: Vec<f64> = ops[j].operands.iter().map(|o| match o {
-                                    lopdf::Object::Real(r) => *r as f64,
-                                    lopdf::Object::Integer(n) => *n as f64,
-                                    _ => 0.0,
-                                }).collect();
-                                form_cm_params.insert(name.clone(), [params[0], params[1], params[2], params[3], params[4], params[5]]);
-                                log::info!("PDF文本提取: Form XObject {:?} 的页面级cm: {:?}", String::from_utf8_lossy(name), params);
-                            }
-                        }
-                    }
-                }
-            }
-            i += 1;
-        }
-    }
-
-    let content = if !form_xobject_ids.is_empty() {
-        // Build combined content: page operations (with Do/cm/q/Q for Form XObjects removed)
-        // followed by Form XObject content wrapped in q/cm/[content]/Q.
-        let mut combined_ops: Vec<lopdf::content::Operation> = Vec::new();
-        let ops = &page_content.operations;
-        let mut i = 0;
-        while i < ops.len() {
-            let op = &ops[i];
-            // Detect patterns: q? cm? /Name Do Q? — skip them from page content
-            // and we'll insert Form XObject content separately after page content.
-            if op.operator == "Do" {
-                if let Some(name_obj) = op.operands.first() {
-                    if let lopdf::Object::Name(name) = name_obj {
-                        if xobj_name_to_id.contains_key(name) {
-                            // This Do references a Form XObject — skip it.
-                            // Also skip preceding q/cm and following Q.
-                            // Remove preceding q and cm if they were for this Do.
-                            if combined_ops.len() >= 2 {
-                                let last2 = &combined_ops[combined_ops.len() - 2..];
-                                if last2[0].operator == "cm" && last2[1].operator == "q" {
-                                    combined_ops.truncate(combined_ops.len() - 2);
-                                } else if last2[1].operator == "cm" {
-                                    combined_ops.truncate(combined_ops.len() - 1);
-                                } else if combined_ops.last().map_or(false, |o| o.operator == "q") {
-                                    combined_ops.truncate(combined_ops.len() - 1);
-                                }
-                            }
-                            // Skip following Q if present
-                            if i + 1 < ops.len() && ops[i + 1].operator == "Q" {
-                                i += 1;
-                            }
-                            i += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-            combined_ops.push(op.clone());
-            i += 1;
-        }
-
-        // Now append Form XObject content with proper cm transformations.
-        // For each Form XObject, insert: q [page_cm] [form_matrix_cm] [content] Q
-        for fxobj_id in &form_xobject_ids {
-            if let Ok(obj) = doc.get_object(*fxobj_id) {
-                if let Ok(stream) = obj.as_stream() {
-                    // Find the XObject name for this Form XObject (to look up page-level cm)
-                    let fxobj_name = xobj_name_to_id.iter()
-                        .find(|(_, id)| *id == fxobj_id)
-                        .map(|(name, _)| name.clone());
-
-                    // Insert q (save graphics state)
-                    combined_ops.push(lopdf::content::Operation {
-                        operator: "q".into(),
-                        operands: vec![],
-                    });
-
-                    // Insert page-level cm (from the page content, before the Do)
-                    if let Some(ref name) = fxobj_name {
-                        if let Some(cm) = form_cm_params.get(name) {
-                            // Only insert if not identity
-                            if !(cm[0] == 1.0 && cm[1] == 0.0 && cm[2] == 0.0 && cm[3] == 1.0 && cm[4] == 0.0 && cm[5] == 0.0) {
-                                combined_ops.push(lopdf::content::Operation {
-                                    operator: "cm".into(),
-                                    operands: cm.iter().map(|&v| lopdf::Object::Real(v as f32)).collect(),
-                                });
-                            }
-                        }
-                    }
-
-                    // Insert Form XObject's Matrix as cm (if not identity)
-                    let form_matrix: [f64; 6] = stream.dict.get(b"Matrix")
-                        .and_then(|m| m.as_array())
-                        .map(|arr| {
-                            let vals: Vec<f64> = arr.iter().map(|o| match o {
-                                lopdf::Object::Real(r) => *r as f64,
-                                lopdf::Object::Integer(n) => *n as f64,
-                                _ => 0.0,
-                            }).collect();
-                            if vals.len() == 6 { [vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]] }
-                            else { [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
-                        })
-                        .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-
-                    if !(form_matrix[0] == 1.0 && form_matrix[1] == 0.0 && form_matrix[2] == 0.0 && form_matrix[3] == 1.0 && form_matrix[4] == 0.0 && form_matrix[5] == 0.0) {
-                        combined_ops.push(lopdf::content::Operation {
-                            operator: "cm".into(),
-                            operands: form_matrix.iter().map(|&v| lopdf::Object::Real(v as f32)).collect(),
-                        });
-                        log::info!("PDF文本提取: Form XObject Matrix: {:?}", form_matrix);
-                    }
-
-                    // Append Form XObject content
-                    if let Ok(decompressed) = stream.decompressed_content() {
-                        let fixed_bytes = escape_backslashes_in_literal_strings(&decompressed);
-                        if let Ok(form_content) = lopdf::content::Content::decode(&fixed_bytes) {
-                            combined_ops.extend(form_content.operations);
-                        }
-                    }
-
-                    // Insert Q (restore graphics state)
-                    combined_ops.push(lopdf::content::Operation {
-                        operator: "Q".into(),
-                        operands: vec![],
-                    });
-                }
-            }
-        }
-        lopdf::content::Content { operations: combined_ops }
-    } else {
-        page_content
-    };
 
     // Check if content stream has any text operations (BT...ET with Tj/TJ)
     let has_text_ops = content.operations.iter().any(|op| {
@@ -2125,16 +1925,7 @@ fn extract_pdf_text_from_doc(doc: &lopdf::Document, pdf_path: &str, page_idx: u3
                 let m: [f64; 6] = op.operands.iter().map(|o| match o {
                     Object::Real(r) => *r as f64, Object::Integer(n) => *n as f64, _ => 0.0
                 }).collect::<Vec<_>>().try_into().unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-                let [a1, b1, c1, d1, e1, f1] = ctm;
-                let [a2, b2, c2, d2, e2, f2] = m;
-                ctm = [
-                    a1*a2 + b1*c2,  // new_a
-                    a1*b2 + b1*d2,  // new_b
-                    c1*a2 + d1*c2,  // new_c
-                    c1*b2 + d1*d2,  // new_d
-                    e1*a2 + f1*c2 + e2, // new_e
-                    e1*b2 + f1*d2 + f2, // new_f
-                ];
+                ctm = concat_pdf_matrix(&ctm, &m);
                 log::debug!("PDF文本提取: cm操作 [{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}], CTM更新为 [{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}]",
                     m[0], m[1], m[2], m[3], m[4], m[5],
                     ctm[0], ctm[1], ctm[2], ctm[3], ctm[4], ctm[5]);
@@ -2169,8 +1960,6 @@ fn extract_pdf_text_from_doc(doc: &lopdf::Document, pdf_path: &str, page_idx: u3
                         _ => {}
                     }
                 }
-                // Use vertical scale d for font size (more reliable than a)
-                if tm[3] > 1.0 { font_size = tm[3]; }
                 off_x = 0.0;
                 off_y = 0.0;
                 line_start_off_x = 0.0;
@@ -2289,15 +2078,14 @@ fn extract_pdf_text_from_doc(doc: &lopdf::Document, pdf_path: &str, page_idx: u3
     })
 }
 
-/// Create a PdfTextWord with coordinate conversion (PDF pt → frontend px).
-/// PDF coordinates: origin bottom-left, y-up.
-/// Frontend coordinates: origin top-left, y-down.
-/// Apply CTM (Current Transformation Matrix) to a point.
-/// CTM = [a, b, c, d, e, f] represents:
-///   | a  b  0 |
-///   | c  d  0 |
-///   | e  f  1 |
-/// Transform: x' = a*x + c*y + e, y' = b*x + d*y + f
+/// 列向量表示：先应用 matrix，再应用当前 CTM（PDF cm 的拼接顺序）。
+fn concat_pdf_matrix(ctm: &[f64; 6], matrix: &[f64; 6]) -> [f64; 6] {
+    let [a, b, c, d, e, f] = *ctm;
+    let [g, h, i, j, k, l] = *matrix;
+    [a*g + c*h, b*g + d*h, a*i + c*j, b*i + d*j, a*k + c*l + e, b*k + d*l + f]
+}
+
+/// Transform: x' = a*x + c*y + e, y' = b*x + d*y + f.
 fn apply_ctm(ctm: &[f64; 6], x: f64, y: f64) -> (f64, f64) {
     let [a, b, c, d, e, f] = *ctm;
     (a * x + c * y + e, b * x + d * y + f)
@@ -2310,19 +2098,31 @@ fn make_word(text: &str, ctm: &[f64; 6], tm: &[f64; 6], off_x: f64, off_y: f64,
     let tx_pt = tm[0] * off_x + tm[2] * off_y + tm[4];
     let ty_pt = tm[1] * off_x + tm[3] * off_y + tm[5];
     let (px, py) = apply_ctm(ctm, tx_pt, ty_pt);
-    let w = approximate_text_width(text, font_size) * scale;
-    let h = font_size * scale;
-    // Convert: frontend_y = (content_top - pdf_y - font_size) * scale
-    // The y in PDF is the baseline; the top of the glyph is approximately at y + font_size
-    // content_top = 有效盒顶边（CropBox 场景下 ≠ MediaBox 高，见调用处）
-    let fx = (px - crop_x1) * scale;
-    let fy = (content_top - py - font_size) * scale;
+    // 字号在文本空间内；宽高也要经过 Tm/CTM，不能只变换基线或用 Tm.d 替代 Tf。
+    // 对四角求包围盒，兼容缩放、翻转和旋转；content_top 为 CropBox 顶边。
+    let linear = concat_pdf_matrix(ctm, tm);
+    let width = approximate_text_width(text, font_size);
+    let corners = [(0.0, 0.0), (width, 0.0), (0.0, font_size), (width, font_size)];
+    let mut min_x = px;
+    let mut max_x = px;
+    let mut min_y = py;
+    let mut max_y = py;
+    for (x, y) in corners {
+        let corner_x = px + linear[0] * x + linear[2] * y;
+        let corner_y = py + linear[1] * x + linear[3] * y;
+        min_x = min_x.min(corner_x);
+        max_x = max_x.max(corner_x);
+        min_y = min_y.min(corner_y);
+        max_y = max_y.max(corner_y);
+    }
+    let fx = (min_x - crop_x1) * scale;
+    let fy = (content_top - max_y) * scale;
     PdfTextWord {
         text: text.to_string(),
         x: fx,
         y: fy.max(0.0),
-        w,
-        h,
+        w: (max_x - min_x) * scale,
+        h: (max_y - min_y) * scale,
     }
 }
 
@@ -7685,7 +7485,8 @@ mod pdf_text_tests {
         let w = make_word("开", &ctm, &tm, 73.0, -511.0, 12.0, 842.0, 0.0, 4.1667);
         // 文本空间点 = (73, 511)（Tm 翻转 y）→ device = (54.75, 458.75)
         assert!((w.x - 54.75 * 4.1667).abs() < 0.1);
-        assert!((w.y - (842.0 - 458.75 - 12.0) * 4.1667).abs() < 1.0, "y={}", w.y);
+        assert!((w.y - (842.0 - 458.75 - 9.0) * 4.1667).abs() < 1.0, "y={}", w.y);
+        assert!((w.h - 9.0 * 4.1667).abs() < 0.1);
     }
 
     /// 常规场景：Tm 全量定位（a=d=1，e/f 即位置），off 为零
@@ -7705,5 +7506,106 @@ mod pdf_text_tests {
         let tm = [1.0, 0.0, 0.0, 1.0, 50.0, 700.0];
         let w = make_word("票", &ctm, &tm, 0.0, 0.0, 10.0, 842.0, 30.0, 1.0);
         assert!((w.x - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cm_translation_in_scaled_rotated_space() {
+        let parent = [0.0, -2.0, 3.0, 0.0, 10.0, 20.0];
+        let translated = concat_pdf_matrix(&parent, &[1.0, 0.0, 0.0, 1.0, 4.0, 5.0]);
+        assert_eq!(apply_ctm(&translated, 6.0, 7.0), (46.0, 0.0));
+    }
+
+    #[test]
+    fn test_make_word_rotated_scaled_bounds() {
+        let w = make_word("票", &[0.0, -2.0, 3.0, 0.0, 10.0, 20.0],
+            &[0.5, 0.0, 0.0, 0.5, 4.0, 5.0], 0.0, 0.0, 12.0, 100.0, 0.0, 1.0);
+        assert_eq!((w.x, w.y, w.w, w.h), (25.0, 88.0, 18.0, 12.0));
+    }
+
+    fn fixture_page(doc: &mut lopdf::Document, content: &[u8], resources: lopdf::Dictionary) -> lopdf::ObjectId {
+        use lopdf::{dictionary, Object, Stream};
+        let pages = doc.new_object_id();
+        let stream = doc.add_object(Stream::new(dictionary! {}, content.to_vec()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "Contents" => stream,
+            "MediaBox" => vec![0.into(), 0.into(), 600.into(), 800.into()],
+        });
+        // Resources 放父节点内联字典，验证页面继承。
+        doc.objects.insert(pages, Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1,
+            "Resources" => resources,
+        }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        page
+    }
+
+    #[test]
+    fn test_form_nested_repeated_scoped_fonts_and_unused_resources() {
+        use lopdf::{dictionary, Stream};
+        let mut doc = lopdf::Document::with_version("1.4");
+        let page_font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" });
+        let cmap = doc.add_object(Stream::new(dictionary! {}, b"1 beginbfchar\n<0041> <4E59>\nendbfchar".to_vec()));
+        let form_font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "Helvetica", "Encoding" => "Identity-H", "ToUnicode" => cmap });
+        let inner = doc.add_object(Stream::new(dictionary! {
+            "Subtype" => "Form", "Matrix" => vec![1.into(), 0.into(), 0.into(), 1.into(), 5.into(), 7.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => form_font } },
+        }, b"BT /F1 10 Tf 1 0 0 1 10 20 Tm <0041> Tj ET".to_vec()));
+        let outer = doc.add_object(Stream::new(dictionary! {
+            "Subtype" => "Form", "Resources" => dictionary! { "XObject" => dictionary! { "Inner" => inner } },
+        }, b"q 1 0 0 1 3 4 cm /Inner Do Q".to_vec()));
+        let unused = doc.add_object(Stream::new(dictionary! {
+            "Subtype" => "Form", "Resources" => dictionary! { "Font" => dictionary! { "F1" => page_font } },
+        }, b"BT /F1 10 Tf (UNUSED) Tj ET".to_vec()));
+        fixture_page(&mut doc, b"BT /F1 10 Tf 1 0 0 1 50 700 Tm (P) Tj ET q 2 0 0 2 100 200 cm /Outer Do Q q 1 0 0 1 300 400 cm /Outer Do Q BT /F1 10 Tf 1 0 0 1 70 700 Tm (R) Tj ET",
+            dictionary! { "Font" => dictionary! { "F1" => page_font }, "XObject" => dictionary! { "Outer" => outer, "Unused" => unused } });
+        let result = extract_pdf_text_from_doc(&doc, "fixture", 0).unwrap();
+        let words: Vec<_> = result.lines.iter().flat_map(|l| &l.words).collect();
+        assert_eq!(words.len(), 4);
+        assert!(words.iter().any(|w| w.text == "P"));
+        assert!(words.iter().any(|w| w.text == "R"));
+        let form_words: Vec<_> = words.iter().filter(|w| w.text == "乙").collect();
+        assert_eq!(form_words.len(), 2);
+        let scale = RENDER_DPI as f64 / 72.0;
+        assert!(form_words.iter().any(|w| (w.x / scale - 136.0).abs() < 0.01 && (w.y / scale - 518.0).abs() < 0.01));
+        assert!(form_words.iter().any(|w| (w.x / scale - 318.0).abs() < 0.01 && (w.y / scale - 359.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn test_form_cycle_returns_error() {
+        use lopdf::{dictionary, Object, Stream};
+        let mut doc = lopdf::Document::with_version("1.4");
+        let form = doc.new_object_id();
+        doc.objects.insert(form, Object::Stream(Stream::new(dictionary! {
+            "Subtype" => "Form", "Resources" => dictionary! { "XObject" => dictionary! { "Self" => form } },
+        }, b"/Self Do".to_vec())));
+        fixture_page(&mut doc, b"/Self Do", dictionary! { "XObject" => dictionary! { "Self" => form } });
+        assert!(extract_pdf_text_from_doc(&doc, "fixture", 0).unwrap_err().contains("循环引用"));
+    }
+
+    /// 可选真实样本验证；输出只写调用者指定的仓库外目录，不提交票面原文。
+    #[test]
+    fn test_real_pdf_samples() {
+        let Ok(sample_dir) = std::env::var("TICKETCHAN_SAMPLE_DIR") else { return; };
+        let output = std::env::var("TICKETCHAN_SAMPLE_OUTPUT").expect("请指定仓库外样本结果文件");
+        let mut report = Vec::new();
+        let mut paths: Vec<_> = std::fs::read_dir(sample_dir).unwrap().map(|e| e.unwrap().path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("pdf"))).collect();
+        paths.sort();
+        assert!(!paths.is_empty());
+        for path in paths {
+            let doc = lopdf::Document::load(&path).unwrap();
+            let count = doc.get_pages().len();
+            let indices: Vec<_> = (0..count as u32).collect();
+            let mut batch = extract_pdf_texts(path.to_str().unwrap(), &indices).unwrap();
+            assert_eq!(batch.len(), count);
+            for page in indices {
+                let input = batch.remove(&page).unwrap();
+                assert!(input.has_text_layer && !input.lines.is_empty());
+                report.push(serde_json::json!({ "name": path.file_name().unwrap().to_str().unwrap(), "page": page, "kind": "pdf", "input": input }));
+            }
+        }
+        std::fs::write(output, serde_json::to_vec(&report).unwrap()).unwrap();
+        println!("Real PDF sample pages verified: {}", report.len());
     }
 }
