@@ -189,6 +189,87 @@ async function run() {
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...item, button: 'left', clickCount: 1 });
   equal(await evaluate(() => ({ copies: S.files[1].copies, selected: getSelectedFileObj().name })), { copies: 3, selected: 'B' }, '菜单真实鼠标点击');
 
+  // 在槽位下部点击，避免浮动工具条/菜单覆盖鼠标落点，保证松开后的 click 真正落在票面上。
+  async function setupMouseScene(cols = 3, idx = 1) {
+    await evaluate(cols => {
+      reviewSetup(cols, false, 0);
+      S.files[1].copies = 1;
+      S.currentPage = 0;
+      S.selectedSlot = -1;
+      _lastSlotDown = null;
+      closeSlotCopyMenu();
+      updatePreview();
+    }, cols);
+    return slotPoint(idx);
+  }
+  async function slotPoint(idx) {
+    return evaluate(idx => {
+      var r = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]').getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.bottom - 30 };
+    }, idx);
+  }
+  async function mouse(type, point, clickCount = 1) {
+    await cdp('Input.dispatchMouseEvent', { type, ...point, button: 'left', clickCount });
+  }
+  async function click(point) {
+    await mouse('mousePressed', point);
+    await mouse('mouseReleased', point);
+  }
+  async function copyMenuOpen() {
+    return evaluate(() => !document.getElementById('slotCopyMenu').classList.contains('hidden'));
+  }
+
+  let point = await setupMouseScene();
+  await click(point);
+  await delay(120);
+  const shakyPoint = { x: point.x + 8, y: point.y + 8 };
+  await mouse('mousePressed', shakyPoint);
+  equal(await copyMenuOpen(), true, '手抖双击在第二次按下时打开菜单');
+  await delay(700);
+  await mouse('mouseReleased', shakyPoint);
+  equal(await copyMenuOpen(), true, '手抖双击第二下按住700ms松开仍保留菜单');
+  await click(await slotPoint(2));
+  equal(await copyMenuOpen(), false, '双击后单击另一张票正常关闭菜单');
+
+  point = await setupMouseScene();
+  await click(point);
+  await delay(700);
+  await click(point);
+  equal(await copyMenuOpen(), false, '间隔700ms的两次单击不误弹菜单');
+
+  point = await setupMouseScene();
+  await click(point);
+  await click(await slotPoint(2));
+  equal(await copyMenuOpen(), false, '不同槽位的两次单击不误弹菜单');
+
+  point = await setupMouseScene(1, 0);
+  await click(point);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+  await click(point);
+  equal(await evaluate(() => ({ open: !document.getElementById('slotCopyMenu').classList.contains('hidden'),
+    page: S.currentPage, selected: getSelectedFileObj().name })),
+    { open: false, page: 1, selected: 'B' }, '翻页后同位置单击新票不误判双击');
+
+  point = await setupMouseScene();
+  await click(point);
+  const blankPoint = await evaluate(() => {
+    var r = document.getElementById('previewWrap').getBoundingClientRect();
+    return { x: r.left + 2, y: r.top + 2 };
+  });
+  await click(blankPoint);
+  await click(point);
+  equal(await copyMenuOpen(), false, '点击空白中断之前的双击记录');
+
+  point = await setupMouseScene();
+  await mouse('mousePressed', point);
+  const movedPoint = { x: point.x + 8, y: point.y + 8 };
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...movedPoint, button: 'left', buttons: 1 });
+  await mouse('mouseReleased', movedPoint);
+  await delay(10);
+  await click(movedPoint);
+  equal(await copyMenuOpen(), false, '拖拽后单击不误判双击');
+
   const updates = await evaluate(async () => {
     isTauri = true;
     APP_VERSION = '2.6.16-beta.8';

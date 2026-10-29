@@ -3506,7 +3506,7 @@ function toggleSlotCopyMenu(e) {
   if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
   openSlotCopyMenu();
 }
-var _slotCopyMenuGuardUntil = 0; // 双击打开份数菜单后的短时间窗，拦掉那一下合成 click
+var _slotCopyMenuClickGuard = false; // 只保护双击手势随后的那一次 click
 // 打开菜单（幂等）：双击与工具条按钮共用，避免双击时二次 toggle 又把菜单关掉
 function openSlotCopyMenu() {
   var menu = document.getElementById('slotCopyMenu');
@@ -4676,8 +4676,9 @@ document.addEventListener('click', function(e) {
   }
   var xm = document.getElementById('ctxMenu');
   if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
-  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn') &&
-      !(Date.now() < _slotCopyMenuGuardUntil && e.target.closest('.invoice-slot'))) closeSlotCopyMenu();
+  var keepSlotCopyMenu = _slotCopyMenuClickGuard && e.detail > 0;
+  _slotCopyMenuClickGuard = false;
+  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn') && !keepSlotCopyMenu) closeSlotCopyMenu();
 });
 function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }

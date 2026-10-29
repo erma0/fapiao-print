@@ -131,7 +131,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **预览滚轮交互**（`previewWrap` wheel 三分支，按优先级）：选中槽位+悬停 → 缩放单票；Ctrl+滚轮 → 缩放整体视图；普通滚轮 → 滚动内容，触顶/触底翻页。`_wheelFlipTs` 150ms 节流。
 
-**双击设置份数**（issue #59）：`layout.js onSlotMouseDown()` 在 mousedown 阶段判定（不能等 `dblclick`——第一次点击选中会重建预览 DOM，事件目标丢失）。除 `e.detail >= 2` 外，还按「同一槽位 + 500ms 内 + 位移 ≤ 12px + 第一下未拖拽」自判双击：系统双击的位置容差仅几个像素，手抖时第二下会退化成单击，只认 `detail` 会漏。命中后 `openSlotCopyMenu()` 并清空 `_lastSlotDown`，同时置 `_slotCopyMenuGuardUntil`（500ms 时间窗）——第二次 mouseup 会补发 click，全局「点空白处关菜单」需在该窗口内放行槽位 click，否则菜单刚弹出就被关掉。**不能**用 `_slotSuppressClick + setTimeout(0)`：第二次按下到松开的时间不确定，定时器可能早于 mouseup 执行，标记会失效。
+**双击设置份数**（issue #59）：`layout.js onSlotMouseDown()` 在 mousedown 阶段判定，避免选中或拖拽后的预览 DOM 重建导致 `click / dblclick` 目标丢失。两下必须为**同页 + 同文件对象 + 同槽位 + 第一下未拖拽**，再按 `e.detail >= 2` 或「500ms 内 + 位移 ≤ 12px」确认：系统双击的位置容差仅几个像素，手抖时第二下会退化成单击，只认 `detail` 会漏。`_lastSlotDown` 同时记录页码、文件对象与槽位，点击非槽位区域、非左键或缩放手柄会清空记录，翻页或换票后不得误判。命中后 `openSlotCopyMenu()` 并清空 `_lastSlotDown`，同时置 `_slotCopyMenuClickGuard`——第二次 mouseup 补发的那一次鼠标 click 由全局关闭菜单逻辑放行，消费后清空；新 mousedown 开始时也清空，避免保护下一次操作。**不能从第二次 mousedown 开始用固定时间窗或 `setTimeout(0)` 清除保护**：按住时间不确定，松开前到期仍会让菜单立即关闭。
 
 **版面拖拽排序**（v2.5.0+，与单票偏移拖拽共用 `_slotDrag` 状态机 `mode:'move'`）：
 
