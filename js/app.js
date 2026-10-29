@@ -16,12 +16,15 @@ var PAPER = {
   photoBig1:{w:33,h:48,name:'大一寸',usage:'护照、港澳台通行证',pxW:390,pxH:567},
   photoSmall2:{w:35,h:45,name:'小二寸',usage:'签证、公考、资格审核',pxW:413,pxH:531},
   photo2:{w:35,h:49,name:'二寸',usage:'毕业证、职称、考试报名',pxW:413,pxH:579},
-  photoId:{w:26,h:32,name:'身份证/社保卡',usage:'白底有回执，350DPI',pxW:358,pxH:441}
+  photoId:{w:26,h:32,name:'身份证照片/社保卡',usage:'白底有回执，350DPI',pxW:358,pxH:441},
+  // 身份证/银行卡实际卡片尺寸（85.6×54mm），只用于相纸模式的照片规格，不进纸张规格
+  photoCard:{w:85.6,h:54,name:'身份证',usage:'实际卡片尺寸，可拼 A4 打印'}
 };
 var PAPER_STANDARD = ['A4','A5','B5','letter','legal'];
 var PAPER_STANDARD_NAMES = { A4:'A4', A5:'A5', B5:'B5', letter:'Letter', legal:'Legal' };
 var PAPER_PHOTO_PAPER = ['photoPaper5','photoPaper6'];
 var PAPER_PHOTO = ['photoSmall1','photo1','photoBig1','photoSmall2','photo2','photoId'];
+var PAPER_PHOTO_SIZES = PAPER_PHOTO.concat(['photoCard']);
 var MM2PX = 96 / 25.4;
 var PDF_RENDER_DPI = 300;  // Render/print DPI
 var PDF_PREVIEW_DPI = 300;  // Preview DPI
@@ -2531,6 +2534,22 @@ function getPaperOptionText(id) {
   if (p.name) return p.name + ' ' + size + '（' + p.usage + '）';
   return (PAPER_STANDARD_NAMES[id] || id) + ' (' + size + ')';
 }
+function getPhotoSizeOptionText(id) {
+  var p = PAPER[id];
+  if (!p) return id;
+  return p.name + ' ' + p.w + '×' + p.h + 'mm（' + p.usage + '）';
+}
+// 相纸模式的证件照规格下拉：与纸张规格一致，括号内标注常用场景
+function renderPhotoSizeOptions() {
+  var sel = document.getElementById('photoSize');
+  if (!sel) return;
+  var cur = sel.value || 'photo1';
+  var html = '';
+  PAPER_PHOTO_SIZES.forEach(function(id) { html += '<option value="' + id + '">' + getPhotoSizeOptionText(id) + '</option>'; });
+  html += '<option value="custom">自定义</option>';
+  sel.innerHTML = html;
+  sel.value = (cur === 'custom' || PAPER[cur]) ? cur : 'photo1';
+}
 function renderPaperOptions() {
   var sel = document.getElementById('paperSize');
   if (!sel) return;
@@ -2622,7 +2641,8 @@ function syncPhotoModeUI() {
   var ps = document.getElementById('photoSize');
   var customRow = document.getElementById('photoCustomRow');
   if (customRow && ps) customRow.style.display = ps.value === 'custom' ? 'flex' : 'none';
-  ['gridSel','customLayoutRow','marginSec','gapSec','cutlineRow'].forEach(function(id) {
+  // 裁切线保留开关（issue #57），只接管行列/边距/间距
+  ['gridSel','customLayoutRow','marginSec','gapSec'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.opacity = on ? '0.4' : '';
@@ -2695,10 +2715,6 @@ function setPhotoCount(n) {
 function togglePhotoMode(btn) {
   S.feat.photoMode = !S.feat.photoMode;
   if (S.feat.photoMode) {
-    if (!S.feat.cutline) {
-      S.feat.cutline = true;
-      document.getElementById('toggleCutline').classList.add('on');
-    }
     // 相纸模式不做白边裁剪：同步关掉功能开关（getSettings 里也会强制 false）
     if (S.feat.trimWhite) {
       S.feat.trimWhite = false;
@@ -2906,7 +2922,7 @@ function getSettings() {
     customScale: parseFloat(document.getElementById('customScale').value) / 100,
     colorMode: 'color',
     globalRotation: document.getElementById('globalRotation').value,
-    cutline: photoMode ? true : S.feat.cutline, number: S.feat.number, border: S.feat.border,
+    cutline: S.feat.cutline, number: S.feat.number, border: S.feat.border,
     borderWidth: 1, borderColor: '#000000', trimWhite: photoMode ? false : S.feat.trimWhite,
     copyBadge: S.feat.copyBadge,
     watermark: photoMode ? false : S.feat.watermark,
@@ -3172,6 +3188,7 @@ function loadSettings() {
   updateFilterSummary();
   if (o.paperUnit) document.getElementById('paperUnit').value = o.paperUnit === 'px' ? 'px' : 'mm';
   renderPaperOptions();
+  renderPhotoSizeOptions();
   syncPaperUnitUI();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
@@ -3540,6 +3557,7 @@ document.getElementById('orientation').value = 'landscape';
 
 // Restore all layout & feature settings
 renderPaperOptions();
+renderPhotoSizeOptions();
 loadSettings();
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
@@ -3550,7 +3568,7 @@ applyPerSectionLabelWidth();
 (function() {
   function showApp() {
     // 与 package.json 的 version 保持一致（纯静态站点无构建步骤，需手动同步）
-    APP_VERSION = '3.4.8';
+    APP_VERSION = '3.4.9';
     var el = document.getElementById('stVersionText');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);

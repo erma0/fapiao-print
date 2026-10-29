@@ -71,11 +71,13 @@ function calculateLayout(settings, pxPerMm) {
       }
     }
     var pCuts = [];
-    for (var pcx = 1; pcx < pg.cols; pcx++) {
-      pCuts.push({ type: 'vertical', pos: (startX + pcx * (pg.w + pg.gap) - pg.gap / 2) * pxPerMm, endY: ph });
-    }
-    for (var pry = 1; pry < pg.rows; pry++) {
-      pCuts.push({ type: 'horizontal', pos: (startY + pry * (pg.h + pg.gap) - pg.gap / 2) * pxPerMm });
+    if (settings.cutline) {
+      for (var pcx = 1; pcx < pg.cols; pcx++) {
+        pCuts.push({ type: 'vertical', pos: (startX + pcx * (pg.w + pg.gap) - pg.gap / 2) * pxPerMm, endY: ph });
+      }
+      for (var pry = 1; pry < pg.rows; pry++) {
+        pCuts.push({ type: 'horizontal', pos: (startY + pry * (pg.h + pg.gap) - pg.gap / 2) * pxPerMm });
+      }
     }
     return {
       pw: pw, ph: ph,
