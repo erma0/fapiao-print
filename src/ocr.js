@@ -3424,6 +3424,8 @@ function _getRemarkTop(words, remark) {
   if (!anchors.length) return top;
   // 大写金额/数字可能比标签低近一行；只按标签底边会把它们收进备注。
   // 用整行几何位置排除，备注本身含有金额时仍正常保留。
+  var anchorBottom = 0;
+  anchors.forEach(function(a) { anchorBottom = Math.max(anchorBottom, a.y + a.h); });
   top = -1;
   words.forEach(function(w) {
     if (w === remark || parts.indexOf(w) >= 0) return;
@@ -3431,7 +3433,8 @@ function _getRemarkTop(words, remark) {
       top = Math.max(top, w.y + w.h);
     }
   });
-  return top;
+  // 合计行只有标签一个词时不能返回 -1：那会让备注区上界失效
+  return top >= 0 ? top : anchorBottom;
 }
 
 /** 定位「备注」标签：可能是整词（备注），也可能是上下拆开的两词（备 / 注） */
@@ -3454,7 +3457,8 @@ function _findRemarkLabel(words) {
       if (w2 === w) continue;
       if (w2.normText.replace(/\s+/g, '') !== '注') continue;
       if (Math.abs(w2.cx - w.cx) > w.h * 0.8) continue;
-      if (w2.cy <= w.cy || w2.cy > w.cy + w.h * 2.2) continue;
+      // 竖向间距随模板变化：常见 1.9 行，部分数电票模板把「备」「注」拉开到 3.4 行
+      if (w2.cy <= w.cy || w2.cy > w.cy + w.h * 4.5) continue;
       // 合成一个虚拟标签，覆盖两词范围
       var label = {
         text: '备注', normText: '备注',
