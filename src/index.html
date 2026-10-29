@@ -110,7 +110,7 @@
           <div class="row"><label class="lbl">方向</label><div class="ctrl"><select id="orientation" onchange="updatePreview();syncLayoutHighlight()"><option value="portrait">纵向</option><option value="landscape" selected>横向</option></select></div></div>
         </div>
         <div class="sec">
-          <div class="sec-title">🗂 版面布局</div>
+          <div class="sec-title">🗂️ 版面布局</div>
           <div class="grid-sel" id="gridSel" style="grid-template-columns:repeat(3,1fr)">
             <div class="go active" data-cols="1" data-rows="1" onclick="setLayoutPreset(1,1,null,this)">1×1</div>
             <div class="go" data-cols="2" data-rows="1" onclick="setLayoutPreset(2,1,null,this)">1×2</div>
@@ -191,7 +191,7 @@
           </div>
         </div>
         <div class="sec" id="gapSec">
-          <div class="sec-title">↔ 间距 (mm)</div>
+          <div class="sec-title">↔️ 间距 (mm)</div>
           <div class="row"><label class="lbl">列间距</label><div class="rr ctrl"><input type="range" id="gapH" min="0" max="20" value="3" oninput="syncSlider(this,'gapHN');updatePreview()"><input type="number" id="gapHN" min="0" max="20" value="3" onchange="syncRange(this,'gapH');updatePreview()"></div></div>
           <div class="row"><label class="lbl">行间距</label><div class="rr ctrl"><input type="range" id="gapV" min="0" max="20" value="3" oninput="syncSlider(this,'gapVN');updatePreview()"><input type="number" id="gapVN" min="0" max="20" value="3" onchange="syncRange(this,'gapV');updatePreview()"></div></div>
         </div>
@@ -202,11 +202,11 @@
           <div id="customScaleHint" class="row hint" style="display:none;font-size:11px;color:#6b7280;padding:2px 0 2px 70px">提示：自定义缩放模式下，可通过右侧「单票调整」面板微调偏移位置</div>
         </div>
         <div class="sec">
-          <div class="sec-title">🖼 旋转</div>
+          <div class="sec-title">🖼️ 旋转</div>
           <div class="row"><label class="lbl">全局</label><div class="ctrl"><select id="globalRotation" onchange="updatePreview()"><option value="0">不旋转</option><option value="90">顺时针 90°</option><option value="180">180°</option><option value="270">逆时针 90°</option><option value="auto">自动适配</option></select></div></div>
         </div>
         <div class="sec">
-          <div class="sec-title">✂ 辅助选项</div>
+          <div class="sec-title">✂️ 辅助选项</div>
           <div class="trow" id="cutlineRow"><label class="tlbl">裁切线</label><button class="tgl on" id="toggleCutline" onclick="toggleFeature('cutline',this)"></button></div>
           <div class="trow"><label class="tlbl">编号</label><button class="tgl" id="toggleNumber" onclick="toggleFeature('number',this)"></button></div>
           <div class="trow" id="copyBadgeRow"><label class="tlbl">副本标记</label><button class="tgl" id="toggleCopyBadge" onclick="toggleFeature('copyBadge',this)"></button></div>
@@ -223,7 +223,7 @@
           </div>
         </div>
         <div class="sec">
-          <div class="sec-title">🖊 水印</div>
+          <div class="sec-title">🖊️ 水印</div>
           <div class="trow"><label class="tlbl">启用水印</label><button class="tgl" id="toggleWatermark" onclick="toggleFeature('watermark',this)"></button></div>
           <div id="wmOpts" style="display:none">
             <div class="row"><label class="lbl">文字</label><div class="ctrl"><input type="text" id="wmText" value="已打印" onchange="updatePreview()"></div></div>
@@ -385,7 +385,7 @@
           <div class="row"><label class="lbl">主题</label><div class="ctrl"><select id="themeMode" onchange="applyTheme()"><option value="light">浅色</option><option value="dark">深色</option></select></div></div>
         </div>
         <div class="sec">
-          <div class="sec-title">ℹ 关于</div>
+          <div class="sec-title">ℹ️ 关于</div>
           <div class="about-row"><span class="about-label">当前版本</span><span class="about-value"><span id="prefsCurrentVersion">v—</span><span class="ver-badge" id="prefsChannelBadge">—</span></span></div>
           <div class="row"><label class="lbl">更新渠道</label><div class="ctrl"><select id="updateChannel" onchange="setUpdateChannel(this.value)"><option value="stable">正式版</option><option value="beta">测试版</option></select></div></div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:-4px;margin-bottom:4px;line-height:1.4" id="prefsChannelDesc">—</div>
