@@ -3,6 +3,7 @@
   "version": "2.6.16-beta.8",
   "description": "发票酱 - Tauri 桌面应用",
   "scripts": {
+    "test": "node scripts/test-regressions.js",
     "dev": "tauri dev",
     "dev:ocr": "tauri dev --features ocr",
     "build": "tauri build",

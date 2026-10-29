@@ -198,6 +198,7 @@ ticketchan/
 │   └── tauri.ocr.conf.json         # OCR 版配置（含 models）
 ├── scripts/
 │   ├── build-all.js                # 一键全量构建（4 产物）
+│   ├── test-regressions.js         # 浏览器回归与可选真实样本字段验证
 │   └── bump-version.js             # 版本号同步
 └── package.json
 ```
@@ -213,6 +214,9 @@ npm install
 npm run dev          # 轻量版
 npm run dev:ocr      # OCR 版
 
+# 前端回归测试（Node.js 22+，本机 Chrome / Edge）
+npm test
+
 # 构建
 npm run build        # 轻量版
 npm run build:ocr    # OCR 版
@@ -221,6 +225,8 @@ npm run build:all    # 一键全量构建（4 产物）
 # 版本号
 npm run bump 1.9.8   # 同步 package.json → Cargo.toml → tauri.conf.json
 ```
+
+测试无需安装额外 npm 库，使用独立的临时浏览器配置。可通过 `TICKETCHAN_TEST_BROWSER` 指定 Chromium 路径；真实样本的提取、预期值和验证方法见 [测试说明](docs/testing.md)。
 
 ## 🗺 路线图
 

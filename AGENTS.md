@@ -25,6 +25,7 @@ npm run build           # 轻量版构建
 npm run build:ocr       # OCR 版构建
 npm run build:all       # 全量构建，产物输出到 dist/
 npm run bump <版本号>    # 同步版本号
+npm test                # 前端浏览器回归（Node 22+ / Chrome 或 Edge，不编译 Rust）
 ```
 
 - **编译缓存**: 只改 HTML/JS/CSS 不触发 Rust 重编译；改 Rust 文件才会完整重编译
@@ -159,6 +160,8 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **份数概念区分**（易混淆）：「排版份数」= 每张发票在版面中重复几次（`fileObj.copies`，列表 ② 按钮批量设 ×1/×2/×3，`getActiveFiles()` 展开）；「打印份数」= 整版打印几份（全局 copies，SumatraPDF 经 `-print-settings Nx` 处理，不展开）。
 
+**份数变动后的选中态**：修改前经 `captureSlotSelection()` 记住文件对象与副本序号，修改后统一 `refreshAfterCopiesChange()` 恢复到该票仍存在的副本（原序号越界则取末份）。槽位号会随份数变化，禁止直接沿用旧页码/槽位号；排版菜单、右键、批量与发票弹窗四个入口共用。
+
 **打印状态追踪**：四种模式成功后 `markFilesAsPrinted()` → ✓ 标识；`_printedMap` 持久化 localStorage；`clearAll()/executeRename()/resetSettings()` 迁移 key。
 
 **文件列表记忆**（可选 `S.feat.fileListMemory`）：启动 `restoreFiles()` 批量恢复路径，`check_path_exists` 校验；`_isRestoringFiles` 阻止恢复期触发 OCR。
@@ -187,7 +190,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 **项目名称 / 发票备注提取**（v2.6.13，best-effort）：**两路互补**——项目名称**坐标优先**、备注**文字优先**，缺失再互相补空（原因：项目名称有严格列边界，坐标能剔除「规格型号」列 / 合并换行续行；备注是大区域无列边界，文字正则更稳）。
 - **项目名称 · 坐标路**（`_extractItemNameRemarkByCoords()`）：需同时找到「项目名称」表头与右侧列边界（规格型号/单位/数量/单价表头左缘），否则交文字路。取左缘落在品名列内的词（`分类列` 右缘越界的词裁掉尾部型号串，如 `…便携式气KP826` → `…便携式气`）；按行高 ×0.6 分行；**数电票明细以 `*` 开头，不以 `*` 开头的行是上一行品名的换行续行，直接并回上一条**；行文本命中共 `合计`/表头等结构性词（`_isStructuralItemRow()`，含被拆成「合」「计」两词的合计标签）直接丢弃。
 - **项目名称 · 文字路**（`_extractByText` 内）：兜底用——`*类别*品名` 星号模式全局收集（星号段后裁到下一个表头关键词），再退到「项目名称」标签后换行内容。
-- **备注 · 文字路**：取「备注」标签之后、截到页脚（开票人/收款人/复核人）之前，`_cleanRemark()` 清洗；**坐标路**：取左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上区域。
+- **备注 · 文字路**：取「备注」标签之后、截到页脚（开票人/收款人/复核人）之前，`_cleanRemark()` 清洗；**坐标路**：取左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上区域。`_getRemarkTop()` 按完整合计行底边确定上界（包含标签基线下方的大写/数字金额），与公司名备注区排除逻辑共用；不能仅按标签底边或固定页面高度截取。
 - **多条项目名称用「、」去重合并**（`_joinItems()`，总长上限 `ITEM_NAME_MAX=120`，按整条边界截断）；**备注多行合并为一行**（空格分隔，上限 200 字）。`_cleanItemName()` 把数电票的 `*类别*品名` 还原成 **`【类别】品名`**（分类保留、不与品名连成一片），单条上限 80 字。
 - **结构化路径（OFD / XML 数电票）**（`invoice-engine`）：XML 直接取 `IssuItemInformation/ItemName`（多条合并）+ `<Remark>`（多个标签合并）。**XML 没有备注就留空**——`BuyerBankName/BuyerBankAccNum/SellerBankName/SellerBankAccNum` 是独立银行字段，**不属于备注，禁止拼接成备注**（曾误用其「还原」，已撤销：同票 XML 里 `Remark/备注/Note` 出现 0 次，而 OFD 的 `<Note>` 才有该内容，两者本就不一致）。OFD **两级**：①首选 `CustomTag.xml` 语义标签（`<Item>` / `<Note>` 直接指向文字对象 ID，税局标准 OFD 均带，最精准；该文件缺失时再读 `CustomTags.xml` 兜底，后者多数只是索引、解析为空即无副作用）；**`<Item>` 必须按组解析**（`parse_custom_tag_item_groups()`）——生成器会把长品名拆成多个文字对象（如「*生产生活服务*技术服务」+「费」），同组各段按序拼接成一条明细，逐段当独立明细会把 3 条拆成 5 条；②无 CustomTag 时才退到坐标推断——`extract_ofd_item_name()` 按「项目名称」列边界取（**不做全局星号扫描**）：用「项目名称」表头 + 同排右侧最近表头的左缘（再往里收 `OFD_COL_MARGIN=2mm`，避免收进邻列数值）定出品名列，只取列内、表头下方的文字对象，`*` 开头为新条目、否则为换行续行并回上一条；下界取「合计/价税合计/备注」锚点。坐标统一走 `ofd_page_pos()` = Boundary 原点 + CTM 作用于 TextCode 的 X/Y（无 CTM 时即 Boundary + X/Y），**模板层与数电票数据层（Boundary 覆盖整页、X/Y 为页面绝对坐标）因此可跨层比较**。备注坐标路 `extract_ofd_remark()`：左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上的文字，上界由「价税合计/大写/小写」行推出（标签常在框内垂直居中），并剔除与落款标签同行的落款值；CustomTag 的 `<Note>` 里形如「复核人:…」的独立落款行同样剔除。两侧共用 Rust 清洗 `normalize_item_name()`（`*类别*品名` → `【类别】品名`）/ `join_item_names()`（「、」去重合并、上限 120）/ `normalize_remark()`，与 JS 侧口径一致；前端 OFD/XML 加载路径直接把 `info.itemName` / `info.remark` 写进 fileObj。
 - **版式不固定，取不到就留空、绝不猜测**，故两字段仅作参考；在发票弹窗、汇总表内可人工修正，并已加入批量重命名可选字段。**覆盖 图片 OCR / PDF 文字层 / OFD / XML 数电票**（车票、非税票分支不调用）。
@@ -198,7 +201,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **CJK 拆字兜底**（dzcp/iloveofd 格式）：信用代码全文拼接匹配 18 位；正则支持字母夹数字 + 15/18 位校验；名称括号保留；「年/MM/月/DD/日」序列合并；`_cleanName` 清理日期碎片。
 
-**PDF 文字层提取**：`extract_pdf_text(s)` 解析 lopdf content stream（批量版一次打开 + rayon 并行，按 pdfPath 分组调用，失败回退单页→OCR）；前端 `applyPdfTextResult()` 复用 `extractByCoordinates()`。坑：Form XObject 需展开、GBK-EUC-H 需 `encoding_rs::GBK.decode()`、`Content::encode()` 尾部无换行、内容流顺序≠视觉顺序（金额取最大 ¥）。
+**PDF 文字层提取**：`extract_pdf_text(s)` 解析 lopdf content stream（批量版一次打开 + rayon 并行，按 pdfPath 分组调用，失败回退单页→OCR）；前端 `applyPdfTextResult()` 复用 `extractByCoordinates()`。`expand_pdf_text_content()` 在 `Do` 原位置递归展开 Form，保留父 CTM / Form Matrix / 重复调用，以作用域重命名字体并读取页面树继承 Resources；未调用的 Form 不提取，循环引用返回错误。`concat_pdf_matrix()` 使用列向量 CTM×M，文字包围盒的四角同样经过 CTM×Tm（字号取 Tf，不能用 Tm.d 替代）。坑：GBK-EUC-H 需 `encoding_rs::GBK.decode()`、`Content::encode()` 尾部无换行、内容流顺序≠视觉顺序（金额取最大 ¥）。
 
 **XML 数电票**（`invoice-engine::parse_xml_invoice`）：纯结构化数据无版式，`fileObj._xmlInvoice=true`，不参与排版打印（`getActiveFiles()` 过滤）；用于列表展示/统计/汇总/重命名。
 
@@ -223,6 +226,8 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 **更新检查**：`check_for_updates(channel)`（ureq 调 GitHub Releases API，主源 `api.github.com` 失败回退 `gh-proxy.com`）；**双更新渠道**（v2.6.16-beta.6，issue #58）——渠道可在设置→关于手动选择（`ticketchan-update-channel`，未选择时按安装版本：版本号含 `-` 即测试版；导出 / 导入包含该项，切换即清 `ticketchan-update-cache`）。**正式渠道**只查 `/releases/latest`（GitHub 该接口天然排除预发布，不会收到 beta）；**测试渠道**查 `/releases?per_page=20` 并按 semver 取「高于当前版本的最大项」（能收到新 beta，也能在同版本转正后提示正式版，但绝不会把旧正式版 2.6.14 当成新版本）。`compare_versions()` 支持预发布语义（`2.6.16-beta.3 < 2.6.16` 且 `> 2.6.14`），**禁止**退回纯数字分段比较（曾把 `2.6.16-beta.2` 解析成 `2.6.2`）。启动 5 秒后静默检查（1 小时缓存 `ticketchan-update-cache` 防速率限制，缓存按 `ver + channel` 校验），状态栏版本号/关于面板可手动触发；更新弹窗 `#updateModal` 展示渠道徽章（`is_prerelease`）、Markdown 更新说明（前端 `renderReleaseNotes()`）、与当前安装类型（`hasOcr`）匹配的推荐产物（`getAssetVariant()`）。**忽略体系**（v2.6.0）：`shouldAutoShowUpdate()` 只拦静默弹窗——`ticketchan-update-ignore`（忽略此版本，弹窗按钮）+ `ticketchan-update-ignore-all`（忽略所有，弹窗按钮 + 设置→关于「自动检查更新」开关 `toggleAutoUpdateCheck`，`showApp` 里 `syncAutoUpdateCheckUI()` 同步）；手动检查不受忽略影响。未用 Tauri Updater（4 产物 + 无签名证书，引导用户去 Release 自选）。Release Notes 由 CI 从 CHANGELOG.md 提取 `## v<tag>` 段落写入 `release_body.txt`。
 
 ## 前端模块
+
+**更新渠道并发约束**：`_updateRequestId` 为每次检查与渠道切换递增；响应和错误均校验请求序号、渠道与安装版本。旧请求不得写缓存、显示弹窗或释放新请求锁；缓存同时校验外层渠道与 `info.channel`。
 
 | 文件 | 职责 |
 | --- | --- |
