@@ -2695,10 +2695,10 @@ function setAllCopies(e, n) {
   e.stopPropagation();
   var sel = S.files.filter(function(f) { return f.checked; });
   if (!sel.length) { toast('请先选择发票'); document.getElementById('copyMenu').classList.add('hidden'); return; }
+  var selection = captureSlotSelection();
   sel.forEach(function(f) { f.copies = n; });
   document.getElementById('copyMenu').classList.add('hidden');
-  renderFileList();
-  updatePreview();
+  refreshAfterCopiesChange(selection);
 }
 function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
 
@@ -2762,9 +2762,9 @@ function _showSlotAdjGroup(show) {
 
 function ctxSetCopies(n) {
   if (_ctxIdx < 0) return;
+  var selection = captureSlotSelection();
   S.files[_ctxIdx].copies = n;
-  renderFileList();
-  updatePreview();
+  refreshAfterCopiesChange(selection);
   closeCtxMenu();
 }
 function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
@@ -3348,8 +3348,9 @@ function changeModalCopies(d) { var e = document.getElementById('mCopies'); e.va
 function closeInvModal() { document.getElementById('invModal').classList.add('hidden'); }
 function confirmInvModal() {
   if (S.editIdx < 0) return;
+  var selection = captureSlotSelection();
   var f = S.files[S.editIdx];
-  f.copies = Math.max(1, parseInt(document.getElementById('mCopies').value) || 1);
+  f.copies = Math.max(1, Math.min(99, parseInt(document.getElementById('mCopies').value) || 1));
   f.rotation = parseInt(document.getElementById('mRot').value) || 0;
   var at = parseFloat(document.getElementById('mAmountTax').value);
   var an = parseFloat(document.getElementById('mAmountNoTax').value);
@@ -3371,7 +3372,7 @@ function confirmInvModal() {
   f.slotScale = Math.max(0.2, Math.min(5.0, (parseInt(document.getElementById('mSlotScale').value) || 100) / 100));
   f.slotOffsetX = parseFloat(document.getElementById('mSlotOffX').value) || 0;
   f.slotOffsetY = parseFloat(document.getElementById('mSlotOffY').value) || 0;
-  closeInvModal(); renderFileList(); updatePreview(); updateAmountSummary();
+  closeInvModal(); refreshAfterCopiesChange(selection); updateAmountSummary();
 }
 
 function copyOcrText(btn) {
@@ -3530,14 +3531,40 @@ function closeSlotCopyMenu() {
   var menu = document.getElementById('slotCopyMenu');
   if (menu) menu.classList.add('hidden');
 }
+// 份数变动会重排展开序列：记住文件与第几份，不能沿用原槽位编号操作别的票。
+function captureSlotSelection() {
+  var f = getSelectedFileObj();
+  if (!f) return null;
+  var files = getActiveFiles();
+  var pos = S.currentPage * getPerPage(getSettings()) + S.selectedSlot;
+  var ordinal = 0;
+  for (var i = 0; i < pos; i++) { if (files[i] === f) ordinal++; }
+  return { file: f, ordinal: ordinal };
+}
+function refreshAfterCopiesChange(selection) {
+  if (selection) {
+    var matches = [];
+    getActiveFiles().forEach(function(f, i) { if (f === selection.file) matches.push(i); });
+    if (matches.length) {
+      var pos = matches[Math.min(selection.ordinal, matches.length - 1)];
+      var perPage = getPerPage(getSettings());
+      S.currentPage = Math.floor(pos / perPage);
+      S.selectedSlot = pos % perPage;
+    } else {
+      S.selectedSlot = -1;
+    }
+  }
+  renderFileList();
+  updatePreview();
+  if (S.selectedSlot >= 0) syncSidebarToSelectedSlot();
+}
 function setSlotCopies(n) {
   closeSlotCopyMenu();
   var f = getSelectedFileObj();
   if (!f) return;
+  var selection = captureSlotSelection();
   f.copies = Math.max(1, Math.min(99, parseInt(n) || 1));
-  renderFileList();
-  updatePreview();
-  syncSlotToolbar();
+  refreshAfterCopiesChange(selection);
 }
 // 「自定义…」：打开发票选项弹窗（含 1-99 份数输入），排版页无需再切回列表
 function openSlotInvModal() {
@@ -5700,6 +5727,7 @@ var _UPDATE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 var _UPDATE_IGNORE_KEY = 'ticketchan-update-ignore';
 var _UPDATE_IGNORE_ALL_KEY = 'ticketchan-update-ignore-all';
 var _updateChecking = false;
+var _updateRequestId = 0; // 切渠道时令旧请求失效，允许立即检查新渠道
 var _lastUpdateInfo = null;
 var _UPDATE_CHANNEL_KEY = 'ticketchan-update-channel';
 
@@ -5724,7 +5752,12 @@ function getUpdateChannel() {
 
 function setUpdateChannel(v) {
   if (v !== 'stable' && v !== 'beta') return;
+  if (v === getUpdateChannel()) return;
   try { localStorage.setItem(_UPDATE_CHANNEL_KEY, v); } catch(e) {}
+  _updateRequestId++;
+  _updateChecking = false;
+  _lastUpdateInfo = null;
+  closeUpdateModal();
   // 渠道变了旧检查结果不再适用
   try { localStorage.removeItem(_UPDATE_CACHE_KEY); } catch(e) {}
   syncUpdateChannelUI();
@@ -5774,6 +5807,9 @@ function checkForUpdates(silent) {
   if (!isTauri || !invoke) return;
   if (_updateChecking) return;
   _updateChecking = true;
+  var channel = getUpdateChannel();
+  var version = APP_VERSION;
+  var requestId = ++_updateRequestId;
 
   // Silent auto-check: respect cache TTL to avoid rate limits.
   // 缓存必须属于当前版本（data.ver）与当前渠道（data.channel）：升级或切换渠道后
@@ -5783,7 +5819,8 @@ function checkForUpdates(silent) {
       var cached = localStorage.getItem(_UPDATE_CACHE_KEY);
       if (cached) {
         var data = JSON.parse(cached);
-        if (data.ver === APP_VERSION && data.channel === getUpdateChannel() && Date.now() - data.ts < _UPDATE_CACHE_TTL) {
+        if (data.ver === version && data.channel === channel && data.info && data.info.channel === channel &&
+            Date.now() - data.ts < _UPDATE_CACHE_TTL) {
           _updateChecking = false;
           if (shouldAutoShowUpdate(data.info)) {
             showUpdateModal(data.info);
@@ -5796,11 +5833,12 @@ function checkForUpdates(silent) {
 
   if (!silent) toast('正在检查更新...', 1500);
 
-  invoke('check_for_updates', { channel: getUpdateChannel() }).then(function(info) {
+  invoke('check_for_updates', { channel: channel }).then(function(info) {
+    if (requestId !== _updateRequestId || channel !== getUpdateChannel() || version !== APP_VERSION) return;
     _updateChecking = false;
     // Cache result for silent auto-check
     try {
-      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: APP_VERSION, channel: getUpdateChannel(), info: info }));
+      localStorage.setItem(_UPDATE_CACHE_KEY, JSON.stringify({ ts: Date.now(), ver: version, channel: channel, info: info }));
     } catch(e) {}
 
     if (info.has_update) {
@@ -5809,9 +5847,10 @@ function checkForUpdates(silent) {
         showUpdateModal(info);
       }
     } else if (!silent) {
-      toast((getDefaultUpdateChannel() === 'beta' ? '已是最新测试版 v' : '已是最新版本 v') + info.current_version, 2500);
+      toast((channel === 'beta' ? '已是最新测试版 v' : '已是最新版本 v') + info.current_version, 2500);
     }
   }).catch(function(err) {
+    if (requestId !== _updateRequestId || channel !== getUpdateChannel() || version !== APP_VERSION) return;
     _updateChecking = false;
     if (!silent) toast('检查更新失败: ' + err, 4000);
     console.warn('[Update] check failed:', err);
