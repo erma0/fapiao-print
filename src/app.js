@@ -3406,13 +3406,13 @@ function selectSlot(idx) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
     syncSidebarToSelectedSlot();
-    // 首次选中提示隐藏手势（issue #33）：双击重置 / 右键菜单，跨会话仅提示一次
+    // 首次选中提示隐藏手势（issue #33 / #59）：双击设置份数 / 右键菜单，跨会话仅提示一次
     if (!window._dblclickHintShown) {
       window._dblclickHintShown = true;
       try {
         if (localStorage.getItem('ticketchan-dblclick-hint') !== '1') {
           localStorage.setItem('ticketchan-dblclick-hint', '1');
-          toast('提示：双击票面可重置单票调整，右键票面有更多操作', 3500);
+          toast('提示：双击票面可设置份数，右键票面有更多操作', 3500);
         }
       } catch(e) {}
     }
@@ -3439,6 +3439,9 @@ function syncSlotToolbar() {
     rotText.textContent = rot ? rot + '°' : '旋转';
     rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
   }
+  // 份数按钮同理：图标位显示当前份数（×1 / ×2 …），变更时宽度会变
+  var copiesIco = document.getElementById('slotCopiesIco');
+  if (copiesIco) copiesIco.textContent = '×' + (f.copies || 1);
 
   var wr = wrap.getBoundingClientRect();
   var sr = slotEl.getBoundingClientRect();
@@ -3486,8 +3489,56 @@ function syncSlotToolbar() {
   tb.style.top = Math.round(top) + 'px';
   tb.classList.remove('hidden');
 }
-document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
+document.getElementById('previewWrap').addEventListener('scroll', function() {
+  closeSlotCopyMenu();
+  syncSlotToolbar();
+});
 window.addEventListener('resize', syncSlotToolbar);
+
+// 工具条「份数」：点击按钮 / 双击票面 → 弹出份数菜单（issue #59）
+function toggleSlotCopyMenu(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('slotCopyMenu');
+  var btn = document.getElementById('slotCopiesBtn');
+  if (!menu || !btn) return;
+  if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var cur = f.copies || 1;
+  Array.prototype.forEach.call(menu.querySelectorAll('.copy-menu-item[data-n]'), function(it) {
+    it.classList.toggle('active', parseInt(it.dataset.n) === cur);
+  });
+  menu.classList.remove('hidden');
+  // 锚在按钮下方居中，左右/上下钳制在窗口内
+  var r = btn.getBoundingClientRect();
+  var mw = menu.offsetWidth, mh = menu.offsetHeight;
+  var left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left + r.width / 2 - mw / 2));
+  var top = r.bottom + 4;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top = Math.round(top) + 'px';
+}
+function closeSlotCopyMenu() {
+  var menu = document.getElementById('slotCopyMenu');
+  if (menu) menu.classList.add('hidden');
+}
+function setSlotCopies(n) {
+  closeSlotCopyMenu();
+  var f = getSelectedFileObj();
+  if (!f) return;
+  f.copies = Math.max(1, Math.min(99, parseInt(n) || 1));
+  renderFileList();
+  updatePreview();
+  syncSlotToolbar();
+}
+// 「自定义…」：打开发票选项弹窗（含 1-99 份数输入），排版页无需再切回列表
+function openSlotInvModal() {
+  closeSlotCopyMenu();
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx >= 0) openInvModal(idx);
+}
 
 // 浮动工具条「✕ 删除」（issue #43②）：删除选中槽位对应的那张发票
 function deleteSlotInvoice() {
@@ -4589,6 +4640,7 @@ document.addEventListener('click', function(e) {
   }
   var xm = document.getElementById('ctxMenu');
   if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
+  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn')) closeSlotCopyMenu();
 });
 function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
@@ -5361,13 +5413,14 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   }
 }, { passive: false });
 
-// Double-click: on selected slot → reset per-slot adj (size+position); elsewhere → reset preview zoom
+// Double-click: on a slot with invoice → 设置排版份数（issue #59）；空白处 → 重置预览缩放
 document.getElementById('previewWrap').addEventListener('dblclick', function(e) {
-  if (S.selectedSlot >= 0) {
-    var slotEl = e.target.closest('.invoice-slot');
-    if (slotEl && parseInt(slotEl.dataset.slotIdx) === S.selectedSlot) {
-      resetSlotAdj();
-      return;
+  var slotEl = e.target.closest('.invoice-slot');
+  if (slotEl) {
+    var idx = parseInt(slotEl.dataset.slotIdx);
+    if (idx >= 0) {
+      if (S.selectedSlot !== idx) selectSlot(idx);
+      if (getSelectedFileObj()) { toggleSlotCopyMenu(); return; }
     }
   }
   if (S.viewZoom !== 0) { setZoom('fit'); }

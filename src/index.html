@@ -161,7 +161,7 @@
             <div class="row"><label class="lbl">间距</label><div class="ctrl"><input type="number" id="photoGap" value="2" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             <div class="row"><label class="lbl">留边</label><div class="ctrl"><input type="number" id="photoMargin" value="3" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">行（0=自动）</span></div></div>
-            <div class="row"><label class="lbl">常用</label><div class="ctrl" id="photoCountPresets" style="flex-wrap:wrap;gap:4px"></div></div>
+            <div class="row"><label class="lbl">常用</label><div class="ctrl photo-count-presets" id="photoCountPresets"></div></div>
             <div id="photoModeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4"></div>
           </div>
         </div>
@@ -447,8 +447,17 @@
         <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
         <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
         <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票"><span class="tb-ico">⧉</span><span class="tb-text">应用到全部</span></button>
+        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置此票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
         <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转此票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
         <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除这张发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
+      </div>
+      <!-- 工具条「份数」弹出菜单（fixed 定位，锚在按钮下方） -->
+      <div class="slot-copy-menu hidden" id="slotCopyMenu">
+        <div class="copy-menu-item" data-n="1" onclick="setSlotCopies(1)">×1</div>
+        <div class="copy-menu-item" data-n="2" onclick="setSlotCopies(2)">×2</div>
+        <div class="copy-menu-item" data-n="3" onclick="setSlotCopies(3)">×3</div>
+        <div class="copy-menu-sep"></div>
+        <div class="copy-menu-item" onclick="openSlotInvModal()">自定义…</div>
       </div>
     </div>
 

@@ -392,6 +392,9 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
    滑条等可伸缩控件用 flex:1 撑开（原先控件靠左，滑条行右侧空 72px） */
 .ctrl { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .ctrl > input[type="range"] { flex: 1; min-width: 0; }
+/* 相纸模式「常用」张数：固定 7 列等宽，避免按钮换行（原 flex-wrap 会让 16 掉到第二行） */
+.ctrl.photo-count-presets { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.ctrl.photo-count-presets .btn { padding: 4px 0; min-width: 0; font-size: 11px; }
 select, input[type="number"], input[type="text"] {
   width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   font-size: 13px; color: var(--text-primary); background: var(--surface); outline: none;
@@ -496,6 +499,15 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 .slot-toolbar .btn.danger { color: var(--danger); }
 .slot-toolbar .btn.danger:hover { background: var(--danger-light); }
 .slot-toolbar.hidden { display: none; }
+/* 工具条「份数」弹出菜单：fixed 定位（锚在按钮下方），滚动/点击外部即关闭 */
+.slot-copy-menu {
+  position: fixed; z-index: 1000; min-width: 96px; padding: 4px 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.slot-copy-menu.hidden { display: none; }
+.slot-copy-menu .copy-menu-item { display: flex; justify-content: space-between; gap: 12px; }
+.slot-copy-menu .copy-menu-item.active { color: var(--accent); font-weight: 700; }
 .invoice-slot { overflow: hidden; position: absolute; display: flex; align-items: center; justify-content: center; background: white; }
 .invoice-slot img { display: block; }
 .slot-empty { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; background: #f8fafc; color: var(--text-muted); font-size: 12px; flex-direction: column; gap: 4px; border: 1px dashed var(--border); cursor: pointer; transition: background 0.15s, color 0.15s; }
