@@ -927,6 +927,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   if (a === b) { updatePreview(); return; }
   var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
   if (ia < 0 || ib < 0) { updatePreview(); return; }
+  // 互换后槽位序号对不上原票：选中按对象重定位，否则工具条会指到换过来的那张
+  var keep = captureSlotSelection();
   var offA = a.slotOffsetX, offB = b.slotOffsetX;
   var offAY = a.slotOffsetY, offBY = b.slotOffsetY;
   S.files[ia] = b; S.files[ib] = a;
@@ -934,9 +936,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   b.slotOffsetX = offB; b.slotOffsetY = offBY;
   if (_activeFileIdx === ia) { _activeFileIdx = ib; }
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
-  renderFileList();
   toast('已互换位置');
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
 }
 
 // Move invoice into a neighbor position (insert before/after instead of swapping)

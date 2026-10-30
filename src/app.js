@@ -2637,6 +2637,7 @@ function toggleSortMenu() {
 function sortByDate(dir) {
   document.getElementById('sortMenu').classList.add('hidden');
   if (!S.files.length) return;
+  var keep = captureSlotSelection();
   S.files.sort(function(a, b) {
     var da = _parseDate(a.invoiceDate);
     var db = _parseDate(b.invoiceDate);
@@ -2648,14 +2649,14 @@ function sortByDate(dir) {
     return 0;
   });
   _activeFileIdx = -1;
-  renderFileList();
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
 }
 // 按发票类型分组排序（issue #40）：专票归一堆、普票归一堆，打印按列表顺序分批走。
 // 跨页票整组归堆（取组内最小 rank），组内页序由排序稳定性保持、不拆散
 function sortByType() {
   document.getElementById('sortMenu').classList.add('hidden');
   if (!S.files.length) return;
+  var keep = captureSlotSelection();
   var groupRank = {};
   S.files.forEach(function(f) {
     if (!f._invoiceGroupId) return;
@@ -2669,8 +2670,7 @@ function sortByType() {
   }
   S.files.sort(function(a, b) { return rank(a) - rank(b); });
   _activeFileIdx = -1;
-  renderFileList();
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
 }
 // 类型分组次序：专票 → 普票 → 通行费 → 医疗 → 非税 → 车票 → 其他（未识别 / 占位）
 function _invoiceTypeRank(f) {
@@ -2700,7 +2700,12 @@ function setAllCopies(e, n) {
   document.getElementById('copyMenu').classList.add('hidden');
   refreshAfterCopiesChange(selection);
 }
-function togCheck(i) { if (S.files[i]._placeholder) return; S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+function togCheck(i) {
+  if (S.files[i]._placeholder) return;
+  var keep = captureSlotSelection();
+  S.files[i].checked = !S.files[i].checked;
+  reflowAfterListChange(keep);
+}
 
 // =====================================================
 // 文件列表右键菜单 — 作用于被右键的单项，无需先勾选
@@ -2887,8 +2892,8 @@ if (_fileListEl) _fileListEl.addEventListener('scroll', closeCtxMenu);
 function getSelectableInView() {
   return getFilteredFiles().filter(function(f) { return !f._placeholder; });
 }
-function selectAll() { getSelectableInView().forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deselectAll() { getSelectableInView().forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function selectAll() { var keep = captureSlotSelection(); getSelectableInView().forEach(function(f) { f.checked = true; }); reflowAfterListChange(keep); }
+function deselectAll() { var keep = captureSlotSelection(); getSelectableInView().forEach(function(f) { f.checked = false; }); reflowAfterListChange(keep); }
 function toggleSelectAll() {
   var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
@@ -2914,9 +2919,26 @@ function deleteSelected() {
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
   S.files = S.files.filter(function(f) { return !f.checked; });
   _activeFileIdx = active ? S.files.indexOf(active) : -1;
-  renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
+  // 预览里能选中的票必然是勾选状态（getActiveFiles 只收 checked / 占位），批量删除一定连带删掉它
+  reflowAfterListChange(null);
 }
-function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn(); }
+// 列表增删 / 勾选 / 重排后统一收尾：槽位序号会整体挪动，选中必须按「文件对象」重定位，
+// 沿用旧索引会指到别的票，接下来点删除 / 改份数就作用在错的发票上（选中票已不在排版里则清空）
+function reflowAfterListChange(keep) {
+  if (keep) refreshAfterCopiesChange(keep);
+  else { S.selectedSlot = -1; renderFileList(); updatePreview(); }
+  // 删空时 updatePreview 会在无票分支提前返回，这里兜住工具条与单票调整面板
+  updateAdjPanel();
+  updatePrintBtn(); updateSummaryBtn();
+}
+function rmFile(i) {
+  var removed = S.files[i];
+  var sel = getSelectedFileObj();
+  var keep = (sel && sel !== removed) ? captureSlotSelection() : null;
+  S.files.splice(i, 1);
+  if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--;
+  reflowAfterListChange(keep);
+}
 
 // 医疗票明细页处理（幂等）：把「医疗收费明细」长页从列表移除（只留汇总首页），
 // 在共享 _batchId 的主票上挂附件计数徽章，toast 明示排除行为。
@@ -3067,14 +3089,15 @@ function moveFile(i, dir) {
 
 function swapFiles(ia, ib) {
   if (ia === ib || ia < 0 || ib < 0 || ia >= S.files.length || ib >= S.files.length) return;
+  // 列表重排同样会让预览槽位换票：选中按对象重定位，别让工具条留在原槽位指向另一张
+  var keep = captureSlotSelection();
   var tmp = S.files[ia];
   S.files[ia] = S.files[ib];
   S.files[ib] = tmp;
   // Update active file index to follow the moved item
   if (_activeFileIdx === ia) { _activeFileIdx = ib; }
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
-  renderFileList();
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
   scrollToListItem(ib);
 }
 
@@ -3084,13 +3107,13 @@ function moveFileTo(fromIdx, toIdx, zone) {
   var a = S.files[fromIdx];
   var b = S.files[toIdx];
   if (!a || !b || a === b) return;
+  var keep = captureSlotSelection();
   S.files.splice(fromIdx, 1);
   var insertAt = zone === 'after' ? S.files.indexOf(b) + 1 : S.files.indexOf(b);
   S.files.splice(insertAt, 0, a);
   if (insertAt === fromIdx) return; // 落点即原位，顺序未变
   _activeFileIdx = S.files.indexOf(a);
-  renderFileList();
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
   scrollToListItem(insertAt);
 }
 

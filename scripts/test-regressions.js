@@ -244,6 +244,82 @@ async function run() {
   await click(blankHit);
   equal(await evaluate(() => S.selectedSlot), -1, '点预览空白仍取消选中');
 
+  // 删除后按文件对象重定位选中：槽位序号会整体前移，沿用旧索引会指到别的票
+  const rmState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(n) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 2, rows: 1 };
+      S.files = Array.from({ length: n }, (_, i) => createFileObj({ name: 'r' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, tbHidden: document.getElementById('slotToolbar').classList.contains('hidden') };
+    }
+    var out = {};
+    setup(3); selectSlot(0); rmFile(0); out.rmSelected = snap();
+    setup(1); selectSlot(0); rmFile(0); out.rmLast = snap();
+    setup(3); selectSlot(1); rmFile(0); out.rmBefore = snap();
+    setup(3); selectSlot(1); rmFile(2); out.rmAfter = snap();
+    setup(3); selectSlot(1); deleteSelected(); out.bulkCleared = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(rmState.rmSelected, { sel: -1, name: null, tbHidden: true }, '删除选中票后清空选中');
+  equal(rmState.rmLast, { sel: -1, name: null, tbHidden: true }, '删空后工具条隐藏');
+  equal(rmState.rmBefore, { sel: 0, name: 'r1.png', tbHidden: false }, '删除前面的票后选中跟随原对象');
+  equal(rmState.rmAfter, { sel: 1, name: 'r1.png', tbHidden: false }, '删除后面的票不动选中');
+  equal(rmState.bulkCleared, { sel: -1, name: null, tbHidden: true }, '批量删除后清空选中且工具条隐藏');
+
+  // 排序 / 列表重排会让预览槽位换票，选中必须按对象跟随
+  const reorderState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(dates) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 3, rows: 1 };
+      S.files = dates.map((d, i) => createFileObj({ name: 'o' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350, invoiceDate: d }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, order: getActiveFiles().map(o => o.name).join(',') };
+    }
+    var out = {};
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(1); sortByDate(1); out.sortDate = snap();
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(0); swapFiles(0, 2); out.swapList = snap();
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(0); moveFileTo(0, 2, 'after'); out.moveList = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(reorderState.sortDate, { sel: 0, name: 'o1.png', order: 'o1.png,o2.png,o0.png' }, '日期排序后选中跟随原票');
+  equal(reorderState.swapList, { sel: 2, name: 'o0.png', order: 'o2.png,o1.png,o0.png' }, '列表对调后选中跟随原票');
+  equal(reorderState.moveList, { sel: 2, name: 'o0.png', order: 'o1.png,o2.png,o0.png' }, '列表插入后选中跟随原票');
+
+  // 勾选变化同样改变排版成员：取消勾选的票移出排版，选中要么跟随、要么清空
+  const checkState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(n) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 3, rows: 1 };
+      S.files = Array.from({ length: n }, (_, i) => createFileObj({ name: 'c' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, tbHidden: document.getElementById('slotToolbar').classList.contains('hidden') };
+    }
+    var out = {};
+    setup(3); selectSlot(2); togCheck(0); out.uncheckBefore = snap();
+    setup(3); selectSlot(0); togCheck(0); out.uncheckSelected = snap();
+    setup(3); selectSlot(1); deselectAll(); out.deselectAll = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(checkState.uncheckBefore, { sel: 1, name: 'c2.png', tbHidden: false }, '取消勾选前面的票后选中跟随原票');
+  equal(checkState.uncheckSelected, { sel: -1, name: null, tbHidden: true }, '取消勾选选中票后清空选中');
+  equal(checkState.deselectAll, { sel: -1, name: null, tbHidden: true }, '全部取消勾选后清空选中');
+
   const updates = await evaluate(async () => {
     isTauri = true;
     APP_VERSION = '2.6.16-beta.8';
