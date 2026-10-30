@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.6.16-beta.9（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.6.16-beta.10（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -127,11 +127,13 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **单票独立调整**：`fileObj.{slotScale, slotOffsetX, slotOffsetY}`，CSS transform 预览 + Rust `SlotSpec` 参数输出。九宫格快速对齐、数字框/滑块滚轮微调、选中后滚轮缩放单票（5%/步）、拖拽约束按实际显示尺寸动态计算、放大上限 5x、编辑态溢出可见（`.selected/.dragging` 时 `overflow:visible`）。持久化：`perFileAdjustments` Map 按文件名匹配，可选开关。
 
-**选中票面浮动工具条**（v2.6.1，v2.6.8 钳制 + 删除，v2.6.9 按格子归位）：`app.js syncSlotToolbar()` 把 `#slotToolbar` 锚在选中槽位上方 36px 居中（CSS `translateX(-50%)`），随 `previewWrap` 滚动与窗口 resize 重算。⚠️ 四条硬约定：①上方那块位置**一旦与别的格子相交就贴回本格子内侧顶部**（下排格子、报销单第 2 段起、3×3 中下排都命中）——否则工具条骑在裁切线上压住邻格票面，就是 issue #43① 的「跑到框外」；②**水平必须左右钳制**（内侧放置先钳在本格子框内，再统一钳在预览区可视宽度内各留 8px）——否则右列槽位的右半截会跑出预览框；③**先 `classList.remove('hidden')` 再读 `offsetWidth`**，`display:none` 时宽度为 0 会让钳制失效；且**旋转按钮文案要在测量之前刷新**（`旋转` → `90°` 宽约 +12px，否则钳制用过期宽度）。工具条宽于格子时自动加 `.compact`（只留图标）并重测宽度。按钮：重置 / 居中 / 应用到全部 / 旋转 / **✕ 删除**（`deleteSlotInvoice()`，删完清空选中）。
+**选中票面浮动工具条**（v2.6.1，v2.6.8 钳制 + 删除，v2.6.9 按格子归位）：`app.js syncSlotToolbar()` 把 `#slotToolbar` 锚在选中槽位上方 36px 居中（CSS `translateX(-50%)`），随 `previewWrap` 滚动与窗口 resize 重算。⚠️ 六条硬约定：①上方那块位置**一旦与别的格子相交就贴回本格子内侧顶部**（下排格子、报销单第 2 段起、3×3 中下排都命中）——否则工具条骑在裁切线上压住邻格票面，就是 issue #43① 的「跑到框外」；②**水平必须左右钳制**（内侧放置先钳在本格子框内，再统一钳在预览区可视宽度内各留 8px）——否则右列槽位的右半截会跑出预览框；③**先 `classList.remove('hidden')` 再读 `offsetWidth`**，`display:none` 时宽度为 0 会让钳制失效；且**旋转按钮文案要在测量之前刷新**（`旋转` → `90°` 宽约 +12px，否则钳制用过期宽度）。④**「是否收成纯图标（.compact）」必须用「非 compact」的固有宽度判定**：直接读 `offsetWidth` 拿到的是上一档宽度，会在两档之间来回翻转（3×3 中间列卡在 395px、每边压邻格 66px）。⑤**容器 `pointer-events:none`、只有 `.btn` 是 `auto`**：工具条浮在票面上时，空隙不拦鼠标，点票面不会误触按钮；⑥因为容器不接收事件，`previewWrap` 的「点空白取消选中」**不能再靠 `closest('#slotToolbar')`**，要用 `hitSlotToolbar(e)` 按矩形兜底，否则点按钮内边距偏出 2px 就把选中和工具条一起清掉。工具条宽于格子时自动加 `.compact`（只留图标）。按钮：重置 / 居中 / 应用到全部 / **份数**（`#slotCopiesBtn`，图标位显示当前份数 ×N） / 旋转 / **✕ 删除**（`deleteSlotInvoice()`，删完清空选中）。份数按钮是单票份数的**唯一**入口，见下条。
+
+**选中态跟随列表变化**（v2.6.16-beta.10）：浮动工具条指向的「选中槽位」只是一个页内索引，而 `S.files` 的**删除 / 勾选 / 排序 / 列表拖拽**都会让同一槽位换成别的票。凡改变 active 序列的操作统一走 `reflowAfterListChange(keep)`：动手前 `captureSlotSelection()` 记下「文件对象 + 第几份」，改完按对象重定位；选中票已不在排版里就 `selectedSlot = -1`（工具条随之隐藏）。⚠️ 无票时 `updatePreview()` 会提前 return、不会触发 `updateAdjPanel()`，所以 `reflowAfterListChange` 里要额外调一次 `updateAdjPanel()`，否则删光最后一张后工具条仍浮在空预览上。**禁止**只写 `renderFileList(); updatePreview();` 收尾。
 
 **预览滚轮交互**（`previewWrap` wheel 三分支，按优先级）：选中槽位+悬停 → 缩放单票；Ctrl+滚轮 → 缩放整体视图；普通滚轮 → 滚动内容，触顶/触底翻页。`_wheelFlipTs` 150ms 节流。
 
-**双击设置份数**（issue #59）：`layout.js onSlotMouseDown()` 在 mousedown 阶段判定，避免选中或拖拽后的预览 DOM 重建导致 `click / dblclick` 目标丢失。两下必须为**同页 + 同文件对象 + 同槽位 + 第一下未拖拽**，再按 `e.detail >= 2` 或「500ms 内 + 位移 ≤ 12px」确认：系统双击的位置容差仅几个像素，手抖时第二下会退化成单击，只认 `detail` 会漏。`_lastSlotDown` 同时记录页码、文件对象与槽位，点击非槽位区域、非左键或缩放手柄会清空记录，翻页或换票后不得误判。命中后 `openSlotCopyMenu()` 并清空 `_lastSlotDown`，同时置 `_slotCopyMenuClickGuard`——第二次 mouseup 补发的那一次鼠标 click 由全局关闭菜单逻辑放行，消费后清空；新 mousedown 开始时也清空，避免保护下一次操作。**不能从第二次 mousedown 开始用固定时间窗或 `setTimeout(0)` 清除保护**：按住时间不确定，松开前到期仍会让菜单立即关闭。
+**单票份数设置**（issue #59 / #60）：只从浮动工具条的「份数」按钮进入（`toggleSlotCopyMenu()` → `openSlotCopyMenu()`，×1 / ×2 / ×3 / 自定义…）。份数变动会重排展开序列，改前 `captureSlotSelection()` 记「文件对象 + 第几份」，改后按它重定位选中，**不能沿用原槽位编号**（会操作到别的票）。⚠️ **不要恢复「双击票面设份数」**：第一次点击就 `updatePreview()` 重建预览 DOM，第二次点击的 `click/dblclick` 目标已 detach，实测 `e.detail` 恒为 1、原生 `dblclick` 不派发，只能靠「500ms / 12px」自判，慢速双击（>500ms）必失效；而且工具条宽于格子时按上方硬约定①贴回本格内侧顶部，实际压住票面上部约 33px，双击靠上位置会直接落到工具条按钮上。issue #60 用户明确要求只保留工具条入口，代码里 `_lastSlotDown` / `_slotCopyMenuClickGuard` 已随之删除，勿再引入。预览空白处双击仍是「重置视图缩放」（`previewWrap` 的 dblclick），槽位内双击不做任何事。
 
 **版面拖拽排序**（v2.5.0+，与单票偏移拖拽共用 `_slotDrag` 状态机 `mode:'move'`）：
 

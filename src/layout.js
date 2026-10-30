@@ -515,8 +515,6 @@ var _slotTempDrag = null; // 尾部空槽拖拽的临时占位对象（未移动
 
 var _slotSuppressClick = false; // 槽位拖拽松手后吞掉浏览器合成的 click
 
-var _lastSlotDown = null; // 上一次槽位按下：自判双击（系统双击位移容差只有几个像素，手抖会退化成两次单击）
-
 var DRAG_THRESHOLD_PX = 4; // 位移阈值：小于它不算拖拽，避免微小抖动吞掉 click
 
 /**
@@ -529,13 +527,6 @@ function initSlotInteraction() {
   if (_slotInteractionBound) return;
   _slotInteractionBound = true;
   container.addEventListener('mousedown', onSlotMouseDown);
-  // 新手势不能沿用上一次双击的 click 保护；其它区域的点击会中断连续点击。
-  document.addEventListener('mousedown', function(e) {
-    _slotCopyMenuClickGuard = false;
-    if (e.button !== 0 || !e.target.closest('.invoice-slot') || e.target.closest('.slot-handle')) {
-      _lastSlotDown = null;
-    }
-  }, true);
   // 拖拽松手后浏览器会向空槽派发合成 click，capture 阶段吞掉防止误触上传
   document.addEventListener('click', function(e) {
     if (!_slotSuppressClick) return;
@@ -545,10 +536,21 @@ function initSlotInteraction() {
   }, true);
   // Click on empty area deselects (floating slot toolbar excluded, issue #33)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar') && !e.target.closest('#slotCopyMenu')) {
+    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') &&
+        !e.target.closest('#slotCopyMenu') && !hitSlotToolbar(e)) {
       selectSlot(-1);
     }
   });
+}
+
+// 工具条容器是 pointer-events:none（只有按钮吃事件，见 styles.css），点它的内边距 / 按钮间隙时
+// e.target 已经穿透成票面或预览底，closest('#slotToolbar') 命不中 —— 这里按矩形兜底，
+// 否则想点按钮偏出去 2px 就会当成「点空白处」把选中和工具条一起清掉
+function hitSlotToolbar(e) {
+  var tb = document.getElementById('slotToolbar');
+  if (!tb || tb.classList.contains('hidden')) return false;
+  var r = tb.getBoundingClientRect();
+  return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
 }
 
 // 尾部空槽按下即拖：临时创建空白占位进入拖拽链路，松手落到实体之间 = 中间留白，未移动则销毁
@@ -610,26 +612,8 @@ function onSlotMouseDown(e) {
   }
   if (!f && !pendingTail) return;
 
-  // 双击票面 = 设置份数（issue #59）：在 mousedown 阶段判定，避开 mouseup 重建预览 DOM 导致
-  // click / dblclick 目标丢失（拖拽阈值仅 4px，双击时的轻微位移就会触发重建）。
-  // 不能只看 e.detail：系统双击允许的位移仅几个像素，手抖时第二下 detail 仍是 1，
-  // 这里按时间 + 距离自行判定；两下必须是同页、同票、同槽位，第一下未发生拖拽。
-  var sameGesture = _lastSlotDown && !_lastSlotDown.moved && _lastSlotDown.idx === idx &&
-      _lastSlotDown.page === S.currentPage && _lastSlotDown.fileObj === f;
-  var isDouble = sameGesture && (e.detail >= 2 ||
-      (Date.now() - _lastSlotDown.time <= 500 &&
-       Math.abs(e.clientX - _lastSlotDown.x) <= 12 && Math.abs(e.clientY - _lastSlotDown.y) <= 12));
-  if (!pendingTail && isDouble) {
-    e.preventDefault();
-    selectSlot(idx);
-    openSlotCopyMenu();
-    _lastSlotDown = null;
-    // 第二次 mouseup 后浏览器会补发 click，落到槽位上会被「点空白处关菜单」立即关掉。
-    // 保护本次手势的 click，直到它被消费或下一次 mousedown 开始；按住多久都不失效。
-    _slotCopyMenuClickGuard = true;
-    return;
-  }
-  _lastSlotDown = { idx: idx, page: S.currentPage, fileObj: f, time: Date.now(), x: e.clientX, y: e.clientY, moved: false };
+  // 选中票面后由浮动工具条设置份数（issue #60：双击入口已移除——首次点击会重建预览 DOM，
+  // 第二下常落到重建后的元素或压在票面上的工具条里，手势判定无法稳定命中原票面）
 
   // Otherwise: click to select + drag to move
   // 尾部空槽的纯点击不进拖拽：不 preventDefault、不加 dragging，保证 click 正常派发
@@ -798,7 +782,6 @@ function onSlotMouseMove(e) {
 
 function onSlotMouseUp(e) {
   if (!_slotDrag) return;
-  if (_lastSlotDown) _lastSlotDown.moved = !!_slotDrag.moved;
   _slotDrag.slotEl.classList.remove('dragging');
   var d = _slotDrag;
   _slotDrag = null;
@@ -944,6 +927,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   if (a === b) { updatePreview(); return; }
   var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
   if (ia < 0 || ib < 0) { updatePreview(); return; }
+  // 互换后槽位序号对不上原票：选中按对象重定位，否则工具条会指到换过来的那张
+  var keep = captureSlotSelection();
   var offA = a.slotOffsetX, offB = b.slotOffsetX;
   var offAY = a.slotOffsetY, offBY = b.slotOffsetY;
   S.files[ia] = b; S.files[ib] = a;
@@ -951,9 +936,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   b.slotOffsetX = offB; b.slotOffsetY = offBY;
   if (_activeFileIdx === ia) { _activeFileIdx = ib; }
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
-  renderFileList();
   toast('已互换位置');
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
 }
 
 // Move invoice into a neighbor position (insert before/after instead of swapping)

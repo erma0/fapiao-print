@@ -168,40 +168,19 @@ async function run() {
     { name: 'B', ordinal: 0, page: 0, slot: 1, active: ['A', 'B', 'C'] }, '自定义弹窗份数保持选中');
   equal(await evaluate(() => { reviewSetup(5, false, 1); setSlotCopies(1); deleteSlotInvoice(); return S.files.map(f => f.name); }), ['A', 'C'], '份数减少后删除原票');
 
-  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; updatePreview(); closeSlotCopyMenu(); });
-  const rect = await evaluate(() => { var r = document.querySelector('.invoice-slot[data-slot-idx="1"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  for (let count = 1; count <= 2; count++) {
-    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...rect, button: 'left', clickCount: count });
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...rect, button: 'left', clickCount: count });
-  }
-  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '双击打开份数菜单');
-  // 手抖双击：第二下偏移 8px 时系统可能不判双击（detail=1），仍应按时间 + 距离识别
-  await evaluate(() => { closeSlotCopyMenu(); S.selectedSlot = -1; });
-  for (let count = 1; count <= 2; count++) {
-    const p = { x: rect.x + (count === 2 ? 8 : 0), y: rect.y + (count === 2 ? 8 : 0) };
-    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', clickCount: 1 });
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', clickCount: 1 });
-    await delay(120);
-  }
-  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '手抖双击也弹份数菜单');
+  // 单票份数的唯一入口是浮动工具条「份数」按钮（issue #60 起双击票面不再设份数）
+  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; closeSlotCopyMenu(); selectSlot(1); });
+  const copiesBtn = await evaluate(() => { var r = document.getElementById('slotCopiesBtn').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...copiesBtn, button: 'left', clickCount: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...copiesBtn, button: 'left', clickCount: 1 });
+  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '工具条份数按钮打开菜单');
   const item = await evaluate(() => { var r = document.querySelector('#slotCopyMenu [data-n="3"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...item, button: 'left', clickCount: 1 });
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...item, button: 'left', clickCount: 1 });
-  equal(await evaluate(() => ({ copies: S.files[1].copies, selected: getSelectedFileObj().name })), { copies: 3, selected: 'B' }, '菜单真实鼠标点击');
+  equal(await evaluate(() => ({ copies: S.files[1].copies, selected: getSelectedFileObj().name })), { copies: 3, selected: 'B' }, '菜单真实鼠标点击设份数');
 
-  // 在槽位下部点击，避免浮动工具条/菜单覆盖鼠标落点，保证松开后的 click 真正落在票面上。
-  async function setupMouseScene(cols = 3, idx = 1) {
-    await evaluate(cols => {
-      reviewSetup(cols, false, 0);
-      S.files[1].copies = 1;
-      S.currentPage = 0;
-      S.selectedSlot = -1;
-      _lastSlotDown = null;
-      closeSlotCopyMenu();
-      updatePreview();
-    }, cols);
-    return slotPoint(idx);
-  }
+  // 双击票面只做选中、不再弹份数菜单（issue #60：双击入口已移除，勿回归）
+  // 鼠标落点取槽位下部，避开浮动工具条骑在票面上沿的区域
   async function slotPoint(idx) {
     return evaluate(idx => {
       var r = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]').getBoundingClientRect();
@@ -219,56 +198,127 @@ async function run() {
     return evaluate(() => !document.getElementById('slotCopyMenu').classList.contains('hidden'));
   }
 
-  let point = await setupMouseScene();
-  await click(point);
-  await delay(120);
-  const shakyPoint = { x: point.x + 8, y: point.y + 8 };
-  await mouse('mousePressed', shakyPoint);
-  equal(await copyMenuOpen(), true, '手抖双击在第二次按下时打开菜单');
-  await delay(700);
-  await mouse('mouseReleased', shakyPoint);
-  equal(await copyMenuOpen(), true, '手抖双击第二下按住700ms松开仍保留菜单');
+  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; S.selectedSlot = -1; closeSlotCopyMenu(); updatePreview(); });
+  const point = await slotPoint(1);
+  for (let count = 1; count <= 2; count++) {
+    await mouse('mousePressed', point, count);
+    await mouse('mouseReleased', point, count);
+    await delay(60);
+  }
+  equal(await copyMenuOpen(), false, '双击票面不再弹份数菜单');
+  equal(await evaluate(() => S.selectedSlot), 1, '双击票面仍选中该票');
+
+  const toolbarBtn = await evaluate(() => { var r = document.getElementById('slotCopiesBtn').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await click(toolbarBtn);
+  equal(await copyMenuOpen(), true, '选中票面后工具条可打开份数菜单');
   await click(await slotPoint(2));
-  equal(await copyMenuOpen(), false, '双击后单击另一张票正常关闭菜单');
+  equal(await copyMenuOpen(), false, '点击其它票关闭份数菜单');
 
-  point = await setupMouseScene();
-  await click(point);
-  await delay(700);
-  await click(point);
-  equal(await copyMenuOpen(), false, '间隔700ms的两次单击不误弹菜单');
-
-  point = await setupMouseScene();
-  await click(point);
-  await click(await slotPoint(2));
-  equal(await copyMenuOpen(), false, '不同槽位的两次单击不误弹菜单');
-
-  point = await setupMouseScene(1, 0);
-  await click(point);
-  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
-  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
-  await click(point);
-  equal(await evaluate(() => ({ open: !document.getElementById('slotCopyMenu').classList.contains('hidden'),
-    page: S.currentPage, selected: getSelectedFileObj().name })),
-    { open: false, page: 1, selected: 'B' }, '翻页后同位置单击新票不误判双击');
-
-  point = await setupMouseScene();
-  await click(point);
-  const blankPoint = await evaluate(() => {
-    var r = document.getElementById('previewWrap').getBoundingClientRect();
-    return { x: r.left + 2, y: r.top + 2 };
+  // 窄格子收成图标要按「非 compact 固有宽度」判定：读上一档宽度会来回翻转，奇数格停在 395 宽压邻格
+  const tbAudit = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    S.feat.reimburse = false; S.feat.pasteMode = false;
+    S.layout = { cols: 3, rows: 3 };
+    var per = getPerPage(getSettings());
+    S.files = Array.from({ length: per }, (_, i) => createFileObj({ name: 'p' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+    S.currentPage = 0; updatePreview();
+    var out = [];
+    for (var i = 0; i < per; i++) {
+      selectSlot(i);
+      var el = document.querySelector('.invoice-slot[data-slot-idx="' + i + '"]');
+      var tb = document.getElementById('slotToolbar');
+      out.push({ compact: tb.classList.contains('compact'), fits: tb.offsetWidth + 8 <= el.offsetWidth });
+    }
+    selectSlot(-1);
+    return out;
   });
-  await click(blankPoint);
-  await click(point);
-  equal(await copyMenuOpen(), false, '点击空白中断之前的双击记录');
+  equal(tbAudit.length, 9, '3×3 槽位数');
+  equal(tbAudit.every(x => x.compact && x.fits), true, '3×3 工具条全程收成图标且不压邻格');
 
-  point = await setupMouseScene();
-  await mouse('mousePressed', point);
-  const movedPoint = { x: point.x + 8, y: point.y + 8 };
-  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...movedPoint, button: 'left', buttons: 1 });
-  await mouse('mouseReleased', movedPoint);
-  await delay(10);
-  await click(movedPoint);
-  equal(await copyMenuOpen(), false, '拖拽后单击不误判双击');
+  // 工具条容器 pointer-events:none，点内边距会穿透成预览底：不能当成「点空白处」清掉选中
+  await evaluate(() => { reviewSetup(2, false, 0); S.files.forEach(f => { f.copies = 1; }); updatePreview(); selectSlot(1); });
+  const tbPad = await evaluate(() => { var r = document.getElementById('slotToolbar').getBoundingClientRect(); return { x: Math.round(r.left + 2), y: Math.round(r.top + 2) }; });
+  await click(tbPad);
+  equal(await evaluate(() => ({ sel: S.selectedSlot, hidden: document.getElementById('slotToolbar').classList.contains('hidden') })), { sel: 1, hidden: false }, '点工具条内边距不取消选中');
+  const blankHit = await evaluate(() => { var r = document.getElementById('previewWrap').getBoundingClientRect(); return { x: Math.round(r.right - 12), y: Math.round(r.bottom - 12) }; });
+  await click(blankHit);
+  equal(await evaluate(() => S.selectedSlot), -1, '点预览空白仍取消选中');
+
+  // 删除后按文件对象重定位选中：槽位序号会整体前移，沿用旧索引会指到别的票
+  const rmState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(n) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 2, rows: 1 };
+      S.files = Array.from({ length: n }, (_, i) => createFileObj({ name: 'r' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, tbHidden: document.getElementById('slotToolbar').classList.contains('hidden') };
+    }
+    var out = {};
+    setup(3); selectSlot(0); rmFile(0); out.rmSelected = snap();
+    setup(1); selectSlot(0); rmFile(0); out.rmLast = snap();
+    setup(3); selectSlot(1); rmFile(0); out.rmBefore = snap();
+    setup(3); selectSlot(1); rmFile(2); out.rmAfter = snap();
+    setup(3); selectSlot(1); deleteSelected(); out.bulkCleared = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(rmState.rmSelected, { sel: -1, name: null, tbHidden: true }, '删除选中票后清空选中');
+  equal(rmState.rmLast, { sel: -1, name: null, tbHidden: true }, '删空后工具条隐藏');
+  equal(rmState.rmBefore, { sel: 0, name: 'r1.png', tbHidden: false }, '删除前面的票后选中跟随原对象');
+  equal(rmState.rmAfter, { sel: 1, name: 'r1.png', tbHidden: false }, '删除后面的票不动选中');
+  equal(rmState.bulkCleared, { sel: -1, name: null, tbHidden: true }, '批量删除后清空选中且工具条隐藏');
+
+  // 排序 / 列表重排会让预览槽位换票，选中必须按对象跟随
+  const reorderState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(dates) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 3, rows: 1 };
+      S.files = dates.map((d, i) => createFileObj({ name: 'o' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350, invoiceDate: d }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, order: getActiveFiles().map(o => o.name).join(',') };
+    }
+    var out = {};
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(1); sortByDate(1); out.sortDate = snap();
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(0); swapFiles(0, 2); out.swapList = snap();
+    setup(['2026-01-03', '2026-01-01', '2026-01-02']); selectSlot(0); moveFileTo(0, 2, 'after'); out.moveList = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(reorderState.sortDate, { sel: 0, name: 'o1.png', order: 'o1.png,o2.png,o0.png' }, '日期排序后选中跟随原票');
+  equal(reorderState.swapList, { sel: 2, name: 'o0.png', order: 'o2.png,o1.png,o0.png' }, '列表对调后选中跟随原票');
+  equal(reorderState.moveList, { sel: 2, name: 'o0.png', order: 'o1.png,o2.png,o0.png' }, '列表插入后选中跟随原票');
+
+  // 勾选变化同样改变排版成员：取消勾选的票移出排版，选中要么跟随、要么清空
+  const checkState = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup(n) {
+      S.feat.reimburse = false; S.feat.pasteMode = false;
+      S.layout = { cols: 3, rows: 1 };
+      S.files = Array.from({ length: n }, (_, i) => createFileObj({ name: 'c' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+      S.currentPage = 0; updatePreview();
+    }
+    function snap() {
+      var f = getSelectedFileObj();
+      return { sel: S.selectedSlot, name: f ? f.name : null, tbHidden: document.getElementById('slotToolbar').classList.contains('hidden') };
+    }
+    var out = {};
+    setup(3); selectSlot(2); togCheck(0); out.uncheckBefore = snap();
+    setup(3); selectSlot(0); togCheck(0); out.uncheckSelected = snap();
+    setup(3); selectSlot(1); deselectAll(); out.deselectAll = snap();
+    selectSlot(-1);
+    return out;
+  });
+  equal(checkState.uncheckBefore, { sel: 1, name: 'c2.png', tbHidden: false }, '取消勾选前面的票后选中跟随原票');
+  equal(checkState.uncheckSelected, { sel: -1, name: null, tbHidden: true }, '取消勾选选中票后清空选中');
+  equal(checkState.deselectAll, { sel: -1, name: null, tbHidden: true }, '全部取消勾选后清空选中');
 
   const updates = await evaluate(async () => {
     isTauri = true;
