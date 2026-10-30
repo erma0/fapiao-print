@@ -214,6 +214,36 @@ async function run() {
   await click(await slotPoint(2));
   equal(await copyMenuOpen(), false, '点击其它票关闭份数菜单');
 
+  // 窄格子收成图标要按「非 compact 固有宽度」判定：读上一档宽度会来回翻转，奇数格停在 395 宽压邻格
+  const tbAudit = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    S.feat.reimburse = false; S.feat.pasteMode = false;
+    S.layout = { cols: 3, rows: 3 };
+    var per = getPerPage(getSettings());
+    S.files = Array.from({ length: per }, (_, i) => createFileObj({ name: 'p' + i + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 }));
+    S.currentPage = 0; updatePreview();
+    var out = [];
+    for (var i = 0; i < per; i++) {
+      selectSlot(i);
+      var el = document.querySelector('.invoice-slot[data-slot-idx="' + i + '"]');
+      var tb = document.getElementById('slotToolbar');
+      out.push({ compact: tb.classList.contains('compact'), fits: tb.offsetWidth + 8 <= el.offsetWidth });
+    }
+    selectSlot(-1);
+    return out;
+  });
+  equal(tbAudit.length, 9, '3×3 槽位数');
+  equal(tbAudit.every(x => x.compact && x.fits), true, '3×3 工具条全程收成图标且不压邻格');
+
+  // 工具条容器 pointer-events:none，点内边距会穿透成预览底：不能当成「点空白处」清掉选中
+  await evaluate(() => { reviewSetup(2, false, 0); S.files.forEach(f => { f.copies = 1; }); updatePreview(); selectSlot(1); });
+  const tbPad = await evaluate(() => { var r = document.getElementById('slotToolbar').getBoundingClientRect(); return { x: Math.round(r.left + 2), y: Math.round(r.top + 2) }; });
+  await click(tbPad);
+  equal(await evaluate(() => ({ sel: S.selectedSlot, hidden: document.getElementById('slotToolbar').classList.contains('hidden') })), { sel: 1, hidden: false }, '点工具条内边距不取消选中');
+  const blankHit = await evaluate(() => { var r = document.getElementById('previewWrap').getBoundingClientRect(); return { x: Math.round(r.right - 12), y: Math.round(r.bottom - 12) }; });
+  await click(blankHit);
+  equal(await evaluate(() => S.selectedSlot), -1, '点预览空白仍取消选中');
+
   const updates = await evaluate(async () => {
     isTauri = true;
     APP_VERSION = '2.6.16-beta.8';

@@ -3450,13 +3450,15 @@ function syncSlotToolbar() {
   var sr = slotEl.getBoundingClientRect();
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
   var sl = wrap.scrollLeft, st = wrap.scrollTop;
-  var tbW = tb.offsetWidth, tbH = tb.offsetHeight;
-  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格
-  var compact = tbW + 8 > sr.width;
-  if (compact !== tb.classList.contains('compact')) {
-    tb.classList.toggle('compact', compact);
-    tbW = tb.offsetWidth; // 换档后宽度变了，重新测量
-  }
+  var tbW, tbH;
+  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格。
+  // ⚠️ 判定必须用「非 compact」的固有宽度：直接读 offsetWidth 会拿到上一档的宽度，
+  // 在 compact 与非 compact 之间来回翻转（3×3 中间列就卡在 395 宽、每边压邻格 66px）
+  tb.classList.remove('compact');
+  var fullW = tb.offsetWidth;
+  if (fullW + 8 > sr.width) tb.classList.add('compact');
+  tbW = tb.offsetWidth;
+  tbH = tb.offsetHeight;
   var slotLeft = sr.left - wr.left + sl;
   var slotTop = sr.top - wr.top + st;
   var center = slotLeft + sr.width / 2;

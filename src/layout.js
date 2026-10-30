@@ -536,10 +536,21 @@ function initSlotInteraction() {
   }, true);
   // Click on empty area deselects (floating slot toolbar excluded, issue #33)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar') && !e.target.closest('#slotCopyMenu')) {
+    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') &&
+        !e.target.closest('#slotCopyMenu') && !hitSlotToolbar(e)) {
       selectSlot(-1);
     }
   });
+}
+
+// 工具条容器是 pointer-events:none（只有按钮吃事件，见 styles.css），点它的内边距 / 按钮间隙时
+// e.target 已经穿透成票面或预览底，closest('#slotToolbar') 命不中 —— 这里按矩形兜底，
+// 否则想点按钮偏出去 2px 就会当成「点空白处」把选中和工具条一起清掉
+function hitSlotToolbar(e) {
+  var tb = document.getElementById('slotToolbar');
+  if (!tb || tb.classList.contains('hidden')) return false;
+  var r = tb.getBoundingClientRect();
+  return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
 }
 
 // 尾部空槽按下即拖：临时创建空白占位进入拖拽链路，松手落到实体之间 = 中间留白，未移动则销毁

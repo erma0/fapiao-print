@@ -490,8 +490,11 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
   position: absolute; z-index: 20; display: flex; gap: 4px; padding: 4px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow); transform: translateX(-50%); white-space: nowrap;
+  /* 工具条会浮在票面上（上方放不下时贴回本格内侧）：容器与按钮间的空隙不拦鼠标，
+     只有按钮本身接收事件，避免想点票面却点到工具条背景（含误触删除） */
+  pointer-events: none;
 }
-.slot-toolbar .btn { padding: 3px 8px; font-size: 11px; font-weight: 600; }
+.slot-toolbar .btn { pointer-events: auto; padding: 3px 8px; font-size: 11px; font-weight: 600; }
 /* 窄格子（工具条比格子还宽，如 3×3 / 纵向纸张）时只留图标，避免横向压住邻格票面；
    图标与文字的间距由 .btn 的 flex gap 给，隐藏 tb-text 后 gap 自然消失 */
 .slot-toolbar.compact .tb-text { display: none; }
