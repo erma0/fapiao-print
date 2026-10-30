@@ -168,40 +168,19 @@ async function run() {
     { name: 'B', ordinal: 0, page: 0, slot: 1, active: ['A', 'B', 'C'] }, '自定义弹窗份数保持选中');
   equal(await evaluate(() => { reviewSetup(5, false, 1); setSlotCopies(1); deleteSlotInvoice(); return S.files.map(f => f.name); }), ['A', 'C'], '份数减少后删除原票');
 
-  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; updatePreview(); closeSlotCopyMenu(); });
-  const rect = await evaluate(() => { var r = document.querySelector('.invoice-slot[data-slot-idx="1"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  for (let count = 1; count <= 2; count++) {
-    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...rect, button: 'left', clickCount: count });
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...rect, button: 'left', clickCount: count });
-  }
-  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '双击打开份数菜单');
-  // 手抖双击：第二下偏移 8px 时系统可能不判双击（detail=1），仍应按时间 + 距离识别
-  await evaluate(() => { closeSlotCopyMenu(); S.selectedSlot = -1; });
-  for (let count = 1; count <= 2; count++) {
-    const p = { x: rect.x + (count === 2 ? 8 : 0), y: rect.y + (count === 2 ? 8 : 0) };
-    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', clickCount: 1 });
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', clickCount: 1 });
-    await delay(120);
-  }
-  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '手抖双击也弹份数菜单');
+  // 单票份数的唯一入口是浮动工具条「份数」按钮（issue #60 起双击票面不再设份数）
+  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; closeSlotCopyMenu(); selectSlot(1); });
+  const copiesBtn = await evaluate(() => { var r = document.getElementById('slotCopiesBtn').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...copiesBtn, button: 'left', clickCount: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...copiesBtn, button: 'left', clickCount: 1 });
+  equal(await evaluate(() => document.getElementById('slotCopyMenu').classList.contains('hidden')), false, '工具条份数按钮打开菜单');
   const item = await evaluate(() => { var r = document.querySelector('#slotCopyMenu [data-n="3"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...item, button: 'left', clickCount: 1 });
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...item, button: 'left', clickCount: 1 });
-  equal(await evaluate(() => ({ copies: S.files[1].copies, selected: getSelectedFileObj().name })), { copies: 3, selected: 'B' }, '菜单真实鼠标点击');
+  equal(await evaluate(() => ({ copies: S.files[1].copies, selected: getSelectedFileObj().name })), { copies: 3, selected: 'B' }, '菜单真实鼠标点击设份数');
 
-  // 在槽位下部点击，避免浮动工具条/菜单覆盖鼠标落点，保证松开后的 click 真正落在票面上。
-  async function setupMouseScene(cols = 3, idx = 1) {
-    await evaluate(cols => {
-      reviewSetup(cols, false, 0);
-      S.files[1].copies = 1;
-      S.currentPage = 0;
-      S.selectedSlot = -1;
-      _lastSlotDown = null;
-      closeSlotCopyMenu();
-      updatePreview();
-    }, cols);
-    return slotPoint(idx);
-  }
+  // 双击票面只做选中、不再弹份数菜单（issue #60：双击入口已移除，勿回归）
+  // 鼠标落点取槽位下部，避开浮动工具条骑在票面上沿的区域
   async function slotPoint(idx) {
     return evaluate(idx => {
       var r = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]').getBoundingClientRect();
@@ -219,56 +198,21 @@ async function run() {
     return evaluate(() => !document.getElementById('slotCopyMenu').classList.contains('hidden'));
   }
 
-  let point = await setupMouseScene();
-  await click(point);
-  await delay(120);
-  const shakyPoint = { x: point.x + 8, y: point.y + 8 };
-  await mouse('mousePressed', shakyPoint);
-  equal(await copyMenuOpen(), true, '手抖双击在第二次按下时打开菜单');
-  await delay(700);
-  await mouse('mouseReleased', shakyPoint);
-  equal(await copyMenuOpen(), true, '手抖双击第二下按住700ms松开仍保留菜单');
+  await evaluate(() => { reviewSetup(3, false, 0); S.files[1].copies = 1; S.selectedSlot = -1; closeSlotCopyMenu(); updatePreview(); });
+  const point = await slotPoint(1);
+  for (let count = 1; count <= 2; count++) {
+    await mouse('mousePressed', point, count);
+    await mouse('mouseReleased', point, count);
+    await delay(60);
+  }
+  equal(await copyMenuOpen(), false, '双击票面不再弹份数菜单');
+  equal(await evaluate(() => S.selectedSlot), 1, '双击票面仍选中该票');
+
+  const toolbarBtn = await evaluate(() => { var r = document.getElementById('slotCopiesBtn').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await click(toolbarBtn);
+  equal(await copyMenuOpen(), true, '选中票面后工具条可打开份数菜单');
   await click(await slotPoint(2));
-  equal(await copyMenuOpen(), false, '双击后单击另一张票正常关闭菜单');
-
-  point = await setupMouseScene();
-  await click(point);
-  await delay(700);
-  await click(point);
-  equal(await copyMenuOpen(), false, '间隔700ms的两次单击不误弹菜单');
-
-  point = await setupMouseScene();
-  await click(point);
-  await click(await slotPoint(2));
-  equal(await copyMenuOpen(), false, '不同槽位的两次单击不误弹菜单');
-
-  point = await setupMouseScene(1, 0);
-  await click(point);
-  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
-  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
-  await click(point);
-  equal(await evaluate(() => ({ open: !document.getElementById('slotCopyMenu').classList.contains('hidden'),
-    page: S.currentPage, selected: getSelectedFileObj().name })),
-    { open: false, page: 1, selected: 'B' }, '翻页后同位置单击新票不误判双击');
-
-  point = await setupMouseScene();
-  await click(point);
-  const blankPoint = await evaluate(() => {
-    var r = document.getElementById('previewWrap').getBoundingClientRect();
-    return { x: r.left + 2, y: r.top + 2 };
-  });
-  await click(blankPoint);
-  await click(point);
-  equal(await copyMenuOpen(), false, '点击空白中断之前的双击记录');
-
-  point = await setupMouseScene();
-  await mouse('mousePressed', point);
-  const movedPoint = { x: point.x + 8, y: point.y + 8 };
-  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...movedPoint, button: 'left', buttons: 1 });
-  await mouse('mouseReleased', movedPoint);
-  await delay(10);
-  await click(movedPoint);
-  equal(await copyMenuOpen(), false, '拖拽后单击不误判双击');
+  equal(await copyMenuOpen(), false, '点击其它票关闭份数菜单');
 
   const updates = await evaluate(async () => {
     isTauri = true;

@@ -3409,13 +3409,13 @@ function selectSlot(idx) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
     syncSidebarToSelectedSlot();
-    // 首次选中提示隐藏手势（issue #33 / #59）：双击设置份数 / 右键菜单，跨会话仅提示一次
-    if (!window._dblclickHintShown) {
-      window._dblclickHintShown = true;
+    // 首次选中提示隐藏手势（issue #33 / #60）：浮动工具条设份数 / 右键菜单，跨会话仅提示一次
+    if (!window._slotHintShown) {
+      window._slotHintShown = true;
       try {
-        if (localStorage.getItem('ticketchan-dblclick-hint') !== '1') {
-          localStorage.setItem('ticketchan-dblclick-hint', '1');
-          toast('提示：双击票面可设置份数，右键票面有更多操作', 3500);
+        if (localStorage.getItem('ticketchan-slot-hint') !== '1') {
+          localStorage.setItem('ticketchan-slot-hint', '1');
+          toast('提示：选中票面后可用上方工具条设份数，右键有更多操作', 3500);
         }
       } catch(e) {}
     }
@@ -3498,7 +3498,7 @@ document.getElementById('previewWrap').addEventListener('scroll', function() {
 });
 window.addEventListener('resize', syncSlotToolbar);
 
-// 工具条「份数」：点击按钮 / 双击票面 → 弹出份数菜单（issue #59）
+// 工具条「份数」：点击按钮弹出份数菜单（issue #59）
 function toggleSlotCopyMenu(e) {
   if (e) e.stopPropagation();
   var menu = document.getElementById('slotCopyMenu');
@@ -3506,8 +3506,7 @@ function toggleSlotCopyMenu(e) {
   if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
   openSlotCopyMenu();
 }
-var _slotCopyMenuClickGuard = false; // 只保护双击手势随后的那一次 click
-// 打开菜单（幂等）：双击与工具条按钮共用，避免双击时二次 toggle 又把菜单关掉
+// 打开菜单（幂等）
 function openSlotCopyMenu() {
   var menu = document.getElementById('slotCopyMenu');
   var btn = document.getElementById('slotCopiesBtn');
@@ -4676,9 +4675,7 @@ document.addEventListener('click', function(e) {
   }
   var xm = document.getElementById('ctxMenu');
   if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
-  var keepSlotCopyMenu = _slotCopyMenuClickGuard && e.detail > 0;
-  _slotCopyMenuClickGuard = false;
-  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn') && !keepSlotCopyMenu) closeSlotCopyMenu();
+  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn')) closeSlotCopyMenu();
 });
 function updatePrintBtn() { document.getElementById('printBtn').disabled = !S.files.some(function(f) { return f.checked; }); }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
@@ -5455,16 +5452,9 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   }
 }, { passive: false });
 
-// Double-click: on a slot with invoice → 设置排版份数（issue #59）；空白处 → 重置预览缩放
+// Double-click on blank preview area: reset view zoom (票面双击不再设份数，见 issue #60)
 document.getElementById('previewWrap').addEventListener('dblclick', function(e) {
-  var slotEl = e.target.closest('.invoice-slot');
-  if (slotEl) {
-    var idx = parseInt(slotEl.dataset.slotIdx);
-    if (idx >= 0) {
-      if (S.selectedSlot !== idx) selectSlot(idx);
-      if (getSelectedFileObj()) { openSlotCopyMenu(); return; }
-    }
-  }
+  if (e.target.closest('.invoice-slot')) return;
   if (S.viewZoom !== 0) { setZoom('fit'); }
 });
 

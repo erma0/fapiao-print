@@ -515,8 +515,6 @@ var _slotTempDrag = null; // 尾部空槽拖拽的临时占位对象（未移动
 
 var _slotSuppressClick = false; // 槽位拖拽松手后吞掉浏览器合成的 click
 
-var _lastSlotDown = null; // 上一次槽位按下：自判双击（系统双击位移容差只有几个像素，手抖会退化成两次单击）
-
 var DRAG_THRESHOLD_PX = 4; // 位移阈值：小于它不算拖拽，避免微小抖动吞掉 click
 
 /**
@@ -529,13 +527,6 @@ function initSlotInteraction() {
   if (_slotInteractionBound) return;
   _slotInteractionBound = true;
   container.addEventListener('mousedown', onSlotMouseDown);
-  // 新手势不能沿用上一次双击的 click 保护；其它区域的点击会中断连续点击。
-  document.addEventListener('mousedown', function(e) {
-    _slotCopyMenuClickGuard = false;
-    if (e.button !== 0 || !e.target.closest('.invoice-slot') || e.target.closest('.slot-handle')) {
-      _lastSlotDown = null;
-    }
-  }, true);
   // 拖拽松手后浏览器会向空槽派发合成 click，capture 阶段吞掉防止误触上传
   document.addEventListener('click', function(e) {
     if (!_slotSuppressClick) return;
@@ -610,26 +601,8 @@ function onSlotMouseDown(e) {
   }
   if (!f && !pendingTail) return;
 
-  // 双击票面 = 设置份数（issue #59）：在 mousedown 阶段判定，避开 mouseup 重建预览 DOM 导致
-  // click / dblclick 目标丢失（拖拽阈值仅 4px，双击时的轻微位移就会触发重建）。
-  // 不能只看 e.detail：系统双击允许的位移仅几个像素，手抖时第二下 detail 仍是 1，
-  // 这里按时间 + 距离自行判定；两下必须是同页、同票、同槽位，第一下未发生拖拽。
-  var sameGesture = _lastSlotDown && !_lastSlotDown.moved && _lastSlotDown.idx === idx &&
-      _lastSlotDown.page === S.currentPage && _lastSlotDown.fileObj === f;
-  var isDouble = sameGesture && (e.detail >= 2 ||
-      (Date.now() - _lastSlotDown.time <= 500 &&
-       Math.abs(e.clientX - _lastSlotDown.x) <= 12 && Math.abs(e.clientY - _lastSlotDown.y) <= 12));
-  if (!pendingTail && isDouble) {
-    e.preventDefault();
-    selectSlot(idx);
-    openSlotCopyMenu();
-    _lastSlotDown = null;
-    // 第二次 mouseup 后浏览器会补发 click，落到槽位上会被「点空白处关菜单」立即关掉。
-    // 保护本次手势的 click，直到它被消费或下一次 mousedown 开始；按住多久都不失效。
-    _slotCopyMenuClickGuard = true;
-    return;
-  }
-  _lastSlotDown = { idx: idx, page: S.currentPage, fileObj: f, time: Date.now(), x: e.clientX, y: e.clientY, moved: false };
+  // 选中票面后由浮动工具条设置份数（issue #60：双击入口已移除——首次点击会重建预览 DOM，
+  // 第二下常落到重建后的元素或压在票面上的工具条里，手势判定无法稳定命中原票面）
 
   // Otherwise: click to select + drag to move
   // 尾部空槽的纯点击不进拖拽：不 preventDefault、不加 dragging，保证 click 正常派发
@@ -798,7 +771,6 @@ function onSlotMouseMove(e) {
 
 function onSlotMouseUp(e) {
   if (!_slotDrag) return;
-  if (_lastSlotDown) _lastSlotDown.moved = !!_slotDrag.moved;
   _slotDrag.slotEl.classList.remove('dragging');
   var d = _slotDrag;
   _slotDrag = null;
