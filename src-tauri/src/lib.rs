@@ -550,10 +550,10 @@ fn parse_release(json: &serde_json::Value) -> ReleaseEntry {
     }
 }
 
-/// 主备双源 GET：依次尝试 URLs，返回第一个成功解析的 JSON。
-fn fetch_releases_json(agent: &ureq::Agent, urls: &[String]) -> Result<serde_json::Value, String> {
+/// 主备双源 GET：依次尝试 URLs，返回第一个成功解析的 JSON 及是否走了备用代理源。
+fn fetch_releases_json(agent: &ureq::Agent, urls: &[String]) -> Result<(serde_json::Value, bool), String> {
     let mut last_err = String::new();
-    for url in urls {
+    for (idx, url) in urls.iter().enumerate() {
         match agent
             .get(url)
             .set("User-Agent", "ticketchan-updater")
@@ -562,7 +562,7 @@ fn fetch_releases_json(agent: &ureq::Agent, urls: &[String]) -> Result<serde_jso
         {
             Ok(resp) => match resp.into_string() {
                 Ok(text) => match serde_json::from_str(&text) {
-                    Ok(v) => return Ok(v),
+                    Ok(v) => return Ok((v, idx > 0)),
                     Err(e) => last_err = format!("解析响应失败: {}", e),
                 },
                 Err(e) => last_err = format!("读取响应失败: {}", e),
@@ -609,10 +609,10 @@ async fn check_for_updates(channel: Option<String>) -> Result<UpdateInfo, String
             format!("https://api.github.com/repos/erma0/fapiao-print{}", path),
             format!("https://gh-proxy.com/https://api.github.com/repos/erma0/fapiao-print{}", path),
         ];
-        let json = fetch_releases_json(&agent, &urls)?;
+        let (json, via_proxy) = fetch_releases_json(&agent, &urls)?;
 
         // /releases/latest 返回单个对象，/releases 返回数组；draft 一律忽略
-        let entries: Vec<ReleaseEntry> = if let Some(arr) = json.as_array() {
+        let mut entries: Vec<ReleaseEntry> = if let Some(arr) = json.as_array() {
             arr.iter()
                 .filter(|r| !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false))
                 .map(parse_release)
@@ -620,6 +620,17 @@ async fn check_for_updates(channel: Option<String>) -> Result<UpdateInfo, String
         } else {
             vec![parse_release(&json)]
         };
+
+        // API 走 gh-proxy 时把资产下载地址同步改写：否则应用内下载仍直连 github.com 会失败
+        if via_proxy {
+            for e in entries.iter_mut() {
+                for a in e.assets.iter_mut() {
+                    if a.download_url.starts_with("https://github.com/") {
+                        a.download_url = format!("https://gh-proxy.com/{}", a.download_url);
+                    }
+                }
+            }
+        }
 
         // 选出高于当前版本的最新版本
         let mut best: Option<(String, ReleaseEntry)> = None;

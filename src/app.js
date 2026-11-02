@@ -6000,6 +6000,11 @@ function getAssetVariant(name) {
   return { ocr: ocr, kind: kind, label: label };
 }
 
+/** 当前安装是否为 OCR 版：编译期 feature 优先，异步探测结果为兜底 */
+function isOcrBuild() {
+  return _ocrBuildFeature === null ? hasOcr : _ocrBuildFeature;
+}
+
 /**
  * 选择可用于应用内自更新的资产：必须与当前安装类型（轻量/OCR）一致、带 sha256 摘要，
  * 且是可直接替换 exe 的绿色版产物——安装包（NSIS）不能当主程序用。
@@ -6008,13 +6013,13 @@ function getAssetVariant(name) {
 function pickAutoUpdateAsset(info) {
   if (!info || !info.assets || !info.assets.length) return null;
   // 以编译期 OCR feature 为准：check_ocr_available 是异步探测，未完成时会把 OCR 版误判成轻量版
-  var wantOcr = _ocrBuildFeature === null ? hasOcr : _ocrBuildFeature;
+  var wantOcr = isOcrBuild();
   var wanted = wantOcr ? ['portable-zip', 'portable-exe'] : ['portable-exe', 'portable-zip'];
   for (var i = 0; i < wanted.length; i++) {
     for (var j = 0; j < info.assets.length; j++) {
       var a = info.assets[j];
       var v = getAssetVariant(a.name);
-      if (v.ocr !== wantOcr || v.kind !== wanted[i] || !a.digest || !a.size) continue;
+      if (v.ocr !== wantOcr || v.kind !== wanted[i] || !a.download_url || !a.digest || !a.size) continue;
       return a;
     }
   }
@@ -6173,7 +6178,7 @@ function showUpdateModal(info) {
     assetsHtml = '<div class="update-assets-title">下载文件：</div><ul class="update-assets">';
     info.assets.forEach(function(a) {
       var variant = getAssetVariant(a.name);
-      var recommended = hasOcr ? variant.ocr : !variant.ocr;
+      var recommended = isOcrBuild() ? variant.ocr : !variant.ocr;
       assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + '" onclick="openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')">' +
         '<div class="update-asset-info">' +
           '<span class="update-asset-name">📥 ' + escHtml(a.name) + '</span>' +

@@ -318,6 +318,9 @@ pub fn cancel_update_download() {
 /// Windows 允许重命名正在运行的 exe（不允许删除），所以流程是：
 /// 当前 exe → `.old`，`.update` → 当前 exe 原名，再启动。
 fn swap_and_launch(exe: &Path, update: &Path) -> Result<(), String> {
+    // 先确认新文件确实是可执行程序，避免用损坏/占位文件顶掉正在运行的主程序
+    verify_exe(update)?;
+
     let dir = exe.parent().ok_or_else(|| "无法获取程序目录".to_string())?;
 
     let mut old = dir.join(OLD_NAME);
