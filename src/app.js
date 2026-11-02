@@ -6116,7 +6116,9 @@ function startUpdateDownload() {
       invoke('apply_update_and_restart').catch(function(err) {
         _updateApplying = false;
         syncUpdateDownloadUI();
-        toast('自动更新失败: ' + err + '，可前往 GitHub 手动下载', 5000);
+        var txt = document.getElementById('updateProgressText');
+        if (txt) txt.textContent = '替换失败，更新包已保留，下次启动会自动完成';
+        toast('自动更新失败: ' + err + '；更新包已保留，下次启动会自动完成，也可前往 GitHub 手动下载', 6000);
       });
     }, 400);
   }).catch(function(err) {
