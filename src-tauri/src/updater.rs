@@ -273,9 +273,16 @@ pub fn apply_update_and_restart(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+/// 启动补偿只允许执行一次：`showApp` 会被调用两次（DOM ready + 延时兜底），
+/// 并发进入替换流程可能互相踩踏
+static PENDING_UPDATE_CHECKED: AtomicBool = AtomicBool::new(false);
+
 /// 启动时补偿：清理上次残留，若有待安装更新则立即应用（失败则丢弃，绝不重启循环）
 #[tauri::command]
 pub fn check_pending_update() -> Result<String, String> {
+    if PENDING_UPDATE_CHECKED.swap(true, Ordering::SeqCst) {
+        return Ok("skipped".to_string());
+    }
     let dir = exe_dir()?;
     let _ = std::fs::remove_file(dir.join(PART_NAME));
     let _ = std::fs::remove_file(dir.join(TMP_EXE_NAME));

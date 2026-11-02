@@ -6139,9 +6139,11 @@ function showUpdateModal(info) {
   if (!modal) return;
   _lastUpdateInfo = info;
 
-  // 每次打开重置自更新状态，重新挑选可替换的产物
-  resetUpdateProgressState();
-  _updateAssetPicked = pickAutoUpdateAsset(info);
+  // 下载/替换进行中时不要重置状态，否则可再次点击下载导致两个任务并发写同一文件
+  if (!_updateDownloading && !_updateApplying) {
+    resetUpdateProgressState();
+    _updateAssetPicked = pickAutoUpdateAsset(info);
+  }
   syncUpdateDownloadUI();
 
   document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '🧪 发现新测试版' : '🆕 发现新版本';
