@@ -1,6 +1,6 @@
 [package]
 name = "ticketchan"
-version = "2.6.16-beta.10"
+version = "2.7.0-beta.1"
 description = "发票酱"
 authors = ["ticketchan"]
 license = "MIT"
@@ -40,6 +40,7 @@ invoice-engine = { path = "invoice-engine" }
 flate2 = "1.1.9"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["native-tls", "gzip", "proxy-from-env"] }
 libloading = "0.8"
 

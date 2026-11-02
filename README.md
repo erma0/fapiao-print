@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-2.6.16-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-2.7.0-blue.svg)]()
 
 轻量桌面应用，专为批量打印电子发票设计。支持 PDF、OFD、图片等多格式导入，智能排版，一键打印或导出。
 
@@ -118,12 +118,14 @@ OFD（开放版式文档）是国家标准电子发票格式，本工具提供�
 
 | 文件 | 说明 |
 |------|------|
-| `发票酱_x64-setup.exe` | 轻量版安装包 |
-| `发票酱_x64_绿色版.exe` | 轻量版便携（单文件 exe，无需安装） |
-| `发票酱_x64_OCR版-setup.exe` | OCR 版安装包（含 PP-OCRv6） |
-| `发票酱_x64_OCR绿色版.zip` | OCR 版便携（exe + models/） |
+| `TicketChan_<版本>_x64-setup.exe` | 轻量版安装包 |
+| `TicketChan_<版本>_x64_portable.exe` | 轻量版便携（单文件 exe，无需安装） |
+| `TicketChan_<版本>_x64_ocr-setup.exe` | OCR 版安装包（含 PP-OCRv6） |
+| `TicketChan_<版本>_x64_ocr-portable.zip` | OCR 版便携（exe + models/） |
 
 > 💡 文字型 PDF / OFD 发票选轻量版即可自动提取金额和销售方信息；图片型 PDF 和图片需 OCR 版。
+
+> ⚡ **应用内更新**：发现新版本时可直接在弹窗里点「下载并更新」，自动校验、替换并重启，无需再手动下载整包（v2.7.0）。
 
 **系统要求**：仅支持 **Windows 10 1803 及以上版本** 或 **Windows 11**。
 
@@ -285,6 +287,7 @@ npm run bump 1.9.8   # 同步 package.json → Cargo.toml → tauri.conf.json
 - [x] 多规格纸张（常用证件照尺寸）+ 毫米 / 像素单位切换 + 相纸模式（issue #55）（v2.6.16）
 - [x] 正式版 / 测试版双更新渠道 + 更新弹窗改版（issue #58）（v2.6.16）
 - [x] 单票份数入口收敛（移除双击设份数，issue #60）+ 窄格工具条收窄与穿透 + 列表增删/勾选/重排后选中跟随（v2.6.16）
+- [x] 应用内自更新：下载 + 校验 + 替换 exe + 自动重启（issue #58）（v2.7.0）
 
 ## 🤖 关于此项目
 

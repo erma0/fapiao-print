@@ -7,6 +7,7 @@
 var isTauri = window.__TAURI_INTERNALS__ !== undefined;
 var invoke  = isTauri ? window.__TAURI_INTERNALS__.invoke : null;
 var hasOcr  = false; // Set to true at startup if OCR feature is available
+var _ocrBuildFeature = null; // Rust get_config 的编译期 OCR 标识，自更新选产物时优先使用
 var APP_VERSION = ''; // Filled at startup from Rust get_app_version()
 var _winrtPdfAvailable = true; // Set to false at startup if WinRT PDF component is missing
 
@@ -5558,6 +5559,7 @@ window._tauriFileDrop = function(paths) {
 // =====================================================
 if (isTauri && invoke) {
   invoke('get_config').then(function(config) {
+    if (config && typeof config.hasOcr === 'boolean') _ocrBuildFeature = config.hasOcr;
     if (config && config.renderDpi && config.renderDpi !== PDF_RENDER_DPI) {
       console.error('[DPI] 前后端 DPI 不一致！前端=' + PDF_RENDER_DPI + ', Rust=' + config.renderDpi + '，请检查代码');
       toast('警告：渲染DPI配置不一致，打印质量可能受影响', 5000);
@@ -5675,6 +5677,13 @@ renderQuickLayoutList();
   function showApp() {
     syncAutoUpdateCheckUI();
     if (isTauri && invoke) {
+      // 上次更新若只替换到一半（例如文件被占用），启动时补偿完成并自动重启
+      invoke('check_pending_update').then(function(r) {
+        if (r === 'applied') console.log('[Update] 已应用待安装更新');
+      }).catch(function(err) {
+        console.warn('[Update] pending update skipped:', err);
+      });
+      initUpdateProgressListener();
       // Check OCR availability at startup
       invoke('check_ocr_available').then(function(available) {
         hasOcr = !!available;
@@ -5748,6 +5757,12 @@ var _updateChecking = false;
 var _updateRequestId = 0; // 切渠道时令旧请求失效，允许立即检查新渠道
 var _lastUpdateInfo = null;
 var _UPDATE_CHANNEL_KEY = 'ticketchan-update-channel';
+
+// 应用内自更新状态（issue #58）：下载 → 校验 → 替换 exe → 自动重启
+var _updateAssetPicked = null; // 当前可自动替换的产物（带 digest）
+var _updateDownloading = false;
+var _updateApplying = false;
+var _updateProgressListening = false;
 
 /** 安装版本的默认渠道：版本号带预发布后缀（如 2.6.16-beta.3）即测试版 */
 function getDefaultUpdateChannel() {
@@ -5971,12 +5986,149 @@ function formatUpdateSize(size) {
       : size + ' B';
 }
 
-/** 从产物文件名推断版本类型：轻量/OCR × 安装包/绿色版 */
+/** 从产物文件名推断版本类型：轻量/OCR × 安装包/绿色版（单文件 exe / zip） */
 function getAssetVariant(name) {
   var n = String(name || '').toLowerCase();
   var ocr = n.indexOf('_ocr') >= 0;
-  var kind = n.indexOf('-setup') >= 0 ? '安装包' : (n.indexOf('portable') >= 0 ? '绿色版' : '');
-  return { ocr: ocr, label: (ocr ? 'OCR 版' : '轻量版') + (kind ? ' · ' + kind : '') };
+  var kind = n.indexOf('-setup') >= 0 ? 'installer'
+    : n.slice(-4) === '.zip' ? 'portable-zip'
+      : n.slice(-4) === '.exe' ? 'portable-exe' : '';
+  var label = ocr ? 'OCR 版' : '轻量版';
+  if (kind === 'installer') label += ' · 安装包';
+  else if (kind === 'portable-zip') label += ' · 绿色版（压缩包）';
+  else if (kind === 'portable-exe') label += ' · 绿色版（单文件）';
+  return { ocr: ocr, kind: kind, label: label };
+}
+
+/**
+ * 选择可用于应用内自更新的资产：必须与当前安装类型（轻量/OCR）一致、带 sha256 摘要，
+ * 且是可直接替换 exe 的绿色版产物——安装包（NSIS）不能当主程序用。
+ * 轻量版优先单文件 exe；OCR 版只有 zip（内含 exe + models）。
+ */
+function pickAutoUpdateAsset(info) {
+  if (!info || !info.assets || !info.assets.length) return null;
+  // 以编译期 OCR feature 为准：check_ocr_available 是异步探测，未完成时会把 OCR 版误判成轻量版
+  var wantOcr = _ocrBuildFeature === null ? hasOcr : _ocrBuildFeature;
+  var wanted = wantOcr ? ['portable-zip', 'portable-exe'] : ['portable-exe', 'portable-zip'];
+  for (var i = 0; i < wanted.length; i++) {
+    for (var j = 0; j < info.assets.length; j++) {
+      var a = info.assets[j];
+      var v = getAssetVariant(a.name);
+      if (v.ocr !== wantOcr || v.kind !== wanted[i] || !a.digest || !a.size) continue;
+      return a;
+    }
+  }
+  return null;
+}
+
+/**
+ * 监听后端 update-download-progress 事件。
+ * 项目未引入 @tauri-apps/api，直接用 Tauri 2 内部的 listen 实现注册一次即可。
+ */
+function initUpdateProgressListener() {
+  if (!isTauri || _updateProgressListening) return;
+  var internals = window.__TAURI_INTERNALS__;
+  if (!internals || !internals.transformCallback || !internals.invoke) return;
+  _updateProgressListening = true;
+  try {
+    var handlerId = internals.transformCallback(function(e) {
+      var p = (e && e.payload) || e || {};
+      if (!_updateDownloading) return;
+      renderUpdateProgress(p);
+    });
+    internals.invoke('plugin:event|listen', {
+      event: 'update-download-progress',
+      target: { kind: 'Any' },
+      handler: handlerId
+    }).catch(function() {});
+  } catch(e) { _updateProgressListening = false; }
+}
+
+function setUpdateProgressUI(show) {
+  var wrap = document.getElementById('updateProgress');
+  if (wrap) wrap.classList.toggle('hidden', !show);
+}
+
+/** 按下载状态刷新弹窗按钮：下载中只留「取消」，应用阶段全部禁用 */
+function syncUpdateDownloadUI() {
+  var busy = _updateDownloading;
+  var dl = document.getElementById('updateDownloadBtn');
+  var cancel = document.getElementById('updateCancelBtn');
+  var open = document.getElementById('updateOpenBtn');
+  if (dl) {
+    dl.classList.toggle('hidden', busy || _updateApplying || !_updateAssetPicked);
+    dl.disabled = busy || _updateApplying;
+  }
+  if (cancel) cancel.classList.toggle('hidden', !busy);
+  if (open) open.disabled = busy || _updateApplying;
+  setUpdateProgressUI(busy || _updateApplying);
+}
+
+function resetUpdateProgressState() {
+  _updateDownloading = false;
+  _updateApplying = false;
+  var fill = document.getElementById('updateProgressFill');
+  if (fill) fill.style.width = '0%';
+  var txt = document.getElementById('updateProgressText');
+  if (txt) txt.textContent = '准备下载…';
+}
+
+function renderUpdateProgress(p) {
+  var pct = (p && typeof p.percent === 'number' && isFinite(p.percent)) ? p.percent : 0;
+  pct = Math.max(0, Math.min(100, pct));
+  var fill = document.getElementById('updateProgressFill');
+  if (fill) fill.style.width = pct.toFixed(1) + '%';
+  var txt = document.getElementById('updateProgressText');
+  if (!txt) return;
+  txt.textContent = p && p.total > 0
+    ? '下载中 ' + pct.toFixed(0) + '% · ' + formatUpdateSize(p.current || 0) + ' / ' + formatUpdateSize(p.total)
+    : '下载中 ' + formatUpdateSize((p && p.current) || 0);
+}
+
+/** 下载并校验更新包，成功后自动替换 exe 并重启 */
+function startUpdateDownload() {
+  if (!_updateAssetPicked || _updateDownloading || _updateApplying || !isTauri || !invoke) return;
+  var asset = _updateAssetPicked;
+  var variant = getAssetVariant(asset.name);
+  resetUpdateProgressState();
+  _updateDownloading = true;
+  syncUpdateDownloadUI();
+
+  invoke('download_update', {
+    url: asset.download_url,
+    sha256: asset.digest,
+    size: asset.size,
+    isZip: variant.kind === 'portable-zip'
+  }).then(function() {
+    _updateDownloading = false;
+    _updateApplying = true;
+    syncUpdateDownloadUI();
+    renderUpdateProgress({ current: asset.size, total: asset.size, percent: 100 });
+    var txt = document.getElementById('updateProgressText');
+    if (txt) txt.textContent = '下载完成，正在替换程序并重启…';
+    // 留一帧让「完成」状态可见，再执行替换
+    setTimeout(function() {
+      invoke('apply_update_and_restart').catch(function(err) {
+        _updateApplying = false;
+        syncUpdateDownloadUI();
+        toast('自动更新失败: ' + err + '，可前往 GitHub 手动下载', 5000);
+      });
+    }, 400);
+  }).catch(function(err) {
+    var msg = String(err);
+    _updateDownloading = false;
+    _updateApplying = false;
+    syncUpdateDownloadUI();
+    if (msg.indexOf('下载已取消') >= 0) toast('已取消更新下载', 2500);
+    else toast('自动更新失败: ' + msg, 5000);
+  });
+}
+
+function cancelUpdateDownload() {
+  if (!_updateDownloading || !invoke) return;
+  invoke('cancel_update_download').catch(function() {});
+  var txt = document.getElementById('updateProgressText');
+  if (txt) txt.textContent = '正在取消…';
 }
 
 /**
@@ -5986,6 +6138,11 @@ function showUpdateModal(info) {
   var modal = document.getElementById('updateModal');
   if (!modal) return;
   _lastUpdateInfo = info;
+
+  // 每次打开重置自更新状态，重新挑选可替换的产物
+  resetUpdateProgressState();
+  _updateAssetPicked = pickAutoUpdateAsset(info);
+  syncUpdateDownloadUI();
 
   document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '🧪 发现新测试版' : '🆕 发现新版本';
   var badge = document.getElementById('updateChannelBadge');
@@ -6031,6 +6188,10 @@ function showUpdateModal(info) {
   // Open release page button
   var openBtn = document.getElementById('updateOpenBtn');
   if (openBtn) {
+    // 没有可自动更新的产物时，「前往 GitHub」升为主按钮
+    openBtn.textContent = _updateAssetPicked ? '🌐 前往 GitHub 下载' : '⬇️ 前往 GitHub 下载';
+    openBtn.classList.toggle('btn-primary', !_updateAssetPicked);
+    openBtn.disabled = false;
     openBtn.onclick = function() {
       if (info.release_url && isTauri && invoke) {
         invoke('open_url', { url: info.release_url }).catch(function(){});

@@ -3,6 +3,7 @@ use tauri::{command, Emitter};
 
 mod diagnostics;
 mod pdf_engine;
+mod updater;
 #[cfg(target_os = "windows")]
 mod pdfium_print;
 
@@ -422,6 +423,9 @@ struct UpdateAsset {
     name: String,
     download_url: String,
     size: u64,
+    /// GitHub API 提供的资产摘要（形如 `sha256:...`），用于应用内自更新校验；
+    /// 旧版本发布可能没有该字段，为 None 时前端禁用自动更新、回退浏览器下载
+    digest: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -505,7 +509,7 @@ fn compare_versions(a: &str, b: &str) -> i32 {
 /// 未启用 `tls`(rustls) feature 时 `default_tls_config()` 返回一个直接报错的桩，
 /// 所有 https 请求都会以 "cannot make HTTPS request because no TLS backend is configured" 失败。
 /// 必须显式注入连接器，才能用系统 schannel 走 https。
-fn build_http_agent(timeout: std::time::Duration) -> Result<ureq::Agent, String> {
+pub(crate) fn build_http_agent(timeout: std::time::Duration) -> Result<ureq::Agent, String> {
     let tls = ureq::native_tls::TlsConnector::new()
         .map_err(|e| format!("初始化 TLS 失败: {}", e))?;
     Ok(ureq::AgentBuilder::new()
@@ -532,6 +536,7 @@ fn parse_release(json: &serde_json::Value) -> ReleaseEntry {
                 name: a["name"].as_str().unwrap_or("").to_string(),
                 download_url: a["browser_download_url"].as_str().unwrap_or("").to_string(),
                 size: a["size"].as_u64().unwrap_or(0),
+                digest: a["digest"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
             });
         }
     }
@@ -666,6 +671,8 @@ async fn check_for_updates(channel: Option<String>) -> Result<UpdateInfo, String
 fn get_config() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "renderDpi": pdf_engine::RENDER_DPI,
+        // 编译期 OCR feature，自更新挑选产物用（比异步探测更早、更可靠）
+        "hasOcr": cfg!(feature = "ocr"),
     }))
 }
 
@@ -1671,6 +1678,10 @@ pub fn run() {
         download_sumatrapdf,
         sumatrapdf_print,
         check_for_updates,
+        updater::download_update,
+        updater::apply_update_and_restart,
+        updater::cancel_update_download,
+        updater::check_pending_update,
         diagnostics::export_diagnostics,
     ]);
 
@@ -1713,6 +1724,10 @@ pub fn run() {
         download_sumatrapdf,
         sumatrapdf_print,
         check_for_updates,
+        updater::download_update,
+        updater::apply_update_and_restart,
+        updater::cancel_update_download,
+        updater::check_pending_update,
         diagnostics::export_diagnostics,
     ]);
 

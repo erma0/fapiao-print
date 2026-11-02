@@ -526,9 +526,15 @@
       <div class="update-section-title">更新内容</div>
       <div class="update-notes" id="updateNotes"></div>
       <div id="updateAssets"></div>
+      <div class="update-progress hidden" id="updateProgress">
+        <div class="update-progress-track"><div class="update-progress-fill" id="updateProgressFill"></div></div>
+        <div class="update-progress-text" id="updateProgressText">准备下载…</div>
+      </div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" id="updateOpenBtn">⬇️ 前往 GitHub 下载</button>
+      <button class="btn btn-primary" id="updateDownloadBtn" onclick="startUpdateDownload()">⬇️ 下载并更新</button>
+      <button class="btn hidden" id="updateCancelBtn" onclick="cancelUpdateDownload()">取消下载</button>
+      <button class="btn" id="updateOpenBtn">⬇️ 前往 GitHub 下载</button>
       <div class="update-secondary-actions">
         <button class="btn" onclick="ignoreUpdateVersion()">跳过此版本</button>
         <button class="btn" onclick="closeUpdateModal()">稍后再说</button>
