@@ -257,9 +257,20 @@ pub fn apply_update_and_restart(app: tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    swap_and_launch(&exe, &update)?;
-    schedule_exit();
-    Ok(())
+    match swap_and_launch(&exe, &update) {
+        Ok(()) => {
+            schedule_exit();
+            Ok(())
+        }
+        Err(e) => {
+            // 替换失败必须把窗口恢复，否则用户看不到错误提示
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+            }
+            Err(e)
+        }
+    }
 }
 
 /// 启动时补偿：清理上次残留，若有待安装更新则立即应用（失败则丢弃，绝不重启循环）
