@@ -366,9 +366,6 @@ input, textarea, select, [contenteditable="true"], .modal-body, .modal-body *, p
 }
 .copy-menu-item:hover { background: var(--accent-light); }
 .copy-menu-sep { height: 1px; background: var(--border); margin: 4px 8px; }
-.copy-menu-hint {
-  padding: 6px 12px; font-size: 10px; color: var(--text-muted); line-height: 1.4; white-space: normal;
-}
 .copy-ctrl { position: relative; }
 
 /* ===== 右键菜单 ===== */
@@ -612,6 +609,10 @@ input[type="range"] { flex: 1; height: 5px; accent-color: var(--accent); cursor:
 /* ===== Empty ===== */
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); padding: 40px; text-align: center; align-self: stretch; }
 .empty-icon { font-size: 52px; }
+.empty-title { font-size: 17px; font-weight: 700; color: var(--text-secondary); }
+
+/* ===== 次要说明文字（设置面板等） ===== */
+.hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; margin-top: 6px; }
 
 /* ===== Modal ===== */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); animation: fadeIn 0.2s ease-out; }

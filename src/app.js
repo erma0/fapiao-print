@@ -4395,7 +4395,6 @@ function togglePhotoMode(btn) {
     // 照片必须按原比例完整显示，且不能侧放
     document.getElementById('fitMode').value = 'fit';
     document.getElementById('customScaleRow').style.display = 'none';
-    document.getElementById('customScaleHint').style.display = 'none';
     document.getElementById('globalRotation').value = '0';
   }
   syncPhotoModeUI();
@@ -4405,7 +4404,6 @@ function togglePhotoMode(btn) {
 function onFitChange() {
   var isCustom = document.getElementById('fitMode').value === 'custom';
   document.getElementById('customScaleRow').style.display = isCustom ? 'flex' : 'none';
-  document.getElementById('customScaleHint').style.display = isCustom ? 'block' : 'none';
   updatePreview();
 }
 function setMP(t, b, l, r) {

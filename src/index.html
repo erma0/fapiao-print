@@ -31,13 +31,12 @@
           <div class="file-actions">
             <button class="ib" id="selectAllBtn" onclick="toggleSelectAll()" title="全选"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/></svg></button>
             <div class="copy-ctrl">
-              <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><text x="8" y="11.6" font-size="8" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial,sans-serif">N</text></svg></button>
+              <button class="ib" onclick="toggleCopyMenu()" title="批量设置选中发票的排版份数；单张请在预览选中票面后用工具条「份数」"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><text x="8" y="11.6" font-size="8" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial,sans-serif">N</text></svg></button>
               <div class="copy-menu hidden" id="copyMenu">
-                <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
-                <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2</div>
-                <div class="copy-menu-item" onclick="setAllCopies(event,3)">选中项 ×3</div>
-                <div class="copy-menu-sep"></div>
-                <div class="copy-menu-hint">💡 单张份数：在预览中选中票面，用上方工具条设置</div>
+                <div class="copy-menu-label">选中项份数</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,1)">×1</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,2)">×2</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,3)">×3</div>
               </div>
             </div>
             <button class="ib" id="ocrAllBtn" onclick="ocrAll()" title="一键识别"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/></svg></button>
@@ -135,16 +134,16 @@
           <div class="trow" style="margin-top:6px"><label class="tlbl">粘贴单模式</label><button class="tgl" id="togglePasteMode" onclick="toggleFeature('pasteMode',this)"></button></div>
           <div id="pasteOpts" style="display:none">
             <div style="margin:2px 0 8px 0">
-              <button class="btn btn-sm" style="width:100%" onclick="applyPastePreset()">↩ 恢复标准边距（2.08 / 0.41cm）</button>
+              <button class="btn btn-sm" style="width:100%" onclick="applyPastePreset()">↩ 恢复标准边距</button>
             </div>
-            <div class="row"><label class="lbl">上mm</label><div class="ctrl"><input type="number" id="pasteTop" value="20.8" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:11px">＝2.08cm</span></div></div>
-            <div class="row"><label class="lbl">下mm</label><div class="ctrl"><input type="number" id="pasteBottom" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:11px">＝0.41cm</span></div></div>
-            <div class="row"><label class="lbl">左mm</label><div class="ctrl"><input type="number" id="pasteLeft" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:11px">＝0.41cm</span></div></div>
-            <div class="row"><label class="lbl">右mm</label><div class="ctrl"><input type="number" id="pasteRight" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:11px">＝0.41cm</span></div></div>
+            <div class="row"><label class="lbl">上mm</label><div class="ctrl"><input type="number" id="pasteTop" value="20.8" min="0" max="60" step="0.1" style="width:60px;text-align:center" title="装订区高度，票据从装订线下方开始排版" onchange="updatePreview()"></div></div>
+            <div class="row"><label class="lbl">下mm</label><div class="ctrl"><input type="number" id="pasteBottom" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"></div></div>
+            <div class="row"><label class="lbl">左mm</label><div class="ctrl"><input type="number" id="pasteLeft" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"></div></div>
+            <div class="row"><label class="lbl">右mm</label><div class="ctrl"><input type="number" id="pasteRight" value="4.1" min="0" max="60" step="0.1" style="width:60px;text-align:center" onchange="updatePreview()"></div></div>
             <div class="trow" style="margin-top:8px"><label class="tlbl">装订线横线</label><button class="tgl on" id="togglePasteBindLine" onclick="toggleFeature('pasteBindLine',this)"></button></div>
             <div class="row"><label class="lbl">装订线文字</label><div class="ctrl"><input type="text" id="pasteBindText" value="装 订 线" onchange="updatePreview()"></div></div>
             <div class="row"><label class="lbl">字号mm</label><div class="rr ctrl"><input type="range" id="pasteBindSize" min="2" max="10" step="0.5" value="4" oninput="syncSlider(this,'pasteBindSizeN');updatePreview()"><input type="number" id="pasteBindSizeN" min="2" max="10" step="0.5" value="4" onchange="syncRange(this,'pasteBindSize');updatePreview()"></div></div>
-            <div class="trow" style="margin-top:8px"><label class="tlbl">右下角签字栏</label><button class="tgl on" id="togglePasteSig" onclick="toggleFeature('pasteShowSig',this)"></button></div>
+            <div class="trow" style="margin-top:8px"><label class="tlbl">右下角签字栏</label><button class="tgl on" id="togglePasteSig" onclick="toggleFeature('pasteShowSig',this)" title="签字栏留空，打印后手写"></button></div>
             <div id="pasteSigOpts">
               <div class="row"><label class="lbl">列名</label><div class="ctrl"><input type="text" id="pasteSigCols" value="票据张数,金额,报销人" placeholder="逗号分隔" onchange="updatePreview()"></div></div>
               <div class="row"><label class="lbl">表格宽</label><div class="ctrl"><input type="number" id="pasteSigWidth" value="80" min="30" max="200" step="1" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
@@ -152,7 +151,7 @@
               <div class="row"><label class="lbl">填写行高</label><div class="ctrl"><input type="number" id="pasteSigBodyH" value="14" min="4" max="60" step="0.5" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
               <div class="row"><label class="lbl">区间距</label><div class="ctrl"><input type="number" id="pasteSigGap" value="2" min="0" max="20" step="0.5" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             </div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">票据排在装订线下方、签字栏上方；上边距即装订区高度。本模式独立边距，页码 / 日期 / 自定义页脚不生效，签字栏留空手写。</div>
+            <div class="hint">票据排在装订线与签字栏之间；页码 / 日期 / 页脚不生效。</div>
           </div>
           <div class="trow" style="margin-top:6px"><label class="tlbl">相纸模式</label><button class="tgl" id="togglePhotoMode" onclick="togglePhotoMode(this)"></button></div>
           <div id="photoModeOpts" style="display:none">
@@ -160,9 +159,9 @@
             <div id="photoCustomRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl"><input type="number" id="photoCustomW" value="25" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"> × <input type="number" id="photoCustomH" value="35" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"></div></div>
             <div class="row"><label class="lbl">间距</label><div class="ctrl"><input type="number" id="photoGap" value="2" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             <div class="row"><label class="lbl">留边</label><div class="ctrl"><input type="number" id="photoMargin" value="3" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
-            <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">行（0=自动）</span></div></div>
+            <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" title="0 = 自动铺满" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" title="0 = 自动铺满" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">行</span></div></div>
             <div class="row"><label class="lbl">常用</label><div class="ctrl photo-count-presets" id="photoCountPresets"></div></div>
-            <div id="photoModeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4"></div>
+            <div id="photoModeHint" class="hint"></div>
           </div>
         </div>
         <div class="sec" id="quickLayoutSec">
@@ -170,11 +169,9 @@
           <div class="row">
             <label class="lbl">显示数量</label>
             <div class="ctrl">
-              <input type="number" id="quickLayoutMax" value="0" min="0" max="20" style="width:56px;text-align:center" onchange="setQuickLayoutMax(this.value)">
-              <span style="color:var(--text-muted);font-size:11px">0=全部</span>
+              <input type="number" id="quickLayoutMax" value="0" min="0" max="20" style="width:56px;text-align:center" title="0 = 全部显示" onchange="setQuickLayoutMax(this.value)">
             </div>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin:2px 0 6px 70px">顶部工具栏快捷排版按钮，可增删改、排序、限制显示数量</div>
           <div id="quickLayoutList"></div>
           <button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="addQuickLayout()">＋ 添加布局</button>
         </div>
@@ -199,7 +196,6 @@
           <div class="sec-title">🔍 缩放模式</div>
           <div class="row"><label class="lbl">模式</label><div class="ctrl"><select id="fitMode" onchange="onFitChange()"><option value="fit">自适应</option><option value="fill">拉伸填充</option><option value="original">原始大小</option><option value="custom">自定义 %</option></select></div></div>
           <div id="customScaleRow" class="row" style="display:none"><label class="lbl">%</label><div class="rr ctrl"><input type="range" id="customScale" min="20" max="200" value="100" oninput="syncSlider(this,'customScaleN');updatePreview()"><input type="number" id="customScaleN" min="20" max="200" value="100" onchange="syncRange(this,'customScale');updatePreview()"></div></div>
-          <div id="customScaleHint" class="row hint" style="display:none;font-size:11px;color:#6b7280;padding:2px 0 2px 70px">提示：自定义缩放模式下，可通过右侧「单票调整」面板微调偏移位置</div>
         </div>
         <div class="sec">
           <div class="sec-title">🖼️ 旋转</div>
@@ -278,14 +274,11 @@
           <div style="margin-top: 8px;">
             <button class="btn btn-sm" style="width:100%" onclick="refreshPrinters()">🔄 刷新打印机列表</button>
           </div>
-          <div style="margin-top: 12px;"></div>
-          <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="saveSettings()"><option value="confirm">弹窗确认</option><option value="pdfium">静默打印（PDFium）⭐</option><option value="direct">静默打印（SumatraPDF 备用）</option><option value="pdf">PDF阅读器</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">需要指定打印机请用 PDFium（推荐）；「PDF阅读器」不支持选择打印机。</div>
+          <div class="row"><label class="lbl">打印模式</label><div class="ctrl"><select id="printMode" onchange="saveSettings()" title="需要指定打印机请用 PDFium（推荐）；PDF 阅读器不支持选择打印机"><option value="confirm">弹窗确认</option><option value="pdfium">静默打印（PDFium）</option><option value="direct">静默打印（SumatraPDF 备用）</option><option value="pdf">PDF阅读器</option></select></div></div>
         </div>
         <div class="sec">
           <div class="sec-title">🧩 兼容模式</div>
-          <div class="trow"><label class="tlbl">老打印机兼容</label><button class="tgl" id="toggleCompatFlat" onclick="toggleFeature('compatFlat',this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">整页转 300dpi 位图打印 / 保存，老打印机不再丢字丢章（清晰度略降、文件变大，需 PDFium 组件）。</div>
+          <div class="trow"><label class="tlbl">老打印机兼容</label><button class="tgl" id="toggleCompatFlat" onclick="toggleFeature('compatFlat',this)" title="整页转 300dpi 位图打印 / 保存，老打印机不再丢字丢章（清晰度略降、文件变大，需 PDFium 组件）"></button></div>
         </div>
         <div class="sec">
           <div class="sec-title">🔢 打印份数</div>
@@ -323,28 +316,24 @@
       <div class="sidebar-panel-scroll">
         <div class="sec" id="ocrSection">
           <div class="sec-title">🔍 OCR 识别</div>
-          <div class="trow"><label class="tlbl">自动识别</label><button class="tgl" id="toggleOcrEnabled" onclick="togglePref('ocrEnabled',this)"></button></div>
+          <div class="trow"><label class="tlbl">自动识别</label><button class="tgl" id="toggleOcrEnabled" onclick="togglePref('ocrEnabled',this)" title="添加发票时自动识别金额、销售方等信息；精度越高越准、越慢。关闭后可手动点「识别」触发"></button></div>
           <div class="row" style="margin-top:8px"><label class="lbl">识别精度</label><div class="ctrl"><select id="ocrPrecision" onchange="setOcrPrecision(this.value)"><option value="fast">快速（1280px）</option><option value="standard" selected>标准（1920px）</option><option value="precise">精确（2800px）</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">添加发票时自动识别金额、销售方等信息；精度越高越准、越慢。关闭后可手动点「识别」触发。</div>
         </div>
         <div class="sec" id="pdfTextSection">
           <div class="sec-title">📝 PDF 文字提取</div>
-          <div class="trow"><label class="tlbl">自动提取</label><button class="tgl on" id="togglePdfText" onclick="togglePref('pdfTextEnabled',this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">从 PDF 文字层直接读取发票字段，比 OCR 更快更准；对扫描件 / 图片 PDF 无效。</div>
+          <div class="trow"><label class="tlbl">自动提取</label><button class="tgl on" id="togglePdfText" onclick="togglePref('pdfTextEnabled',this)" title="从 PDF 文字层直接读取发票字段，比 OCR 更快更准；对扫描件 / 图片 PDF 无效"></button></div>
         </div>
         <div class="sec">
           <div class="sec-title">🔍 清晰度优化</div>
-          <div class="trow"><label class="tlbl">打印时自动增强</label><button class="tgl" id="toggleAutoEnhance" onclick="toggleFeature('autoEnhance',this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">打印 / 保存 PDF 时，图片发票自动加深文字并锐化，改善浅色 / 模糊打印效果（矢量 PDF 不受影响）。</div>
+          <div class="trow"><label class="tlbl">打印时自动增强</label><button class="tgl" id="toggleAutoEnhance" onclick="toggleFeature('autoEnhance',this)" title="打印 / 保存 PDF 时，图片发票自动加深文字并锐化（矢量 PDF 不受影响）"></button></div>
           <div id="enhanceOpts" style="display:none;margin-top:8px">
             <div class="row"><label class="lbl">加深 γ</label><div class="rr ctrl"><input type="range" id="enhanceGamma" min="0.8" max="2.5" step="0.1" value="1.4" oninput="syncSlider(this,'enhanceGammaN');saveSettings()"><input type="number" id="enhanceGammaN" min="0.8" max="2.5" step="0.1" value="1.4" style="width:52px" onchange="syncRange(this,'enhanceGamma');saveSettings()"></div></div>
             <div class="row"><label class="lbl">锐化%</label><div class="rr ctrl"><input type="range" id="enhanceAmount" min="0" max="150" step="5" value="60" oninput="syncSlider(this,'enhanceAmountN');saveSettings()"><input type="number" id="enhanceAmountN" min="0" max="150" step="5" value="60" style="width:52px" onchange="syncRange(this,'enhanceAmount');saveSettings()"></div></div>
             <div class="row"><label class="lbl">输出质量</label><div class="rr ctrl"><input type="range" id="enhanceQuality" min="70" max="100" step="1" value="90" oninput="syncSlider(this,'enhanceQualityN');saveSettings()"><input type="number" id="enhanceQualityN" min="70" max="100" step="1" value="90" style="width:52px" onchange="syncRange(this,'enhanceQuality');saveSettings()"></div></div>
           </div>
-          <div class="row" style="margin-top:8px"><label class="lbl">⚠ 提示阈值</label><div class="rr ctrl"><input type="range" id="enhanceMinDpi" min="100" max="400" step="10" value="250" oninput="syncSlider(this,'enhanceMinDpiN');saveSettings()"><input type="number" id="enhanceMinDpiN" min="100" max="400" step="10" value="250" style="width:52px" onchange="syncRange(this,'enhanceMinDpi');saveSettings()"></div></div>
+          <div class="row" style="margin-top:8px"><label class="lbl">⚠ 提示阈值</label><div class="rr ctrl"><input type="range" id="enhanceMinDpi" min="100" max="400" step="10" value="250" oninput="syncSlider(this,'enhanceMinDpiN');saveSettings()"><input type="number" id="enhanceMinDpiN" min="100" max="400" step="10" value="250" style="width:52px" title="折算打印 DPI 低于该值的发票在列表打 ⚠ 徽章，仅作提示、不影响打印" onchange="syncRange(this,'enhanceMinDpi');saveSettings()"></div></div>
           <button class="btn btn-sm" style="width:100%;margin-top:8px" onclick="runClarityAudit()" title="只读文件头算出每张发票折算后的实际打印 DPI，不解码像素">🔍 检查清晰度</button>
-          <div id="claritySummary" style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4"></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">折算打印 DPI 低于阈值的发票在列表打 ⚠ 徽章，仅作提示、不影响打印。</div>
+          <div id="claritySummary" class="hint"></div>
         </div>
         <div class="sec">
           <div class="sec-title">✅ 发票查验</div>
@@ -352,7 +341,7 @@
             <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(false)">🔍 官方查验平台</button>
             <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(true)">🔍 备用查验平台</button>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">官方查验平台 + 仿真备用平台（官方证书异常时可用）。🚧 自动查验规划中。</div>
+          <div class="hint">官方证书异常时可用备用平台。</div>
         </div>
         <div class="sec">
           <div class="sec-title">📄 PDF 设置</div>
@@ -363,22 +352,19 @@
         <div class="sec">
           <div class="sec-title">💰 金额统计</div>
           <div class="row"><label class="lbl">统计模式</label><div class="ctrl"><select id="amtMode" onchange="S.amtMode=this.value;try{localStorage.setItem('ticketchan-amt-mode',this.value)}catch(e){};updateAmountSummary()"><option value="tax">含税总价</option><option value="notax">不含税金额</option><option value="both">同时显示</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">自动识别含税价税合计与不含税金额；火车票识别票价。</div>
         </div>
         <div class="sec">
           <div class="sec-title">🎯 单票调整</div>
-          <div class="trow"><label class="tlbl">记忆调整配置</label><button class="tgl" id="toggleSlotAdjMemory" onclick="togglePref('slotAdjMemory',this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">重开软件时自动恢复每张发票的缩放 / 偏移 / 对齐（按文件名匹配）。</div>
+          <div class="trow"><label class="tlbl">记忆调整配置</label><button class="tgl" id="toggleSlotAdjMemory" onclick="togglePref('slotAdjMemory',this)" title="重开软件时自动恢复每张发票的缩放 / 偏移 / 对齐（按文件名匹配）"></button></div>
         </div>
         <div class="sec">
           <div class="sec-title">📋 发票管理</div>
           <div class="trow"><label class="tlbl">记忆发票列表</label>
-            <button class="tgl" id="toggleFileListMemory" onclick="toggleFileListMemory(this)"></button>
+            <button class="tgl" id="toggleFileListMemory" onclick="toggleFileListMemory(this)" title="下次启动自动恢复发票列表"></button>
           </div>
           <div class="trow"><label class="tlbl">添加时自动去重</label>
-            <button class="tgl" id="toggleAutoDedup" onclick="togglePref('autoDedup',this)"></button>
+            <button class="tgl" id="toggleAutoDedup" onclick="togglePref('autoDedup',this)" title="识别出发票号码后每组保留最先加入的一份；同销售方+金额+日期仅标记不删"></button>
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">记忆列表：下次启动自动恢复；自动去重：识别出发票号码后每组保留最先加入的一份（同销售方+金额+日期仅标记不删）。</div>
         </div>
         <div class="sec">
           <div class="sec-title">🎨 外观</div>
@@ -388,10 +374,9 @@
           <div class="sec-title">ℹ️ 关于</div>
           <div class="about-row"><span class="about-label">当前版本</span><span class="about-value"><span id="prefsCurrentVersion">v—</span><span class="ver-badge" id="prefsChannelBadge">—</span></span></div>
           <div class="row"><label class="lbl">更新渠道</label><div class="ctrl"><select id="updateChannel" onchange="setUpdateChannel(this.value)"><option value="stable">正式版</option><option value="beta">测试版</option></select></div></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:-4px;margin-bottom:4px;line-height:1.4" id="prefsChannelDesc">—</div>
+          <div class="hint" id="prefsChannelDesc">—</div>
           <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="checkForUpdates(false)">🔄 检查更新</button>
-          <div class="trow" style="margin-top:8px"><label class="tlbl">自动检查更新</label><button class="tgl on" id="toggleAutoUpdate" onclick="toggleAutoUpdateCheck(this)"></button></div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">启动时自动检查（每小时最多一次），有新版弹窗提示；关闭后仍可手动检查。</div>
+          <div class="trow" style="margin-top:8px"><label class="tlbl">自动检查更新</label><button class="tgl on" id="toggleAutoUpdate" onclick="toggleAutoUpdateCheck(this)" title="启动时自动检查（每小时最多一次），有新版弹窗提示；关闭后仍可手动检查"></button></div>
         </div>
       </div>
       <div class="sidebar-panel-footer">
@@ -438,9 +423,8 @@
     <div class="preview-wrap" id="previewWrap">
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">📄</div>
-        <div style="font-size:17px;font-weight:700;color:var(--text-secondary)">尚未添加发票</div>
-        <div style="font-size:13px">拖入发票或点击添加（支持 PDF / 图片 / OFD / XML）<br>Ctrl+O 添加 | Ctrl+P 打印 | ←→/滚轮 翻页</div>
-        <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
+        <div class="empty-title">把发票拖到这里</div>
+        <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()" title="支持 PDF / 图片 / OFD / XML；Ctrl+O 添加，Ctrl+P 打印，←→ / 滚轮 翻页">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
       <!-- 选中槽位浮动工具条（issue #33）：随槽位定位，随内容滚动 -->
