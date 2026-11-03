@@ -129,7 +129,8 @@
           </div>
           <div class="trow" style="margin-top:6px"><label class="tlbl">报销单模式</label><button class="tgl" id="toggleReimburse" onclick="toggleReimburseMode(this)"></button></div>
           <div id="reimburseOpts" style="display:none">
-            <div class="row"><label class="lbl">分段高度</label><div class="ctrl"><input type="number" id="reimburseHeight" value="120" min="50" max="297" step="1" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm，发票左上对齐，段底打印裁切线</span></div></div>
+            <div class="row"><label class="lbl" title="段底自动打印裁切线">分段高度</label><div class="ctrl"><input type="number" id="reimburseHeight" value="120" min="50" max="297" step="1" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
+            <div class="row"><label class="lbl" title="发票在段内的水平位置，纵向贴段顶">发票对齐</label><div class="ctrl"><select id="reimburseAlign" onchange="updatePreview()"><option value="left">靠左</option><option value="center">居中</option><option value="right">靠右</option></select></div></div>
           </div>
           <div class="trow" style="margin-top:6px"><label class="tlbl">粘贴单模式</label><button class="tgl" id="togglePasteMode" onclick="toggleFeature('pasteMode',this)"></button></div>
           <div id="pasteOpts" style="display:none">

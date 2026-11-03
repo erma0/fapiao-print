@@ -3362,12 +3362,15 @@ pub struct RenderSettings {
     pub footer_text: Option<String>,
     pub footer_margin: f32,
     pub custom_fm: bool,
-    /// 报销单分段模式：固定段高纵向分段，段边界强制裁切线，发票左上对齐
+    /// 报销单分段模式：固定段高纵向分段，段边界强制裁切线，发票纵向贴段顶
     #[serde(default)]
     pub reimburse_mode: bool,
     /// 分段高度（mm），默认 120
     #[serde(default)]
     pub reimburse_height: Option<f32>,
+    /// 报销单模式发票水平对齐：left / center / right（默认 left）
+    #[serde(default)]
+    pub reimburse_align: Option<String>,
     /// 是否启用粘贴单模式
     #[serde(default)]
     pub paste_mode: bool,
@@ -3538,6 +3541,15 @@ struct LayoutSlotMm {
     y_mm: f32,
     w_mm: f32,
     h_mm: f32,
+}
+
+/// 报销单模式发票水平偏移：left=0、center=居中、right=贴右（纵向始终贴段顶）
+fn reimburse_align_offset(settings: &RenderSettings, slot_w: f32, draw_w: f32) -> f32 {
+    match settings.reimburse_align.as_deref().unwrap_or("left") {
+        "center" => (slot_w - draw_w) / 2.0,
+        "right" => slot_w - draw_w,
+        _ => 0.0,
+    }
 }
 
 /// Calculate layout slot positions in mm (bottom-left origin for printpdf).
@@ -4620,7 +4632,7 @@ fn build_page_ops(
         }
 
         // Centered position in slot (bottom-left origin).
-        // 报销单模式：左上对齐；常规模式：居中。
+        // 报销单模式：纵向贴段顶、水平按 reimburse_align；常规模式：居中。
         let draw_w_mm = iw_mm * scale_x;
         let draw_h_mm = ih_mm * scale_y;
         let mut offset_x_mm = slot_positions[slot_idx].x_mm;
@@ -4629,7 +4641,9 @@ fn build_page_ops(
         } else {
             slot_positions[slot_idx].y_mm + (slot_positions[slot_idx].h_mm - draw_h_mm) / 2.0
         };
-        if !settings.reimburse_mode {
+        if settings.reimburse_mode {
+            offset_x_mm += reimburse_align_offset(settings, slot_positions[slot_idx].w_mm, draw_w_mm);
+        } else {
             offset_x_mm += (slot_positions[slot_idx].w_mm - draw_w_mm) / 2.0;
         }
 
@@ -5739,7 +5753,7 @@ fn build_nup_content_stream(
         }
 
         // Centered position in slot (bottom-left origin) based on visual dimensions.
-        // 报销单模式：左上对齐（贴段内区域左上角）；常规模式：居中。
+        // 报销单模式：纵向贴段顶、水平按 reimburse_align；常规模式：居中。
         // 「裁剪白边」开启时垂直贴顶 —— 但只对 90°/270° 旋转生效：
         // 与前端预览（layout.js `wrapTop = visH/2 - containedH/2`，未旋转时
         // containedH == visH，公式恒为 0 即居中）及 printpdf 回退路径（build_page_ops
@@ -5756,7 +5770,9 @@ fn build_nup_content_stream(
         } else {
             (slot_h_pt - draw_h) / 2.0
         };
-        if !settings.reimburse_mode {
+        if settings.reimburse_mode {
+            offset_x += reimburse_align_offset(settings, slot_w_pt, draw_w);
+        } else {
             offset_x += (slot_w_pt - draw_w) / 2.0;
         }
 
@@ -6478,7 +6494,7 @@ fn generate_pdf_passthrough(
                                 let mut x_pt = slot.x_mm * MM_TO_PT + (slot.w_mm * MM_TO_PT - img_w_pt) / 2.0;
                                 let mut y_pt = slot.y_mm * MM_TO_PT + (slot.h_mm * MM_TO_PT - img_h_pt) / 2.0;
 
-                                // 报销单模式：发票左上对齐，水印须跟随图像中心而非 slot 中心，
+                                // 报销单模式：发票纵向贴段顶、水平按 reimburse_align，水印须跟随图像中心而非 slot 中心，
                                 // 定位公式与 build_nup_content_stream 的 reimburse 分支一致
                                 if request.settings.reimburse_mode {
                                     if let Some(fx_pos) = page_form_xobjs.iter().position(|(idx, _, _, _)| *idx == slot_idx) {
@@ -6505,7 +6521,8 @@ fn generate_pdf_passthrough(
                                         }
                                         let draw_w = vis_w * scx;
                                         let draw_h = vis_h * scy;
-                                        let mut ox = slot.x_mm * MM_TO_PT;
+                                        let mut ox = slot.x_mm * MM_TO_PT
+                                            + reimburse_align_offset(&request.settings, slot_w_pt, draw_w);
                                         let mut oy = slot.y_mm * MM_TO_PT + (slot_h_pt - draw_h);
                                         if let Some(a) = adj {
                                             if a.offset_x != 0.0 { ox += a.offset_x * MM_TO_PT; }
@@ -7422,7 +7439,7 @@ fn build_border_ops_lopdf(
         }
 
         // Calculate visual boundary (bottom-up coordinates, PDF standard).
-        // 报销单模式：左上对齐；常规模式：居中（与 build_nup_content_stream 保持一致）。
+        // 报销单模式：纵向贴段顶、水平按 reimburse_align；常规模式：居中（与 build_nup_content_stream 保持一致）。
         let draw_w = vis_w * scale_x;
         let draw_h = vis_h * scale_y;
         let mut offset_x = slot.x_mm * MM_TO_PT;
@@ -7431,7 +7448,9 @@ fn build_border_ops_lopdf(
         } else {
             slot.y_mm * MM_TO_PT + (slot_h_pt - draw_h) / 2.0
         };
-        if !settings.reimburse_mode {
+        if settings.reimburse_mode {
+            offset_x += reimburse_align_offset(settings, slot_w_pt, draw_w);
+        } else {
             offset_x += (slot_w_pt - draw_w) / 2.0;
         }
 

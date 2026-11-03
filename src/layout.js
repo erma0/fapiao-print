@@ -390,18 +390,18 @@ function renderPage(pageFiles, pi, total, s) {
         containedH = isRot90 ? visW : visH;
       }
       // Image wrapper: explicit dimensions, same transforms, optional border
-      // 报销单模式：左上对齐（贴段内区域左上角），常规模式：居中
+      // 报销单模式：纵向贴段顶，水平按设置（靠左/居中/靠右）；常规模式：居中
       var wrapperStyle = 'width:' + containedW.toFixed(1) + 'px;height:' + containedH.toFixed(1) + 'px;';
       wrapperStyle += 'position:absolute;';
       if (layout.reimburse) {
-        if (isRot90) {
-          // 旋转后视觉盒以 wrapper 中心为中心，须把 wrapper 中心移到视觉盒中心位置，
-          // 旋转落位后视觉盒才贴住槽位左上角（与 Rust 端报销单左上对齐一致）
-          wrapperStyle += 'left:' + ((containedH - containedW) / 2).toFixed(1) + 'px;';
-          wrapperStyle += 'top:' + ((containedW - containedH) / 2).toFixed(1) + 'px;';
-        } else {
-          wrapperStyle += 'left:0;top:0;';
-        }
+        // 视觉盒（旋转+缩放后）按对齐方式落位，wrapper 中心对齐视觉盒中心
+        var _reimbAlign = s.reimburseAlign || 'left';
+        var _reimbEffScale = perScale * ((s.fitMode === 'custom') ? (s.customScale || 1) : 1);
+        var _visW = visW * _reimbEffScale;
+        var _visH = visH * _reimbEffScale;
+        var _visX = _reimbAlign === 'center' ? (imgW - _visW) / 2 : (_reimbAlign === 'right' ? imgW - _visW : 0);
+        wrapperStyle += 'left:' + (_visX + _visW / 2 - containedW / 2).toFixed(1) + 'px;';
+        wrapperStyle += 'top:' + (_visH / 2 - containedH / 2).toFixed(1) + 'px;';
       } else {
         // 「裁剪白边」开启时垂直贴顶（视觉盒顶 = 槽位顶）：wrapper 中心对齐到 visH/2，
         // 否则居中。水平方向始终居中 —— 左右裁剪本来就对得准。

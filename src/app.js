@@ -3888,11 +3888,13 @@ function setSlotAlignment(alignH, alignV) {
   var gapY = (slotH_mm - containedH_mm * effectiveScale) / 2;
 
   // Offset to move wrapper from base position to target alignment.
-  // 常规模式基准=居中；报销单模式基准=左上（renderPage 中 wrapper 定位分支保持一致）。
+  // 常规模式基准=居中；报销单模式基准=设置里的水平对齐（纵向贴段顶），
+  // 与 renderPage 中 wrapper 定位分支保持一致。
   var offsetX = 0, offsetY = 0;
   if (settings.reimburseMode) {
-    if (alignH === 'center') offsetX = gapX;
-    else if (alignH === 'right') offsetX = 2 * gapX;
+    var _reimbBase = gapX * ((settings.reimburseAlign === 'center') ? 1 : (settings.reimburseAlign === 'right' ? 2 : 0));
+    var _reimbTarget = gapX * (alignH === 'center' ? 1 : (alignH === 'right' ? 2 : 0));
+    offsetX = _reimbTarget - _reimbBase;
     if (alignV === 'center') offsetY = gapY;
     else if (alignV === 'bottom') offsetY = 2 * gapY;
   } else {
@@ -4482,6 +4484,8 @@ function getSettings() {
     paperW: pw, paperH: ph, cols: S.layout.cols, rows: S.layout.rows,
     reimburseMode: !!S.feat.reimburse,
     reimburseHeight: parseFloat(document.getElementById('reimburseHeight').value) || 120,
+    // 报销单发票水平对齐：left / center / right（纵向始终贴段顶）
+    reimburseAlign: document.getElementById('reimburseAlign').value || 'left',
     marginTop: parseFloat(document.getElementById('marginTop').value),
     marginBottom: parseFloat(document.getElementById('marginBottom').value),
     marginLeft: parseFloat(document.getElementById('marginLeft').value),
@@ -4735,6 +4739,7 @@ function collectSettings() {
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse','copyBadge','autoEnhance','compatFlat','pasteMode','pasteBindLine','pasteShowSig','photoMode'];
   featKeys.forEach(function(k) { o.feat[k] = S.feat[k]; });
   o.reimburseHeight = document.getElementById('reimburseHeight').value;
+  o.reimburseAlign = document.getElementById('reimburseAlign').value;
   o.trimPad = getTrimPad();
   o.quickLayouts = cloneQuickLayouts(S.quickLayouts);
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
@@ -4956,6 +4961,7 @@ function loadSettings() {
     document.getElementById('footerMarginN').value = o.footerMargin;
   }
   if (o.reimburseHeight != null) document.getElementById('reimburseHeight').value = o.reimburseHeight;
+  if (o.reimburseAlign != null) document.getElementById('reimburseAlign').value = o.reimburseAlign;
   if (o.trimPad != null) {
     var _tp = parseInt(o.trimPad, 10);
     S.feat.trimPad = isNaN(_tp) ? 3 : Math.max(0, Math.min(TRIM_PAD_MAX, _tp));
@@ -5285,6 +5291,7 @@ function resetSettings(scope) {
   document.getElementById('togglePasteMode').classList.remove('on');
   document.getElementById('pasteOpts').style.display = 'none';
   document.getElementById('reimburseHeight').value = 120;
+  document.getElementById('reimburseAlign').value = 'left';
   S.feat.trimPad = 3;
   document.getElementById('trimPad').value = 3;
   // 相纸模式恢复默认
