@@ -151,7 +151,7 @@
               <div class="row"><label class="lbl">填写行高</label><div class="ctrl"><input type="number" id="pasteSigBodyH" value="14" min="4" max="60" step="0.5" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
               <div class="row"><label class="lbl">区间距</label><div class="ctrl"><input type="number" id="pasteSigGap" value="2" min="0" max="20" step="0.5" style="width:64px;text-align:center" onchange="updatePreview()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             </div>
-            <div class="hint">票据排在装订线与签字栏之间；页码 / 日期 / 页脚不生效。</div>
+            <div class="hint">票据排在装订线下方、签字栏上方；页码 / 日期 / 页脚不生效。</div>
           </div>
           <div class="trow" style="margin-top:6px"><label class="tlbl">相纸模式</label><button class="tgl" id="togglePhotoMode" onclick="togglePhotoMode(this)"></button></div>
           <div id="photoModeOpts" style="display:none">
@@ -341,7 +341,6 @@
             <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(false)">🔍 官方查验平台</button>
             <button class="btn btn-sm" style="flex:1" onclick="verifyInvoice(true)">🔍 备用查验平台</button>
           </div>
-          <div class="hint">官方证书异常时可用备用平台。</div>
         </div>
         <div class="sec">
           <div class="sec-title">📄 PDF 设置</div>
