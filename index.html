@@ -37,11 +37,10 @@
             <div class="copy-ctrl">
               <button class="ib" onclick="toggleCopyMenu()" title="设置选中发票排版份数"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><text x="8" y="11.6" font-size="8" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial,sans-serif">N</text></svg></button>
               <div class="copy-menu hidden" id="copyMenu">
-                <div class="copy-menu-item" onclick="setAllCopies(event,1)">选中项 ×1</div>
-                <div class="copy-menu-item" onclick="setAllCopies(event,2)">选中项 ×2</div>
-                <div class="copy-menu-item" onclick="setAllCopies(event,3)">选中项 ×3</div>
-                <div class="copy-menu-sep"></div>
-                <div class="copy-menu-hint">💡 双击单张发票可单独设置份数</div>
+                <div class="copy-menu-label">选中项份数</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,1)">×1</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,2)">×2</div>
+                <div class="copy-menu-item" onclick="setAllCopies(event,3)">×3</div>
               </div>
             </div>
             <div class="copy-ctrl">
@@ -137,7 +136,7 @@
             <div id="photoCustomRow" class="row" style="display:none"><label class="lbl">mm</label><div class="ctrl"><input type="number" id="photoCustomW" value="25" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"> × <input type="number" id="photoCustomH" value="35" min="10" max="300" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"></div></div>
             <div class="row"><label class="lbl">间距</label><div class="ctrl"><input type="number" id="photoGap" value="2" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
             <div class="row"><label class="lbl">留边</label><div class="ctrl"><input type="number" id="photoMargin" value="3" min="0" max="30" step="0.5" style="width:64px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">mm</span></div></div>
-            <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">行（0=自动）</span></div></div>
+            <div class="row"><label class="lbl">排列</label><div class="ctrl"><input type="number" id="photoCols" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" title="0 = 自动铺满" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px">列 ×</span><input type="number" id="photoRows" value="0" min="0" max="20" step="1" style="width:52px;text-align:center" onchange="onPhotoOptChange()"><span style="color:var(--text-muted);font-size:12px" title="0 = 自动铺满">行</span></div></div>
             <div class="row"><label class="lbl">常用</label><div class="ctrl" id="photoCountPresets" style="flex-wrap:wrap;gap:4px"></div></div>
             <div id="photoModeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4"></div>
           </div>
@@ -339,9 +338,8 @@
     <div class="preview-wrap" id="previewWrap">
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">📄</div>
-        <div style="font-size:17px;font-weight:700;color:var(--text-secondary)">尚未添加发票</div>
-        <div style="font-size:13px">拖入文件或点击添加<br>Ctrl+O 添加 | Ctrl+S 保存 PDF | ←→ 翻页</div>
-        <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" onclick="triggerUpload()">➕ 添加发票</button>
+        <div class="empty-title">把发票拖到这里</div>
+        <button class="btn btn-primary" style="padding:10px 24px;font-size:15px" title="支持 PDF / OFD / XML / 图片；Ctrl+O 添加，Ctrl+S 保存 PDF，←→ 翻页" onclick="triggerUpload()">➕ 添加发票</button>
       </div>
       <div id="previewPages" style="display:none"></div>
       <!-- 选中槽位浮动工具条（同步桌面版 #33）：随槽位定位，随内容滚动 -->
@@ -349,8 +347,17 @@
         <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
         <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
         <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票"><span class="tb-ico">⧉</span><span class="tb-text">应用到全部</span></button>
+        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置此票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
         <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转此票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
         <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除这张发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
+      </div>
+      <div class="slot-copy-menu hidden" id="slotCopyMenu">
+        <div class="copy-menu-label">此票份数</div>
+        <div class="copy-menu-item" data-n="1" onclick="setSlotCopies(1)">×1</div>
+        <div class="copy-menu-item" data-n="2" onclick="setSlotCopies(2)">×2</div>
+        <div class="copy-menu-item" data-n="3" onclick="setSlotCopies(3)">×3</div>
+        <div class="copy-menu-sep"></div>
+        <div class="copy-menu-item" onclick="openSlotInvModal()">自定义…</div>
       </div>
     </div>
 
@@ -420,13 +427,13 @@
 <script src="vendor/jszip.min.js"></script>
 <script type="module" src="js/idb-store.js?v=3"></script>
 <script type="module" src="js/pdf-client.js?v=5"></script>
-<script src="js/pdf-text.js?v=4"></script>
+<script src="js/pdf-text.js?v=5"></script>
 <script src="js/pdf-raw-text.js?v=1"></script>
 <script src="js/xml-utils.js?v=3"></script>
 <script src="js/ofd-client.js?v=4"></script>
 <script src="js/xml-client.js?v=4"></script>
-<script src="js/layout.js?v=4"></script>
+<script src="js/layout.js?v=5"></script>
 <script src="js/print.js?v=4"></script>
-<script src="js/app.js?v=5"></script>
+<script src="js/app.js?v=6"></script>
 </body>
 </html>

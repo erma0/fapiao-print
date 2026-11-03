@@ -1321,12 +1321,17 @@ function setAllCopies(e, n) {
   e.stopPropagation();
   var sel = S.files.filter(function(f) { return f.checked; });
   if (!sel.length) { toast('请先选择发票'); document.getElementById('copyMenu').classList.add('hidden'); return; }
+  var selection = captureSlotSelection();
   sel.forEach(function(f) { f.copies = n; });
   document.getElementById('copyMenu').classList.add('hidden');
-  renderFileList();
-  updatePreview();
+  refreshAfterCopiesChange(selection);
 }
-function togCheck(i) { S.files[i].checked = !S.files[i].checked; renderFileList(); updatePreview(); updateSummaryBtn(); }
+function togCheck(i) {
+  if (S.files[i]._placeholder) return;
+  var keep = captureSlotSelection();
+  S.files[i].checked = !S.files[i].checked;
+  reflowAfterListChange(keep);
+}
 
 // =====================================================
 // 文件列表右键菜单 — 作用于被右键的单项，无需先勾选
@@ -1384,10 +1389,10 @@ function _showSlotAdjGroup(show) {
 
 function ctxSetCopies(n) {
   if (_ctxIdx < 0) return;
+  var selection = captureSlotSelection();
   S.files[_ctxIdx].copies = n;
-  renderFileList();
-  updatePreview();
   closeCtxMenu();
+  refreshAfterCopiesChange(selection);
 }
 function ctxRotate() { if (_ctxIdx >= 0) rotFile(_ctxIdx); closeCtxMenu(); }
 function ctxDelete() { if (_ctxIdx >= 0) rmFile(_ctxIdx); closeCtxMenu(); }
@@ -1619,8 +1624,8 @@ if (_fileListEl) _fileListEl.addEventListener('scroll', closeCtxMenu);
 function getSelectableInView() {
   return getFilteredFiles().filter(function(f) { return !f._placeholder; });
 }
-function selectAll() { getSelectableInView().forEach(function(f) { f.checked = true; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
-function deselectAll() { getSelectableInView().forEach(function(f) { f.checked = false; }); renderFileList(); updatePreview(); updateSummaryBtn(); }
+function selectAll() { var keep = captureSlotSelection(); getSelectableInView().forEach(function(f) { f.checked = true; }); reflowAfterListChange(keep); }
+function deselectAll() { var keep = captureSlotSelection(); getSelectableInView().forEach(function(f) { f.checked = false; }); reflowAfterListChange(keep); }
 function toggleSelectAll() {
   var selectable = getSelectableInView();
   var all = selectable.length > 0 && selectable.every(function(f) { return f.checked; });
@@ -1639,9 +1644,53 @@ function deleteSelected() {
   var active = _activeFileIdx >= 0 ? S.files[_activeFileIdx] : null;
   S.files = S.files.filter(function(f) { return !f.checked; });
   _activeFileIdx = active ? S.files.indexOf(active) : -1;
-  renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn();
+  // 预览里能选中的票必然是勾选状态，批量删除一定连带删掉它
+  reflowAfterListChange(null);
 }
-function rmFile(i) { S.files.splice(i, 1); if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--; renderFileList(); updatePreview(); updatePdfBtn(); updateSummaryBtn(); }
+// 列表增删 / 勾选 / 重排后统一收尾：槽位序号会整体挪动，选中必须按「文件对象」重定位，
+// 沿用旧索引会指到别的票，接下来点删除 / 改份数就作用在错的发票上（选中票已不在排版里则清空）
+function reflowAfterListChange(keep) {
+  if (keep) refreshAfterCopiesChange(keep);
+  else { S.selectedSlot = -1; renderFileList(); updatePreview(); }
+  // 无票时 updatePreview 会提前返回，这里兜住工具条与单票调整面板
+  updateAdjPanel();
+  updatePdfBtn(); updateSummaryBtn();
+}
+function captureSlotSelection() {
+  var f = getSelectedFileObj();
+  if (!f) return null;
+  var files = getActiveFiles();
+  var pos = S.currentPage * getPerPage(getSettings()) + S.selectedSlot;
+  var ordinal = 0;
+  for (var i = 0; i < pos; i++) { if (files[i] === f) ordinal++; }
+  return { file: f, ordinal: ordinal };
+}
+// 份数变动会重排展开序列：记住文件与第几份，不能沿用原槽位编号操作别的票。
+function refreshAfterCopiesChange(selection) {
+  if (selection) {
+    var matches = [];
+    getActiveFiles().forEach(function(f, i) { if (f === selection.file) matches.push(i); });
+    if (matches.length) {
+      var pos = matches[Math.min(selection.ordinal, matches.length - 1)];
+      var perPage = getPerPage(getSettings());
+      S.currentPage = Math.floor(pos / perPage);
+      S.selectedSlot = pos % perPage;
+    } else {
+      S.selectedSlot = -1;
+    }
+  }
+  renderFileList();
+  updatePreview();
+  if (S.selectedSlot >= 0) syncSidebarToSelectedSlot();
+}
+function rmFile(i) {
+  var removed = S.files[i];
+  var sel = getSelectedFileObj();
+  var keep = (sel && sel !== removed) ? captureSlotSelection() : null;
+  S.files.splice(i, 1);
+  if (_activeFileIdx === i) _activeFileIdx = -1; else if (_activeFileIdx > i) _activeFileIdx--;
+  reflowAfterListChange(keep);
+}
 
 // 医疗票明细页处理（幂等）：把「医疗收费明细」长页从列表移除（只留汇总首页），
 // 在共享批次的主票上挂附件计数徽章，toast 明示排除行为。
@@ -1924,22 +1973,27 @@ function showListDragHint() {
 
 function swapFiles(ia, ib) {
   if (ia === ib || ia < 0 || ib < 0 || ia >= S.files.length || ib >= S.files.length) return;
+  // 列表重排同样会让预览槽位换票：选中按对象重定位，别让工具条留在原槽位指向另一张
+  var keep = captureSlotSelection();
   var tmp = S.files[ia]; S.files[ia] = S.files[ib]; S.files[ib] = tmp;
   if (_activeFileIdx === ia) { _activeFileIdx = ib; }
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
-  renderFileList(); updatePreview(); scrollToListItem(ib);
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
+  scrollToListItem(ib);
 }
 
 function moveFileTo(fromIdx, toIdx, zone) {
   if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 || fromIdx >= S.files.length || toIdx >= S.files.length) return;
   var a = S.files[fromIdx], b = S.files[toIdx];
   if (!a || !b || a === b) return;
+  var keep = captureSlotSelection();
   S.files.splice(fromIdx, 1);
   var insertAt = zone === 'after' ? S.files.indexOf(b) + 1 : S.files.indexOf(b);
   S.files.splice(insertAt, 0, a);
-  if (insertAt === fromIdx) return;
+  if (insertAt === fromIdx) return; // 落点即原位，顺序未变
   _activeFileIdx = S.files.indexOf(a);
-  renderFileList(); updatePreview(); scrollToListItem(insertAt);
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
+  scrollToListItem(insertAt);
 }
 
 function scrollToListItem(idx) {
@@ -2046,6 +2100,7 @@ function changeModalCopies(d) { var e = document.getElementById('mCopies'); e.va
 function closeInvModal() { document.getElementById('invModal').classList.add('hidden'); }
 function confirmInvModal() {
   if (S.editIdx < 0) return;
+  var selection = captureSlotSelection();
   var f = S.files[S.editIdx];
   f.copies = Math.max(1, parseInt(document.getElementById('mCopies').value) || 1);
   f.rotation = parseInt(document.getElementById('mRot').value) || 0;
@@ -2067,7 +2122,7 @@ function confirmInvModal() {
   f.slotScale = Math.max(0.2, Math.min(3.0, (parseInt(document.getElementById('mSlotScale').value) || 100) / 100));
   f.slotOffsetX = parseFloat(document.getElementById('mSlotOffX').value) || 0;
   f.slotOffsetY = parseFloat(document.getElementById('mSlotOffY').value) || 0;
-  closeInvModal(); renderFileList(); updatePreview(); updateAmountSummary();
+  closeInvModal(); refreshAfterCopiesChange(selection); updateAmountSummary();
 }
 
 function copyOcrText(btn) {
@@ -2103,13 +2158,13 @@ function selectSlot(idx) {
   if (idx >= 0) {
     var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
     if (slotEl) slotEl.classList.add('selected');
-    // 首次选中提示隐藏手势（同步桌面版 #33）：双击重置 / 右键菜单，跨会话仅提示一次
-    if (!window._dblclickHintShown) {
-      window._dblclickHintShown = true;
+    // 首次选中提示隐藏手势（同步桌面版 #33 / #60）：工具条设份数 / 右键菜单，跨会话仅提示一次
+    if (!window._slotHintShown) {
+      window._slotHintShown = true;
       try {
-        if (localStorage.getItem('ticketchan-dblclick-hint') !== '1') {
-          localStorage.setItem('ticketchan-dblclick-hint', '1');
-          toast('提示：双击票面可重置单票调整，右键票面有更多操作', 3500);
+        if (localStorage.getItem('ticketchan-slot-hint') !== '1') {
+          localStorage.setItem('ticketchan-slot-hint', '1');
+          toast('提示：选中票面后可用上方工具条设份数，右键有更多操作', 3500);
         }
       } catch(e) {}
     }
@@ -2137,18 +2192,23 @@ function syncSlotToolbar() {
     rotText.textContent = rot ? rot + '°' : '旋转';
     rotBtn.title = '旋转此票 90°（顺时针），当前 ' + rot + '°';
   }
+  // 份数按钮同理：图标位显示当前份数（×1 / ×2 …），变更时宽度会变
+  var copiesIco = document.getElementById('slotCopiesIco');
+  if (copiesIco) copiesIco.textContent = '×' + (f.copies || 1);
 
   var wr = wrap.getBoundingClientRect();
   var sr = slotEl.getBoundingClientRect();
   // absolute 子元素位于滚动内容坐标系：可视偏移 + 滚动量
   var sl = wrap.scrollLeft, st = wrap.scrollTop;
-  var tbW = tb.offsetWidth, tbH = tb.offsetHeight;
-  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格
-  var compact = tbW + 8 > sr.width;
-  if (compact !== tb.classList.contains('compact')) {
-    tb.classList.toggle('compact', compact);
-    tbW = tb.offsetWidth; // 换档后宽度变了，重新测量
-  }
+  var tbW, tbH;
+  // 窄格子（3×3 及以上、纵向纸张）：工具条比格子还宽时只留图标，否则横向必压邻格。
+  // ⚠️ 判定必须用「非 compact」的固有宽度：直接读 offsetWidth 会拿到上一档的宽度，
+  // 在 compact 与非 compact 之间来回翻转（3×3 中间列就卡在 395 宽、每边压邻格 66px）
+  tb.classList.remove('compact');
+  var fullW = tb.offsetWidth;
+  if (fullW + 8 > sr.width) tb.classList.add('compact');
+  tbW = tb.offsetWidth;
+  tbH = tb.offsetHeight;
   var slotLeft = sr.left - wr.left + sl;
   var slotTop = sr.top - wr.top + st;
   var center = slotLeft + sr.width / 2;
@@ -2184,8 +2244,61 @@ function syncSlotToolbar() {
   tb.style.top = Math.round(top) + 'px';
   tb.classList.remove('hidden');
 }
-document.getElementById('previewWrap').addEventListener('scroll', syncSlotToolbar);
+document.getElementById('previewWrap').addEventListener('scroll', function() {
+  closeSlotCopyMenu();
+  syncSlotToolbar();
+});
 window.addEventListener('resize', syncSlotToolbar);
+
+// 工具条「份数」：点击按钮弹出份数菜单（issue #59）
+function toggleSlotCopyMenu(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('slotCopyMenu');
+  if (!menu) return;
+  if (!menu.classList.contains('hidden')) { closeSlotCopyMenu(); return; }
+  openSlotCopyMenu();
+}
+// 打开菜单（幂等）
+function openSlotCopyMenu() {
+  var menu = document.getElementById('slotCopyMenu');
+  var btn = document.getElementById('slotCopiesBtn');
+  if (!menu || !btn) return;
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var cur = f.copies || 1;
+  Array.prototype.forEach.call(menu.querySelectorAll('.copy-menu-item[data-n]'), function(it) {
+    it.classList.toggle('active', parseInt(it.dataset.n) === cur);
+  });
+  menu.classList.remove('hidden');
+  // 锚在按钮下方居中，左右/上下钳制在窗口内
+  var r = btn.getBoundingClientRect();
+  var mw = menu.offsetWidth, mh = menu.offsetHeight;
+  var left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left + r.width / 2 - mw / 2));
+  var top = r.bottom + 4;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top = Math.round(top) + 'px';
+}
+function closeSlotCopyMenu() {
+  var menu = document.getElementById('slotCopyMenu');
+  if (menu) menu.classList.add('hidden');
+}
+function setSlotCopies(n) {
+  closeSlotCopyMenu();
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var selection = captureSlotSelection();
+  f.copies = Math.max(1, Math.min(99, parseInt(n) || 1));
+  refreshAfterCopiesChange(selection);
+}
+// 「自定义…」：打开发票选项弹窗（含 1-99 份数输入），排版页无需再切回列表
+function openSlotInvModal() {
+  closeSlotCopyMenu();
+  var f = getSelectedFileObj();
+  if (!f) return;
+  var idx = S.files.indexOf(f);
+  if (idx >= 0) openInvModal(idx);
+}
 
 // 浮动工具条「✕ 删除」（同步桌面版 #43②）：删除选中槽位对应的那张发票
 function deleteSlotInvoice() {
@@ -3083,6 +3196,8 @@ document.addEventListener('click', function(e) {
   }
   var xm = document.getElementById('ctxMenu');
   if (xm && !xm.classList.contains('hidden') && !e.target.closest('#ctxMenu')) xm.classList.add('hidden');
+  // 工具条份数菜单：点击外部关闭（菜单项与按钮各自有 onclick）
+  if (!e.target.closest('#slotCopyMenu') && !e.target.closest('#slotCopiesBtn')) closeSlotCopyMenu();
 });
 function updatePdfBtn() { var has = S.files.some(function(f) { return f.checked; }); document.getElementById('pdfBtn').disabled = !has; document.getElementById('rasterPdfBtn').disabled = !has; }
 function updateSummaryBtn() { var btn = document.getElementById('summaryBtn'); if (btn) btn.disabled = !S.files.some(function(f) { return f.checked; }); }
@@ -3492,15 +3607,9 @@ document.getElementById('previewWrap').addEventListener('wheel', function(e) {
   }
 }, { passive: false });
 
-// Double-click: on selected slot → reset per-slot adj (size+position); elsewhere → reset preview zoom
+// Double-click on blank preview area: reset view zoom（票面双击不设份数，见 issue #60）
 document.getElementById('previewWrap').addEventListener('dblclick', function(e) {
-  if (S.selectedSlot >= 0) {
-    var slotEl = e.target.closest('.invoice-slot');
-    if (slotEl && parseInt(slotEl.dataset.slotIdx) === S.selectedSlot) {
-      resetSlotAdj();
-      return;
-    }
-  }
+  if (e.target.closest('.invoice-slot')) return;
   if (S.viewZoom !== 0) { setZoom('fit'); }
 });
 
@@ -3568,7 +3677,7 @@ applyPerSectionLabelWidth();
 (function() {
   function showApp() {
     // 与 package.json 的 version 保持一致（纯静态站点无构建步骤，需手动同步）
-    APP_VERSION = '3.4.10';
+    APP_VERSION = '3.5.0';
     var el = document.getElementById('stVersionText');
     if (el) el.textContent = 'v' + APP_VERSION;
     console.log('发票酱 ' + APP_VERSION);

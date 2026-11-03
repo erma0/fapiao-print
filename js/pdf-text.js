@@ -694,9 +694,9 @@ function _cleanName(raw) {
  * 判断某处文本是否是备注/页脚区的公司名（如「销方开户银行:招商银行…支行」）。
  * 名称兜底取公司名时必须排除这类候选，否则备注里的银行名会顶替销售方名称。
  * 判定依据：
- *   1. 词坐标落在页面下半部（备注区在下部，销售方名称区在上部）；
- *   2. 文本层中该公司名所在行含开户银行/账号/地址/电话/落款等关键词。
- *      只查同一行，避免跨行误杀购销方信息块里的「地址电话」标签。
+ *   1. 词坐标落在实际备注标签右侧的备注框内，或紧跟银行/落款等标签；
+ *   2. 无坐标时才按公司名之前的同行标签判断。
+ *      旧式增值税票的销售方在下部，不能仅凭页面高度排除。
  *
  * @param {string} name - 公司名候选
  * @param {string} text - 全文文本
@@ -707,22 +707,40 @@ function _cleanName(raw) {
 function _isRemarkAreaName(name, text, index, words) {
   if (!name) return true;
   if (words && words.length) {
+    var matched = null;
     for (var i = 0; i < words.length; i++) {
       var wt = (words[i].text || '').trim();
       var wn = (words[i].normText || '').trim();
       if (wt === name || wn === name ||
           (name.length >= 4 && (wt.indexOf(name) >= 0 || wn.indexOf(name) >= 0))) {
-        return words[i].ny > 0.55;
+        matched = words[i];
+        break;
       }
+    }
+    if (matched) {
+      var remark = _findRemarkLabel(words);
+      if (remark) {
+        var top = _getRemarkTop(words, remark);
+        if (matched.x >= remark.x + remark.w * 0.5 && matched.cy >= top) return true;
+      }
+      // 同一词或相邻左侧词中的标签才有约束力；远处「地址电话」不能误伤名称。
+      var labels = /开户银行|开户行|银行账号|账\s*号|地\s*址|电\s*话|收款人|复核人|开票人|备\s*注/;
+      var namePos = matched.normText.indexOf(name);
+      if (namePos >= 0 && labels.test(matched.normText.substring(0, namePos))) return true;
+      var left = words.filter(function(w) {
+        return w !== matched && w.x + w.w <= matched.x + 1 &&
+          Math.abs(w.cy - matched.cy) <= Math.max(w.h, matched.h, 8) * 0.6;
+      }).sort(function(a, b) { return b.x + b.w - a.x - a.w; });
+      if (left.length && matched.x - left[0].x - left[0].w <= Math.max(matched.h, 8) * 2 &&
+          labels.test(left[0].normText)) return true;
+      return false;
     }
   }
   if (!text) return false;
   var pos = typeof index === 'number' && index >= 0 ? index : text.indexOf(name);
   if (pos < 0) return false;
   var lineStart = text.lastIndexOf('\n', pos) + 1;
-  var lineEnd = text.indexOf('\n', pos);
-  if (lineEnd < 0) lineEnd = text.length;
-  var line = text.substring(lineStart, lineEnd);
+  var line = text.substring(lineStart, pos);
   return /(?:开户银行|开户行|银行账号|账\s*号|地\s*址|电\s*话|收款人|复核人|开票人|备\s*注)/.test(line);
 }
 
@@ -772,18 +790,22 @@ function _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName) {
     if (cw.normText.replace(/[^A-Za-z0-9]/g, '').toUpperCase() === code) { ccWord = cw; break; }
   }
   if (!ccWord) return '';
+  var boundary = _getSideBoundary(words);
+  var codeOnRight = ccWord.nx >= boundary;
+  function inCodeColumn(w) { return (w.nx >= boundary) === codeOnRight; }
 
   var _suffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
   var _nameRe = new RegExp('^[\\u4e00-\\u9fff][\\u4e00-\\u9fff\\w（）()·\\-\\.]{2,30}' + _suffix + '$');
   var _notNameRe = /统一社会|信用代码|纳税人识别号|[:：]|地\s*址|电\s*话|开户|账\s*号|备\s*注|开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/;
   var cands = words.filter(function(w) {
     if (w === ccWord) return false;
-    if (w.nx < 0.3) return false;                    // 销售方信息块在右半区
+    if (!inCodeColumn(w)) return false;             // 跟随代码所在列，兼容旧票下部左侧的销方
     if (w.cy > ccWord.cy + w.h * 0.6) return false;  // 只看代码行及上方
     if (w.cy < ccWord.y - w.h * 4) return false;     // 最多向上 4 行
     var t = w.normText;
     if (!_nameRe.test(t)) return false;
     if (_isLabelFragmentWord(w) || _isTaxAuthorityText(t) || _notNameRe.test(t)) return false;
+    if (_isRemarkAreaName(t, '', -1, words)) return false;
     if (buyerName && (t.indexOf(buyerName) >= 0 || buyerName.indexOf(t) >= 0)) return false;
     return true;
   });
@@ -793,7 +815,7 @@ function _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName) {
   // 名称被拆成多个词时，把首选词同行的相邻词按间距并回（拆字 PDF 常见）
   var anchor = cands[0];
   var lineWords = words.filter(function(w) {
-    return Math.abs(w.cy - anchor.cy) <= Math.max(anchor.h, 8) * 0.6 && w.nx >= 0.3;
+    return Math.abs(w.cy - anchor.cy) <= Math.max(anchor.h, 8) * 0.6 && inCodeColumn(w);
   }).sort(function(a, b) { return a.x - b.x; });
   var ai = lineWords.indexOf(anchor);
   var parts = [anchor];
@@ -3219,20 +3241,8 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
     }
     var parts = remarkLabel._parts || [];
     var rx = remarkLabel.x + remarkLabel.w * 0.5;
-    // 标签单字行高：竖排合成标签的 h 覆盖「备+注」两字，不能用于行距离判断
-    var _rmLineH = parts.length ? parts[0].h : remarkLabel.h;
-    // 上界：价税合计（大写/小写）行底边。数电票的「备/注」在备注框内垂直居中，
-    // 首行备注内容会比标签高出 2~4 行，按标签相对行高裁会把整段备注丢掉。
-    var _topLimit = remarkLabel.y - Math.max(_rmLineH, 8) * 1.5;
-    var _jshjBottom = -1;
-    for (var _t = 0; _t < words.length; _t++) {
-      var _tw = words[_t];
-      if (/价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写/.test(_tw.normText) && _tw.y < remarkLabel.y) {
-        var _tb = _tw.y + _tw.h;
-        if (_tb > _jshjBottom) _jshjBottom = _tb;
-      }
-    }
-    if (_jshjBottom > 0) _topLimit = _jshjBottom;
+    // 上界：完整合计行（含大写/小写金额）的底边，见 _getRemarkTop
+    var _topLimit = _getRemarkTop(words, remarkLabel);
     var rcand = words.filter(function(w) {
       if (w.confidence < 0.3) return false;
       if (w === remarkLabel || parts.indexOf(w) >= 0) return false;
@@ -3269,6 +3279,28 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
   return out;
 }
 
+/** 备注区上界：完整合计行的底边（大写/小写金额可能比标签低近一行，只按标签底边会收进备注） */
+function _getRemarkTop(words, remark) {
+  var parts = remark._parts || [];
+  var lineH = parts.length ? parts[0].h : remark.h;
+  var top = remark.y - Math.max(lineH, 8) * 1.5;
+  var anchors = words.filter(function(w) {
+    return /价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写/.test(w.normText) && w.y < remark.y;
+  });
+  if (!anchors.length) return top;
+  var anchorBottom = 0;
+  anchors.forEach(function(a) { anchorBottom = Math.max(anchorBottom, a.y + a.h); });
+  top = -1;
+  words.forEach(function(w) {
+    if (w === remark || parts.indexOf(w) >= 0) return;
+    if (anchors.some(function(a) { return Math.abs(w.cy - a.cy) <= Math.max(w.h, a.h, 8) * 0.9; })) {
+      top = Math.max(top, w.y + w.h);
+    }
+  });
+  // 合计行只有标签一个词时不能返回 -1：那会让备注区上界失效
+  return top >= 0 ? top : anchorBottom;
+}
+
 /** 定位「备注」标签：可能是整词（备注），也可能是上下拆开的两词（备 / 注） */
 function _findRemarkLabel(words) {
   var best = null;
@@ -3289,7 +3321,8 @@ function _findRemarkLabel(words) {
       if (w2 === w) continue;
       if (w2.normText.replace(/\s+/g, '') !== '注') continue;
       if (Math.abs(w2.cx - w.cx) > w.h * 0.8) continue;
-      if (w2.cy <= w.cy || w2.cy > w.cy + w.h * 2.2) continue;
+      // 竖向间距随模板变化：常见 1.9 行，部分数电票模板把「备」「注」拉开到 3.4 行
+      if (w2.cy <= w.cy || w2.cy > w.cy + w.h * 4.5) continue;
       // 合成一个虚拟标签，覆盖两词范围
       var label = {
         text: '备注', normText: '备注',

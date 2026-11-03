@@ -392,10 +392,21 @@ function initSlotInteraction() {
   container.addEventListener('mousedown', onSlotMouseDown);
   // Click on empty area deselects (floating slot toolbar excluded, 同步桌面版 #33)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') && !e.target.closest('#slotToolbar')) {
+    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') &&
+        !e.target.closest('#slotCopyMenu') && !hitSlotToolbar(e)) {
       selectSlot(-1);
     }
   });
+}
+
+// 工具条容器是 pointer-events:none（只有按钮吃事件，见 styles.css），点它的内边距 / 按钮间隙时
+// e.target 已经穿透成票面或预览底，closest('#slotToolbar') 命不中 —— 这里按矩形兜底，
+// 否则想点按钮偏出去 2px 就会当成「点空白处」把选中和工具条一起清掉
+function hitSlotToolbar(e) {
+  var tb = document.getElementById('slotToolbar');
+  if (!tb || tb.classList.contains('hidden')) return false;
+  var r = tb.getBoundingClientRect();
+  return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
 }
 
 function onSlotMouseDown(e) {
@@ -687,6 +698,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   if (a === b) { updatePreview(); return; }
   var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
   if (ia < 0 || ib < 0) { updatePreview(); return; }
+  // 互换后槽位序号对不上原票：选中按对象重定位，否则工具条会指到换过来的那张
+  var keep = captureSlotSelection();
   var offA = a.slotOffsetX, offB = b.slotOffsetX;
   var offAY = a.slotOffsetY, offBY = b.slotOffsetY;
   S.files[ia] = b; S.files[ib] = a;
@@ -694,9 +707,8 @@ function swapSlotInvoices(fromIdx, toIdx) {
   b.slotOffsetX = offB; b.slotOffsetY = offBY;
   if (_activeFileIdx === ia) { _activeFileIdx = ib; }
   else if (_activeFileIdx === ib) { _activeFileIdx = ia; }
-  renderFileList();
   toast('已互换位置');
-  updatePreview();
+  if (keep) refreshAfterCopiesChange(keep); else { renderFileList(); updatePreview(); }
 }
 
 // Move invoice into a neighbor position (insert before/after instead of swapping)
@@ -716,6 +728,8 @@ function moveSlotInvoice(fromIdx, toIdx, zone) {
   var ia = S.files.indexOf(a), ib = S.files.indexOf(b);
   if (ia < 0 || ib < 0) { updatePreview(); return; }
   var after = (zone === 'after');
+  // 倒序渲染时 S.files 尾部先显示，显示序「插到前面」等于底层数组「插到后面」
+  if (document.getElementById('pageOrder').value === 'reverse') after = !after;
   S.files.splice(ia, 1);
   var ibNew = S.files.indexOf(b);
   var insertAt = after ? ibNew + 1 : ibNew;
@@ -746,10 +760,22 @@ function moveSlotInvoiceToTail(fromIdx) {
   var ia = S.files.indexOf(a);
   if (ia < 0) { updatePreview(); return; }
   S.files.splice(ia, 1);
-  var last = active[n - 1];
-  var iLast = last === a ? -1 : S.files.indexOf(last);
-  var insertAt = iLast >= 0 ? iLast + 1 : S.files.length;
-  S.files.splice(insertAt, 0, a);
+  var insertAt;
+  if (document.getElementById('pageOrder').value === 'reverse') {
+    // 倒序渲染：显示序末尾 = 底层数组 active 区头部，找最后一个未勾选文件之前的空隙
+    insertAt = 0;
+    for (var i = 0; i < S.files.length; i++) {
+      var f = S.files[i];
+      if (f.checked || f._placeholder) { insertAt = i; break; }
+    }
+    S.files.splice(insertAt, 0, a);
+  } else {
+    // 正序：插到最后一个 active 文件之后
+    var last = active[n - 1];
+    var iLast = last === a ? -1 : S.files.indexOf(last);
+    insertAt = iLast >= 0 ? iLast + 1 : S.files.length;
+    S.files.splice(insertAt, 0, a);
+  }
   _activeFileIdx = S.files.indexOf(a);
   var newDi = getActiveFiles().indexOf(a);
   if (newDi >= 0) {
