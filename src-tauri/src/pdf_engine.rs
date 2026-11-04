@@ -60,7 +60,7 @@ fn is_jpeg_bytes(bytes: &[u8]) -> bool {
 /// Supports SOF0 (baseline), SOF1, SOF2 (progressive), and other SOF variants.
 fn parse_jpeg_info(bytes: &[u8]) -> Option<(u32, u32, u8)> {
     let mut i: usize = 0;
-    while i + 8 < bytes.len() {
+    while i + 9 < bytes.len() {
         if bytes[i] != 0xFF { break; }
         let marker = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
         i += 2;

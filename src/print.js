@@ -717,6 +717,7 @@ async function doSavePdf(fromPage, toPage) {
       }
     } catch(e) { savePath = null; }
   }
+  if (!savePath) { toast('已取消保存'); return; }
 
   var s = getSettings();
   var currentRequest = buildLayoutRequest(files, s, pageRange);

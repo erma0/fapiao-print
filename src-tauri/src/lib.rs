@@ -114,12 +114,15 @@ fn open_ofd_images(ofd_path: String) -> Result<Vec<FileData>, String> {
     let name = path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
+    let stem = path.file_stem()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.clone());
     let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
 
     let images = invoice_engine::extract_ofd_images_raw(&ofd_path)?;
     let mut results = Vec::new();
     for (idx, img) in images.iter().enumerate() {
-        let base_name = if name.len() > 4 { &name[..name.len()-4] } else { &name };
+        let base_name = stem.as_str();
         results.push(FileData {
             name: if images.len() > 1 {
                 format!("{}_第{}页.ofd", base_name, idx + 1)

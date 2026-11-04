@@ -902,57 +902,59 @@ async function processFileDataList(fileDataList) {
   }, updateIntervalMs);
 
   var lastToastUpdate = 0;
-  for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
-    var r = await loadPromises[fdIdx];
-    completed++;
+  try {
+    for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
+      var r = await loadPromises[fdIdx];
+      completed++;
 
-    var fd = fileDataList[fdIdx];
-    var phIdx = -1;
-    for (var i = 0; i < S.files.length; i++) {
-      if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
-    }
+      var fd = fileDataList[fdIdx];
+      var phIdx = -1;
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
+      }
 
-    if (phIdx >= 0 && r) {
-      var items = Array.isArray(r) ? r : [r];
-      items.forEach(function(it) { _newFileIds[it.id] = true; });
-      if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
-      S.files.splice.apply(S.files, [phIdx, 1].concat(items));
-      added += items.length;
-    } else if (phIdx >= 0) {
-      S.files.splice(phIdx, 1);
-    }
+      if (phIdx >= 0 && r) {
+        var items = Array.isArray(r) ? r : [r];
+        items.forEach(function(it) { _newFileIds[it.id] = true; });
+        if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
+        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+        added += items.length;
+      } else if (phIdx >= 0) {
+        S.files.splice(phIdx, 1);
+      }
 
-    var now = Date.now();
-    if (now - lastToastUpdate > 100 || completed >= total) {
-      lastToastUpdate = now;
-      var ocrRemaining = ocrBusyCount();
-      var isLast = (completed >= total);
-      if (isLast) {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
-        }
-      } else {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+      var now = Date.now();
+      if (now - lastToastUpdate > 100 || completed >= total) {
+        lastToastUpdate = now;
+        var ocrRemaining = ocrBusyCount();
+        var isLast = (completed >= total);
+        if (isLast) {
+          if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+            var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+            toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
+          }
         } else {
-          toastLoading('加载中 ' + completed + '/' + total);
+          if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+            var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+            toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+          } else {
+            toastLoading('加载中 ' + completed + '/' + total);
+          }
         }
       }
+
+      hasNewResults = true;
+      await nextFrame();
     }
-
-    hasNewResults = true;
-    await nextFrame();
+  } finally {
+    clearInterval(updateInterval);
+    _loadingBatchActive = false;
   }
-
-  clearInterval(updateInterval);
   if (slotInsert) locateInsertedFile(_lastInsertedId);
   if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
-  _loadingBatchActive = false;
   _insertSlotIdx = -1;
   _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
@@ -1124,6 +1126,16 @@ async function processFiles(files) {
 // Incremental loading: read files one-by-one, render in small batches.
 // Strategy: skeleton placeholders (stable layout) + parallel background load + batch render every 3 files.
 async function processFilesIncremental(paths) {
+  try {
+    return await _processFilesIncremental(paths);
+  } finally {
+    _loadingBatchActive = false;
+    _insertSlotIdx = -1;
+    _lastInsertedId = null;
+    document.getElementById('fileList').classList.remove('batch-loading');
+  }
+}
+async function _processFilesIncremental(paths) {
   var total = paths.length;
   var added = 0;
   var startTime = Date.now();
@@ -1272,11 +1284,7 @@ async function processFilesIncremental(paths) {
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
-  _loadingBatchActive = false;
-  _insertSlotIdx = -1;
-  _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
-  document.getElementById('fileList').classList.remove('batch-loading');
 
   if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
@@ -4878,8 +4886,8 @@ function loadSettings() {
   syncPaperUnitUI();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
-  if (o.customW) document.getElementById('customW').value = o.customW;
-  if (o.customH) document.getElementById('customH').value = o.customH;
+  if (o.customW != null) document.getElementById('customW').value = o.customW;
+  if (o.customH != null) document.getElementById('customH').value = o.customH;
   var sliders = ['marginTop','marginBottom','marginLeft','marginRight','gapH','gapV','customScale'];
   sliders.forEach(function(id) {
     if (o[id] != null) {
