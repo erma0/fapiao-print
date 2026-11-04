@@ -4168,6 +4168,11 @@ function syncLayoutHighlight() {
 }
 var _printersLoaded = false;
 var _savedPrinterName = null;
+// 打印机选择变更：同步记忆值并立即落盘（启动恢复期由 _restoringSettings 拦截）
+function onPrinterChange(val) {
+  _savedPrinterName = val || null;
+  saveSettings();
+}
 function switchTab(n, el) {
   document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.sidebar-panel').forEach(function(p) { p.classList.add('hidden'); });
@@ -4588,8 +4593,9 @@ function buildPages(files, settings) {
 // =====================================================
 var _saveTimer = null;
 var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
+var _restoringSettings = false; // 启动恢复期禁止回写，防止空 DOM / 空 S.files 快照覆盖已恢复的文件级记忆
 function saveSettings() {
-  if (_importingSettings) return;
+  if (_importingSettings || _restoringSettings) return;
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 function updatePreview() {
@@ -4735,7 +4741,7 @@ function collectSettings() {
     colorMode: document.getElementById('colorMode').value,
     pageOrder: document.getElementById('pageOrder').value,
     printMode: document.getElementById('printMode').value,
-    printerName: document.getElementById('printerSel').value || null,
+    printerName: document.getElementById('printerSel').value || (typeof _savedPrinterName === 'string' && _savedPrinterName) || null,
     feat: {}
   };
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse','copyBadge','autoEnhance','compatFlat','pasteMode','pasteBindLine','pasteShowSig','photoMode'];
@@ -4747,9 +4753,13 @@ function collectSettings() {
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
   o.filterCollapsed = S.filterCollapsed;
-  // Save per-file slot adjustments when memory is enabled
+  // Save per-file slot adjustments when memory is enabled.
+  // 以已恢复的内存 Map 打底再用当前文件覆盖：启动时 S.files 可能还没恢复，
+  // 直接重建会把上次记住的调整写成空表。
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
+    var savedAdj = S._fileAdjMap || {};
+    Object.keys(savedAdj).forEach(function(k) { adjMap[k] = savedAdj[k]; });
     S.files.forEach(function(f) {
       if (f.name && (f.slotScale !== undefined || f.slotOffsetX !== undefined || f.slotOffsetY !== undefined)) {
         adjMap[f.name] = {
@@ -4802,12 +4812,19 @@ function collectSettings() {
   // Persist rename template and separator
   if (_renameTemplate && _renameTemplate.length > 0) o.renameTemplate = _renameTemplate;
   if (_renameSeparator) o.renameSeparator = _renameSeparator;
-  // Persist per-file notes (keyed by file name)
+  // Persist per-file notes (keyed by file name)，同样以内存 Map 打底
   var notesMap = {};
-  S.files.forEach(function(f) { if (f.note && f.name) notesMap[f.name] = f.note; });
+  var savedNotes = S._notesMap || {};
+  Object.keys(savedNotes).forEach(function(k) { notesMap[k] = savedNotes[k]; });
+  S.files.forEach(function(f) {
+    if (!f.name) return;
+    if (f.note) notesMap[f.name] = f.note;
+    else delete notesMap[f.name];
+  });
   if (Object.keys(notesMap).length > 0) o.summaryNotes = notesMap;
-  // Save printed state (always, regardless of fileListMemory switch)
+  // Save printed state (always, regardless of fileListMemory switch)，以内存 Map 打底
   var printedMap = {};
+  Object.keys(_printedMap || {}).forEach(function(k) { printedMap[k] = true; });
   S.files.forEach(function(f) {
     var key = f._filePath || f._pdfPath;
     if (key && f._printed) printedMap[key] = true;
@@ -5667,9 +5684,15 @@ var _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
 var _renameSeparator = '_';
 
 // Restore all layout & feature settings
+// 恢复期间上锁：loadSettings 内部的 onPaperChange/onFitChange 会排一次 500ms 防抖保存，
+// 若此时 S.files 还没恢复，会把打印机 / 已打印标记 / 备注 / 单票调整写成空表。
+// 锁必须活过那次防抖（1000ms）再解，否则等于没加。
 renderPaperOptions();
 renderPhotoSizeOptions();
+_restoringSettings = true;
 loadSettings();
+if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+setTimeout(function() { _restoringSettings = false; }, 1000);
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
 
