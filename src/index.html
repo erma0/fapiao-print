@@ -297,8 +297,8 @@
           <div class="trow"><label class="tlbl">打印页码</label><button class="tgl" id="togglePageNum" onclick="toggleFeature('pageNum',this)"></button></div>
           <div class="trow"><label class="tlbl">打印日期</label><button class="tgl" id="toggleDate" onclick="toggleFeature('printDate',this)"></button></div>
           <div class="trow"><label class="tlbl">自定义页脚</label><button class="tgl" id="toggleFooter" onclick="toggleFeature('footer',this)"></button></div>
-          <div id="footerOpts" style="display:none;margin-top:6px;padding:6px 8px;background:var(--bg-main);border-radius:6px">
-            <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-input);color:var(--text);box-sizing:border-box">
+          <div id="footerOpts" style="display:none;margin-top:6px;padding:6px 8px;background:var(--surface2);border-radius:6px">
+            <input type="text" id="footerText" placeholder="输入页脚内容（留空则无页脚）" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text-primary);box-sizing:border-box">
           </div>
           <div id="customFMRow" class="trow" style="display:none"><label class="tlbl">自定义下边距</label><button class="tgl" id="toggleCustomFM" onclick="toggleFeature('customFM',this)"></button></div>
           <div id="footerMarginRow" class="row" style="display:none;margin-top:4px"><label class="lbl">下边距</label><div class="rr ctrl"><input type="range" id="footerMargin" min="0" max="30" value="8" oninput="syncSlider(this,'footerMarginN');updatePreview()"><input type="number" id="footerMarginN" min="0" max="30" value="8" onchange="syncRange(this,'footerMargin');updatePreview()"></div></div>
@@ -307,7 +307,7 @@
       <div class="sidebar-panel-footer">
         <div class="sec" style="display:flex;flex-direction:column;gap:8px;border-bottom:0">
           <button class="btn btn-success" style="width:100%;padding:12px;font-size:15px" onclick="doPrint()">🖨 开始打印</button>
-          <button class="btn btn-warning" style="width:100%;padding:10px" onclick="savePdf()">📥 保存为PDF</button>
+          <button class="btn" style="width:100%;padding:10px" onclick="savePdf()">📥 保存为PDF</button>
         </div>
       </div>
     </div>

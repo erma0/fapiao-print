@@ -337,7 +337,7 @@ async function downloadSumatraPdf() {
     if (body) body.innerHTML = '<div style="text-align:center;padding:16px 0">' +
       '<div class="spinner" style="width:40px;height:40px;border-width:3px;margin:0 auto 12px"></div>' +
       '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:10px">正在下载 SumatraPDF，请稍候...</div>' +
-      '<div style="width:100%;height:14px;background:var(--bg-secondary);border-radius:7px;overflow:hidden">' +
+      '<div style="width:100%;height:14px;background:var(--border);border-radius:7px;overflow:hidden">' +
         '<div id="sumatraDownloadProgress" style="height:100%;width:0%;background:var(--accent);border-radius:7px;transition:width 0.2s"></div>' +
       '</div>' +
       '<div id="sumatraDownloadPercent" style="font-size:13px;color:var(--text-muted);margin-top:6px">0%</div>' +
@@ -458,7 +458,7 @@ async function downloadPdfiumDll() {
     if (body) body.innerHTML = '<div style="text-align:center;padding:16px 0">' +
       '<div class="spinner" style="width:40px;height:40px;border-width:3px;margin:0 auto 12px"></div>' +
       '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:10px">正在下载 pdfium.dll，请稍候...</div>' +
-      '<div style="width:100%;height:14px;background:var(--bg-secondary);border-radius:7px;overflow:hidden">' +
+      '<div style="width:100%;height:14px;background:var(--border);border-radius:7px;overflow:hidden">' +
         '<div id="pdfiumDownloadProgress" style="height:100%;width:0%;background:var(--accent);border-radius:7px;transition:width 0.2s"></div>' +
       '</div>' +
       '<div id="pdfiumDownloadPercent" style="font-size:13px;color:var(--text-muted);margin-top:6px">0%</div>' +
@@ -3339,7 +3339,7 @@ function openInvModal(i) {
   if (S.files[i]._loading) return; // Don't open modal for loading placeholders
   S.editIdx = i; var f = S.files[i];
   var ocrText = f._ocrText || '';
-  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
+  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--accent)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
   var _fw = 'width:140px;flex:none;text-align:right;font-size:12px';
   var _fwm = _fw + ';font-family:monospace';
   var mRF = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl end">' + html + '</div></div>'; };
