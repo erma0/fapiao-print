@@ -394,6 +394,38 @@ async function run() {
   equal({ print: duplex.printBlanks, save: duplex.saveBlanks, printPages: duplex.printPages, savePages: duplex.savePages },
     { print: 2, save: 0, printPages: 4, savePages: 2 }, '双面逐份：仅打印请求含空白分隔页');
   equal(duplex.copiesStable, true, '双面逐份：改份数不改变 pages，PDF 缓存不误失效');
+  // 启动恢复期：文件列表恢复中禁止落盘，避免 filePaths 被残缺 S.files 覆盖
+  const restoreLock = await evaluate(() => {
+    var before = localStorage.getItem('ticketchan-settings');
+    _restoringFileList = true;
+    _restoreSavePending = false;
+    saveSettings();
+    var blocked = _restoreSavePending === true;
+    var unchanged = localStorage.getItem('ticketchan-settings') === before;
+    _restoringFileList = false;
+    _restoreSavePending = false;
+    return blocked && unchanged;
+  });
+  equal(restoreLock, true, '文件列表恢复期 saveSettings 挂起，不写残缺快照');
+  // printMode 旧键迁移：设置体写入失败时保留旧键，下次启动可再迁移
+  const migrateFallback = await evaluate(() => {
+    var settingsBefore = localStorage.getItem('ticketchan-settings');
+    var pmBefore = localStorage.getItem('ticketchan-print-mode');
+    var selectBefore = document.getElementById('printMode').value;
+    localStorage.setItem('ticketchan-print-mode', 'confirm');
+    localStorage.removeItem('ticketchan-settings');
+    var origSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function () { throw new Error('quota'); };
+    try { migrateLegacyPrintMode(); } finally { Storage.prototype.setItem = origSetItem; }
+    var kept = localStorage.getItem('ticketchan-print-mode') === 'confirm';
+    if (settingsBefore === null) localStorage.removeItem('ticketchan-settings');
+    else localStorage.setItem('ticketchan-settings', settingsBefore);
+    if (pmBefore === null) localStorage.removeItem('ticketchan-print-mode');
+    else localStorage.setItem('ticketchan-print-mode', pmBefore);
+    document.getElementById('printMode').value = selectBefore;
+    return kept;
+  });
+  equal(migrateFallback, true, 'printMode 迁移写入失败时保留旧键');
 
   await cdp('Browser.close');
   console.log('PASS: ' + checks + ' regression checks');

@@ -577,36 +577,42 @@ function ocrMaxDim() {
 // =====================================================
 async function restoreFiles(paths) {
   _isRestoringFiles = true;
-  var checks = await Promise.all(paths.map(function(p) {
-    return invoke('check_path_exists', { path: p })
-      .then(function(info) { return { path: p, valid: !!(info && info.exists && info.isFile) }; })
-      .catch(function() { return { path: p, valid: false }; });
-  }));
-  var valid = checks.filter(function(c) { return c.valid; }).map(function(c) { return c.path; });
-  var skipped = paths.length - valid.length;
-  if (!valid.length) {
-    _isRestoringFiles = false;
-    renderFileList();
-    if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
-    return;
-  }
+  _restoringFileList = true; // 恢复期内禁止落盘快照：S.files 尚不完整，会把上次的文件列表写成残表
   try {
-    if (valid.length <= 3) {
-      toastLoading('恢复 ' + valid.length + ' 个文件...');
-      var fileDataList = await invoke('open_invoice_files', { paths: valid });
-      if (fileDataList && fileDataList.length > 0) {
-        await processFileDataList(fileDataList);
-      }
-    } else {
-      await processFilesIncremental(valid);
+    var checks = await Promise.all(paths.map(function(p) {
+      return invoke('check_path_exists', { path: p })
+        .then(function(info) { return { path: p, valid: !!(info && info.exists && info.isFile) }; })
+        .catch(function() { return { path: p, valid: false }; });
+    }));
+    var valid = checks.filter(function(c) { return c.valid; }).map(function(c) { return c.path; });
+    var skipped = paths.length - valid.length;
+    if (!valid.length) {
+      _isRestoringFiles = false;
+      renderFileList();
+      if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
+      return;
     }
-  } catch(e) {
-    toast('恢复发票列表失败: ' + String(e));
+    try {
+      if (valid.length <= 3) {
+        toastLoading('恢复 ' + valid.length + ' 个文件...');
+        var fileDataList = await invoke('open_invoice_files', { paths: valid });
+        if (fileDataList && fileDataList.length > 0) {
+          await processFileDataList(fileDataList);
+        }
+      } else {
+        await processFilesIncremental(valid);
+      }
+    } catch(e) {
+      toast('恢复发票列表失败: ' + String(e));
+    }
+    // Delay to allow async applyPdfTextToResults callbacks to finish
+    // before clearing the OCR-skip flag (they fire after processFileDataList returns)
+    setTimeout(function() { _isRestoringFiles = false; }, 3000);
+    if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
+  } finally {
+    _restoringFileList = false;
+    if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
   }
-  // Delay to allow async applyPdfTextToResults callbacks to finish
-  // before clearing the OCR-skip flag (they fire after processFileDataList returns)
-  setTimeout(function() { _isRestoringFiles = false; }, 3000);
-  if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
 }
 
 var _insertSlotIdx = -1;   // 点击版面空白槽位加号上传时的目标槽位，-1 表示普通追加
@@ -4602,10 +4608,11 @@ function buildPages(files, settings) {
 var _saveTimer = null;
 var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
 var _restoringSettings = false; // 启动恢复期禁止回写，防止空 DOM / 空 S.files 快照覆盖已恢复的文件级记忆
+var _restoringFileList = false; // 文件列表恢复期：S.files 尚未完整，期间禁止落盘快照
 var _restoreSavePending = false; // 恢复期内被拦截的保存请求，解锁后补一次，避免吞掉启动瞬间的操作
 function saveSettings() {
   if (_importingSettings) return;
-  if (_restoringSettings) { _restoreSavePending = true; return; }
+  if (_restoringSettings || _restoringFileList) { _restoreSavePending = true; return; }
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 function updatePreview() {
@@ -5650,7 +5657,9 @@ document.getElementById('orientation').value = 'landscape';
   } catch(e) {}
 })();
 
-(function() {
+// 旧版独立键 ticketchan-print-mode → ticketchan-settings.printMode 的一次性迁移。
+// 抽成函数便于回归测试；写入失败时保留旧键，下次启动还能再迁移。
+function migrateLegacyPrintMode() {
   try {
     var pm = localStorage.getItem('ticketchan-print-mode');
     if (!(pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
@@ -5658,13 +5667,19 @@ document.getElementById('orientation').value = 'landscape';
       document.getElementById('printMode').value = 'pdfium';
       return;
     }
-    // 旧版独立键 → ticketchan-settings.printMode 的一次性迁移（settings 优先）
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem('ticketchan-settings') || 'null'); } catch(e) {}
-    if (!saved || !saved.printMode) document.getElementById('printMode').value = pm;
-    localStorage.removeItem('ticketchan-print-mode');
+    var migrated = true;
+    if (!saved || !saved.printMode) {
+      document.getElementById('printMode').value = pm;
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
+      saved.printMode = pm;
+      try { localStorage.setItem('ticketchan-settings', JSON.stringify(saved)); } catch(e) { migrated = false; }
+    }
+    if (migrated) localStorage.removeItem('ticketchan-print-mode');
   } catch(e) {}
-})();
+}
+migrateLegacyPrintMode();
 
 // Restore OCR enabled setting
 (function() {
@@ -5721,7 +5736,11 @@ loadSettings();
 if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
 setTimeout(function() {
   _restoringSettings = false;
-  if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
+  if (!_restoreSavePending) return;
+  // 文件列表还没开始/还没恢复完时先别落盘，否则 filePaths 会被残缺的 S.files 覆盖
+  if (_restoringFileList || (_restoreFilePaths && _restoreFilePaths.length)) return;
+  _restoreSavePending = false;
+  saveSettings();
 }, 1000);
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
