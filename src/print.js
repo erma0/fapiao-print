@@ -7,6 +7,11 @@
 var _lastLayoutRequest = null;
 var _lastPdfPath = null;
 
+// 下发前剔除：Rust 结构体不认识、或生成路径不使用的纯前端字段
+var _requestStrip = { copyBadge: 1, enhanceMinDpi: 1 };
+// 仅缓存比较时忽略：只影响打印方式，不影响 PDF 内容
+var _cacheIgnore = { printerName: 1, copies: 1, duplex: 1, collate: 1 };
+
 /**
  * 深度比较两个对象是否相等
  */
@@ -32,9 +37,19 @@ function deepEqual(a, b) {
 /**
  * 检查是否可以使用缓存（比较当前和上次的 LayoutRequest）
  */
+function _cacheComparable(req) {
+  var settings = {};
+  for (var k in req.settings) {
+    if (!(k in _cacheIgnore)) settings[k] = req.settings[k];
+  }
+  var out = {};
+  for (var key in req) out[key] = req[key];
+  out.settings = settings;
+  return out;
+}
 function canUseCachedPdf(currentRequest) {
   if (!_lastLayoutRequest || !_lastPdfPath) return false;
-  return deepEqual(currentRequest, _lastLayoutRequest);
+  return deepEqual(_cacheComparable(currentRequest), _cacheComparable(_lastLayoutRequest));
 }
 
 /**
@@ -180,13 +195,11 @@ function buildLayoutRequest(files, settings, pageRange) {
     pageSpecs.push({ slots: slots });
   }
 
-  // 排除不影响 PDF 内容的参数，避免设置一改就误判缓存失效：
-  //   printerName/copies/duplex/collate 只影响打印方式；copyBadge 为纯预览标记；
-  //   enhanceMinDpi 现仅用于「检查清晰度」的 ⚠ 提示阈值（issue #52），不再筛选要增强的图片
-  var _cacheExclude = { printerName:1, copies:1, duplex:1, collate:1, copyBadge:1, enhanceMinDpi:1 };
+  // 只剔除 Rust 用不到的前端字段；打印方式参数（printerName/copies/duplex/collate）
+  // 照常下发，由 canUseCachedPdf 在比较时忽略，避免打印参数与请求体耦合。
   var layoutSettings = {};
   for (var k in settings) {
-    if (!(k in _cacheExclude)) layoutSettings[k] = settings[k];
+    if (!(k in _requestStrip)) layoutSettings[k] = settings[k];
   }
   // _specKeys 是纯前端字段（与 fileSpecs 同序），供清晰度体检把结果反查回 fileObj。
   // Rust 的 LayoutRenderRequest 不认识它，会被 serde 忽略。
@@ -304,7 +317,7 @@ function showPrintConfirm(files, s) {
     return '<div class="modal-row compact' + (cls ? ' ' + cls : '') + '"><span class="modal-lbl">' + lbl + '</span><span class="modal-val">' + val + '</span></div>';
   };
 
-  var engineSelect = '<select id="confirmPrintEngine" style="padding:1px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:12px">'
+  var engineSelect = '<select id="confirmPrintEngine" style="padding:1px 4px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text-primary);font-size:12px">'
     + '<option value="pdfium">PDFium（推荐）</option>'
     + '<option value="sumatra">SumatraPDF（备用）</option>'
     + '</select>';
@@ -704,6 +717,7 @@ async function doSavePdf(fromPage, toPage) {
       }
     } catch(e) { savePath = null; }
   }
+  if (!savePath) { toast('已取消保存'); return; }
 
   var s = getSettings();
   var currentRequest = buildLayoutRequest(files, s, pageRange);

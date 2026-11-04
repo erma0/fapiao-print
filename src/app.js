@@ -337,7 +337,7 @@ async function downloadSumatraPdf() {
     if (body) body.innerHTML = '<div style="text-align:center;padding:16px 0">' +
       '<div class="spinner" style="width:40px;height:40px;border-width:3px;margin:0 auto 12px"></div>' +
       '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:10px">正在下载 SumatraPDF，请稍候...</div>' +
-      '<div style="width:100%;height:14px;background:var(--bg-secondary);border-radius:7px;overflow:hidden">' +
+      '<div style="width:100%;height:14px;background:var(--border);border-radius:7px;overflow:hidden">' +
         '<div id="sumatraDownloadProgress" style="height:100%;width:0%;background:var(--accent);border-radius:7px;transition:width 0.2s"></div>' +
       '</div>' +
       '<div id="sumatraDownloadPercent" style="font-size:13px;color:var(--text-muted);margin-top:6px">0%</div>' +
@@ -413,7 +413,7 @@ function showSumatraDownloadError(errMsg) {
 
 function switchToPdfMode() {
   document.getElementById('printMode').value = 'pdf';
-  try { localStorage.setItem('ticketchan-print-mode', 'pdf'); } catch(e) {}
+  saveSettings();
   var modal1 = document.getElementById('sumatraPdfModal');
   if (modal1) modal1.classList.add('hidden');
   var modal2 = document.getElementById('pdfiumModal');
@@ -458,7 +458,7 @@ async function downloadPdfiumDll() {
     if (body) body.innerHTML = '<div style="text-align:center;padding:16px 0">' +
       '<div class="spinner" style="width:40px;height:40px;border-width:3px;margin:0 auto 12px"></div>' +
       '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:10px">正在下载 pdfium.dll，请稍候...</div>' +
-      '<div style="width:100%;height:14px;background:var(--bg-secondary);border-radius:7px;overflow:hidden">' +
+      '<div style="width:100%;height:14px;background:var(--border);border-radius:7px;overflow:hidden">' +
         '<div id="pdfiumDownloadProgress" style="height:100%;width:0%;background:var(--accent);border-radius:7px;transition:width 0.2s"></div>' +
       '</div>' +
       '<div id="pdfiumDownloadPercent" style="font-size:13px;color:var(--text-muted);margin-top:6px">0%</div>' +
@@ -902,57 +902,59 @@ async function processFileDataList(fileDataList) {
   }, updateIntervalMs);
 
   var lastToastUpdate = 0;
-  for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
-    var r = await loadPromises[fdIdx];
-    completed++;
+  try {
+    for (var fdIdx = 0; fdIdx < fileDataList.length; fdIdx++) {
+      var r = await loadPromises[fdIdx];
+      completed++;
 
-    var fd = fileDataList[fdIdx];
-    var phIdx = -1;
-    for (var i = 0; i < S.files.length; i++) {
-      if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
-    }
+      var fd = fileDataList[fdIdx];
+      var phIdx = -1;
+      for (var i = 0; i < S.files.length; i++) {
+        if (S.files[i]._placeholderKey === fd._phKey) { phIdx = i; break; }
+      }
 
-    if (phIdx >= 0 && r) {
-      var items = Array.isArray(r) ? r : [r];
-      items.forEach(function(it) { _newFileIds[it.id] = true; });
-      if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
-      S.files.splice.apply(S.files, [phIdx, 1].concat(items));
-      added += items.length;
-    } else if (phIdx >= 0) {
-      S.files.splice(phIdx, 1);
-    }
+      if (phIdx >= 0 && r) {
+        var items = Array.isArray(r) ? r : [r];
+        items.forEach(function(it) { _newFileIds[it.id] = true; });
+        if (slotInsert && !_lastInsertedId && firstPlaceholder && fd._phKey === firstPlaceholder._placeholderKey) _lastInsertedId = items[0].id;
+        S.files.splice.apply(S.files, [phIdx, 1].concat(items));
+        added += items.length;
+      } else if (phIdx >= 0) {
+        S.files.splice(phIdx, 1);
+      }
 
-    var now = Date.now();
-    if (now - lastToastUpdate > 100 || completed >= total) {
-      lastToastUpdate = now;
-      var ocrRemaining = ocrBusyCount();
-      var isLast = (completed >= total);
-      if (isLast) {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
-        }
-      } else {
-        if (ocrRemaining > 0 && S.feat.ocrEnabled) {
-          var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
-          toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+      var now = Date.now();
+      if (now - lastToastUpdate > 100 || completed >= total) {
+        lastToastUpdate = now;
+        var ocrRemaining = ocrBusyCount();
+        var isLast = (completed >= total);
+        if (isLast) {
+          if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+            var ocrDone2 = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+            toastLoading('加载完成，识别中 ' + ocrDone2 + '/' + _ocrBatchTotal);
+          }
         } else {
-          toastLoading('加载中 ' + completed + '/' + total);
+          if (ocrRemaining > 0 && S.feat.ocrEnabled) {
+            var ocrDone = _ocrBatchTotal > 0 ? _ocrBatchTotal - ocrRemaining : 0;
+            toastLoading('加载中 ' + completed + '/' + total + '，识别中 ' + ocrDone + '/' + _ocrBatchTotal);
+          } else {
+            toastLoading('加载中 ' + completed + '/' + total);
+          }
         }
       }
+
+      hasNewResults = true;
+      await nextFrame();
     }
-
-    hasNewResults = true;
-    await nextFrame();
+  } finally {
+    clearInterval(updateInterval);
+    _loadingBatchActive = false;
   }
-
-  clearInterval(updateInterval);
   if (slotInsert) locateInsertedFile(_lastInsertedId);
   if (S.feat.autoDedup) removeDuplicates(true);
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
-  _loadingBatchActive = false;
   _insertSlotIdx = -1;
   _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
@@ -1124,6 +1126,16 @@ async function processFiles(files) {
 // Incremental loading: read files one-by-one, render in small batches.
 // Strategy: skeleton placeholders (stable layout) + parallel background load + batch render every 3 files.
 async function processFilesIncremental(paths) {
+  try {
+    return await _processFilesIncremental(paths);
+  } finally {
+    _loadingBatchActive = false;
+    _insertSlotIdx = -1;
+    _lastInsertedId = null;
+    document.getElementById('fileList').classList.remove('batch-loading');
+  }
+}
+async function _processFilesIncremental(paths) {
   var total = paths.length;
   var added = 0;
   var startTime = Date.now();
@@ -1272,11 +1284,7 @@ async function processFilesIncremental(paths) {
   renderFileList(); updatePreview(); updatePrintBtn(); updateSummaryBtn();
   scrollActiveFileIntoView();
 
-  _loadingBatchActive = false;
-  _insertSlotIdx = -1;
-  _lastInsertedId = null;
   maybeAutoTrim();  // 裁剪白边开关跨会话记忆：加载完成后自动补裁剪
-  document.getElementById('fileList').classList.remove('batch-loading');
 
   if (ocrBusyCount() === 0) {
     _ocrToastActive = false;
@@ -3331,7 +3339,7 @@ function openInvModal(i) {
   if (S.files[i]._loading) return; // Don't open modal for loading placeholders
   S.editIdx = i; var f = S.files[i];
   var ocrText = f._ocrText || '';
-  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--primary)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
+  var ocrHtml = ocrText ? '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px" onclick="this.nextElementSibling.classList.toggle(\'hidden\');this.querySelector(\'.arrow\').textContent=this.nextElementSibling.classList.contains(\'hidden\')?\'▶\':\'▼\'"><span class="arrow" style="font-size:10px;color:var(--text-muted)">▶</span><span style="font-size:12px;font-weight:600;color:var(--accent)">🔍 OCR识别全文</span><span style="font-size:10px;color:var(--text-muted)">(点击展开)</span></div><div class="hidden" style="position:relative"><pre style="margin:0;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;font-family:Consolas,monospace;border:1px solid var(--border)">' + escHtml(ocrText) + '</pre><button class="btn btn-sm" style="position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;opacity:0.7" onclick="event.stopPropagation();copyOcrText(this)" title="复制OCR文本">📋 复制</button></div></div>' : '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--text-muted)">⏳ OCR 全文尚未识别</div>';
   var _fw = 'width:140px;flex:none;text-align:right;font-size:12px';
   var _fwm = _fw + ';font-family:monospace';
   var mRF = function(label, html) { return '<div class="modal-row"><label class="modal-lbl">' + label + '</label><div class="modal-ctrl end">' + html + '</div></div>'; };
@@ -4168,6 +4176,11 @@ function syncLayoutHighlight() {
 }
 var _printersLoaded = false;
 var _savedPrinterName = null;
+// 打印机选择变更：同步记忆值并立即落盘（启动恢复期由 _restoringSettings 拦截）
+function onPrinterChange(val) {
+  _savedPrinterName = val || null;
+  saveSettings();
+}
 function switchTab(n, el) {
   document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.sidebar-panel').forEach(function(p) { p.classList.add('hidden'); });
@@ -4541,7 +4554,7 @@ function getSettings() {
     // 粘贴单是一张表单，页码/日期/自定义页脚会与装订线/签字栏打架，本模式下停用
     //（与魔改版语义一致；Rust 端 slot_size_mm 对 paste 不叠加页脚扣除）
     footerText: !photoMode && S.feat.footer && !S.feat.pasteMode ? document.getElementById('footerText').value : '',
-    footerMargin: !photoMode && (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
+    footerMargin: !photoMode && !S.feat.pasteMode && (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
     customFm: S.feat.customFM,
     // 老打印机兼容模式（issue #46）：生成后整页栅格化为位图 PDF，进缓存比较（切换即失效）
     compatFlat: !!S.feat.compatFlat,
@@ -4588,8 +4601,11 @@ function buildPages(files, settings) {
 // =====================================================
 var _saveTimer = null;
 var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
+var _restoringSettings = false; // 启动恢复期禁止回写，防止空 DOM / 空 S.files 快照覆盖已恢复的文件级记忆
+var _restoreSavePending = false; // 恢复期内被拦截的保存请求，解锁后补一次，避免吞掉启动瞬间的操作
 function saveSettings() {
   if (_importingSettings) return;
+  if (_restoringSettings) { _restoreSavePending = true; return; }
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 function updatePreview() {
@@ -4735,7 +4751,7 @@ function collectSettings() {
     colorMode: document.getElementById('colorMode').value,
     pageOrder: document.getElementById('pageOrder').value,
     printMode: document.getElementById('printMode').value,
-    printerName: document.getElementById('printerSel').value || null,
+    printerName: document.getElementById('printerSel').value || (typeof _savedPrinterName === 'string' && _savedPrinterName) || null,
     feat: {}
   };
   var featKeys = ['cutline','number','border','trimWhite','watermark','collate','duplex','pageNum','printDate','footer','autoOpenPdf','customFM','slotAdjMemory','fileListMemory','autoDedup','reimburse','copyBadge','autoEnhance','compatFlat','pasteMode','pasteBindLine','pasteShowSig','photoMode'];
@@ -4747,9 +4763,14 @@ function collectSettings() {
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
   o.filterCollapsed = S.filterCollapsed;
-  // Save per-file slot adjustments when memory is enabled
+  o.viewZoom = S.viewZoom;
+  // Save per-file slot adjustments when memory is enabled.
+  // 以已恢复的内存 Map 打底再用当前文件覆盖：启动时 S.files 可能还没恢复，
+  // 直接重建会把上次记住的调整写成空表。
   if (S.feat.slotAdjMemory) {
     var adjMap = {};
+    var savedAdj = S._fileAdjMap || {};
+    Object.keys(savedAdj).forEach(function(k) { adjMap[k] = savedAdj[k]; });
     S.files.forEach(function(f) {
       if (f.name && (f.slotScale !== undefined || f.slotOffsetX !== undefined || f.slotOffsetY !== undefined)) {
         adjMap[f.name] = {
@@ -4802,12 +4823,19 @@ function collectSettings() {
   // Persist rename template and separator
   if (_renameTemplate && _renameTemplate.length > 0) o.renameTemplate = _renameTemplate;
   if (_renameSeparator) o.renameSeparator = _renameSeparator;
-  // Persist per-file notes (keyed by file name)
+  // Persist per-file notes (keyed by file name)，同样以内存 Map 打底
   var notesMap = {};
-  S.files.forEach(function(f) { if (f.note && f.name) notesMap[f.name] = f.note; });
+  var savedNotes = S._notesMap || {};
+  Object.keys(savedNotes).forEach(function(k) { notesMap[k] = savedNotes[k]; });
+  S.files.forEach(function(f) {
+    if (!f.name) return;
+    if (f.note) notesMap[f.name] = f.note;
+    else delete notesMap[f.name];
+  });
   if (Object.keys(notesMap).length > 0) o.summaryNotes = notesMap;
-  // Save printed state (always, regardless of fileListMemory switch)
+  // Save printed state (always, regardless of fileListMemory switch)，以内存 Map 打底
   var printedMap = {};
+  Object.keys(_printedMap || {}).forEach(function(k) { printedMap[k] = true; });
   S.files.forEach(function(f) {
     var key = f._filePath || f._pdfPath;
     if (key && f._printed) printedMap[key] = true;
@@ -4850,6 +4878,11 @@ function loadSettings() {
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   if (o.fileView === 'grid') S.fileView = 'grid';
   if (o.filterCollapsed === false) S.filterCollapsed = false;
+  if (o.viewZoom != null) {
+    var _zv = parseInt(o.viewZoom, 10);
+    S.viewZoom = (isNaN(_zv) || _zv < 0 || _zv > 500) ? 0 : _zv;
+    updateZoomDisplay();
+  }
   syncFileViewBtn();
   syncFilterPanel();
   updateFilterSummary();
@@ -4861,8 +4894,8 @@ function loadSettings() {
   syncPaperUnitUI();
   if (o.paperSize) { document.getElementById('paperSize').value = o.paperSize; onPaperChange(); }
   if (o.orientation) document.getElementById('orientation').value = o.orientation;
-  if (o.customW) document.getElementById('customW').value = o.customW;
-  if (o.customH) document.getElementById('customH').value = o.customH;
+  if (o.customW != null) document.getElementById('customW').value = o.customW;
+  if (o.customH != null) document.getElementById('customH').value = o.customH;
   var sliders = ['marginTop','marginBottom','marginLeft','marginRight','gapH','gapV','customScale'];
   sliders.forEach(function(id) {
     if (o[id] != null) {
@@ -5136,6 +5169,7 @@ async function exportSettings() {
   data.ocrPrecision = S.ocrPrecision;
   data.saveDir = getSaveDir();
   data.updateChannel = getUpdateChannel();
+  data.autoUpdateCheck = !isIgnoreAllUpdates();
   var json = JSON.stringify(data, null, 2);
   if (isTauri && invoke) {
     try {
@@ -5212,7 +5246,7 @@ async function importSettings() {
   }
   if (!confirm('导入将覆盖当前全部设置与本地记忆（已打印标记 / 文件列表 / 单票调整 / 备注），并重新加载界面，确认继续？')) return;
   // 设置主体写回 ticketchan-settings；独立存储的偏好项写回各自的 key
-  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir', 'updateChannel'];
+  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir', 'updateChannel', 'autoUpdateCheck'];
   var settings = {};
   Object.keys(data).forEach(function(k) { if (extraKeys.indexOf(k) < 0) settings[k] = data[k]; });
   _importingSettings = true; // 写入期间起锁：清挂起的防抖保存 + 拦截重载窗口内新触发的自动保存
@@ -5225,6 +5259,7 @@ async function importSettings() {
     if (data.ocrPrecision === 'fast' || data.ocrPrecision === 'standard' || data.ocrPrecision === 'precise') localStorage.setItem('ticketchan-ocr-precision', data.ocrPrecision);
     if (typeof data.saveDir === 'string') localStorage.setItem('ticketchan-save-dir', data.saveDir);
     if (data.updateChannel === 'stable' || data.updateChannel === 'beta') localStorage.setItem('ticketchan-update-channel', data.updateChannel);
+    if (typeof data.autoUpdateCheck === 'boolean') localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, data.autoUpdateCheck ? '' : '1');
   } catch(e) {
     _importingSettings = false; // 写入失败解锁，恢复自动保存
     toast('导入失败: ' + e);
@@ -5247,12 +5282,14 @@ function resetSettings(scope) {
   } else {
     S.feat = featDefaults;
   }
-  S.viewZoom = 0;
-  S.quickLayouts = defaultQuickLayouts();
-  S.quickLayoutMax = 0;
-  document.getElementById('quickLayoutMax').value = 0;
-  renderQuickLayoutBar();
-  renderQuickLayoutList();
+  if (!layoutOnly) {
+    S.viewZoom = 0;
+    S.quickLayouts = defaultQuickLayouts();
+    S.quickLayoutMax = 0;
+    document.getElementById('quickLayoutMax').value = 0;
+    renderQuickLayoutBar();
+    renderQuickLayoutList();
+  }
   document.getElementById('paperUnit').value = 'mm';
   renderPaperOptions();
   syncPaperUnitUI();
@@ -5333,6 +5370,7 @@ function resetSettings(scope) {
   document.getElementById('pasteSigGap').value = 2;
   if (layoutOnly) {
     syncLayoutHighlight();
+    saveSettings();
     updatePreview();
     toast('已恢复默认版面设置');
     return;
@@ -5366,7 +5404,9 @@ function resetSettings(scope) {
   try { localStorage.removeItem('ticketchan-ocr-precision'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-update-channel'); } catch(e) {}
+  try { localStorage.removeItem(_UPDATE_IGNORE_ALL_KEY); } catch(e) {}
   syncUpdateChannelUI();
+  syncAutoUpdateCheckUI();
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-print-mode'); } catch(e) {}
   _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
@@ -5613,12 +5653,16 @@ document.getElementById('orientation').value = 'landscape';
 (function() {
   try {
     var pm = localStorage.getItem('ticketchan-print-mode');
-    if (pm && (pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
-      document.getElementById('printMode').value = pm;
-    } else {
+    if (!(pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
       // 默认 PDFium 静默打印 — PDF 阅读器模式无法可靠切换打印机(Edge/Chrome 内置查看器不支持 printto)
       document.getElementById('printMode').value = 'pdfium';
+      return;
     }
+    // 旧版独立键 → ticketchan-settings.printMode 的一次性迁移（settings 优先）
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem('ticketchan-settings') || 'null'); } catch(e) {}
+    if (!saved || !saved.printMode) document.getElementById('printMode').value = pm;
+    localStorage.removeItem('ticketchan-print-mode');
   } catch(e) {}
 })();
 
@@ -5667,9 +5711,18 @@ var _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
 var _renameSeparator = '_';
 
 // Restore all layout & feature settings
+// 恢复期间上锁：loadSettings 内部的 onPaperChange/onFitChange 会排一次 500ms 防抖保存，
+// 若此时 S.files 还没恢复，会把打印机 / 已打印标记 / 备注 / 单票调整写成空表。
+// 锁必须活过那次防抖（1000ms）再解，否则等于没加。
 renderPaperOptions();
 renderPhotoSizeOptions();
+_restoringSettings = true;
 loadSettings();
+if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+setTimeout(function() {
+  _restoringSettings = false;
+  if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
+}, 1000);
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
 
