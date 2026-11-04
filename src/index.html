@@ -284,8 +284,8 @@
         <div class="sec">
           <div class="sec-title">🔢 打印份数</div>
           <div class="row"><label class="lbl">份数</label><div style="display:flex;align-items:center;gap:4px"><button class="btn btn-sm btn-icon" onclick="changeCopies(-1)">−</button><input type="number" id="copies" value="1" min="1" max="99" style="width:52px;text-align:center" onchange="updatePreview()"><button class="btn btn-sm btn-icon" onclick="changeCopies(1)">+</button></div></div>
-          <div class="trow"><label class="tlbl">逐份打印</label><button class="tgl on" id="toggleCollate" onclick="toggleFeature('collate',this)"></button></div>
-          <div class="trow"><label class="tlbl">双面打印</label><button class="tgl" id="toggleDuplex" onclick="toggleFeature('duplex',this)"></button></div>
+          <div class="trow"><label class="tlbl">逐份打印</label><button class="tgl on" id="toggleCollate" onclick="toggleFeature('collate',this)" title="多份时按份排序；与「双面打印」同时开启后，还会自动在不同文件之间补空白页，避免两份发票印到同一张纸的正反面"></button></div>
+          <div class="trow"><label class="tlbl">双面打印</label><button class="tgl" id="toggleDuplex" onclick="toggleFeature('duplex',this)" title="与「逐份打印」同时开启后，不同文件之间自动插入空白分隔页"></button></div>
         </div>
         <div class="sec">
           <div class="sec-title">🎨 颜色模式</div>

@@ -82,7 +82,48 @@ function fileSpecKey(fileObj) {
     : (fileObj.previewUrl || '');
 }
 
-function buildLayoutRequest(files, settings, pageRange) {
+// 双面 + 逐份（issue #62）：一个源文件拆出的多页算同一「份」，不同源文件之间必须
+// 从新纸张正面开始。整份 PDF 是单个打印作业，驱动会把相邻两页排到同一张纸的正反面，
+// 因此按页边界插入空白页把上一份补齐到偶数页，末尾也补齐，保证多份打印时每份都对齐。
+// 空白页只在打印链路生成，预览与「保存为PDF」不插页；多拼模式下同页内混排无法隔离。
+function duplexDocKey(f) {
+  if (!f || f._placeholder || f._xmlInvoice) return '';
+  if (f._pdfPath) return 'pdf:' + f._pdfPath + '|' + (f._batchId || f.id);
+  if (f._filePath) return 'file:' + f._filePath;
+  return 'id:' + (f.id || f.name || '');
+}
+function pageDocKey(page, fromEnd) {
+  if (!page) return '';
+  if (fromEnd) {
+    for (var i = page.length - 1; i >= 0; i--) {
+      var k = duplexDocKey(page[i]);
+      if (k) return k;
+    }
+  } else {
+    for (var j = 0; j < page.length; j++) {
+      var k2 = duplexDocKey(page[j]);
+      if (k2) return k2;
+    }
+  }
+  return '';
+}
+function padDuplexSeparators(pages) {
+  var out = [];
+  for (var p = 0; p < pages.length; p++) {
+    out.push(pages[p]);
+    var next = pages[p + 1];
+    if (!next || (out.length % 2) === 0) continue;
+    var a = pageDocKey(pages[p], true);
+    var b = pageDocKey(next, false);
+    if (a && b && a !== b) out.push(null);
+  }
+  // 末尾无条件补齐偶数页：物理上只是占住最后一张纸的背面，不额外耗纸；
+  // 同时让 pages 与「份数」解耦，改份数不会误判 PDF 缓存失效。
+  if (out.length % 2 === 1) out.push(null);
+  return out;
+}
+
+function buildLayoutRequest(files, settings, pageRange, opts) {
   // 1. Collect unique file specs
   var fileMap = {};
   var fileSpecs = [];
@@ -168,6 +209,10 @@ function buildLayoutRequest(files, settings, pageRange) {
     pages = pages.slice(pageRange.from - 1, pageRange.to);
   }
   var expanded = pages;
+  // 打印链路才插空白分隔页；保存 PDF 与预览保持原页序（pageRange 也以原页序为准）
+  if (opts && opts.forPrint && settings.duplex && settings.collate) {
+    expanded = padDuplexSeparators(expanded);
+  }
 
   // 3. Build page specs with effective rotation
   var pageSpecs = [];
@@ -176,8 +221,9 @@ function buildLayoutRequest(files, settings, pageRange) {
 
   var perPage = getPerPage(settings);
   for (var i = 0; i < expanded.length; i++) {
-    var slots = [];
     var pageFiles = expanded[i];
+    if (pageFiles === null) { pageSpecs.push({ slots: [], blank: true }); continue; }
+    var slots = [];
     for (var j = 0; j < perPage; j++) {
       var f = j < pageFiles.length ? pageFiles[j] : null;
       if (f) {
@@ -305,6 +351,7 @@ function showPrintConfirm(files, s) {
 
   var pages = buildPages(files, s);
   var totalPages = pages.length;
+  var sepPages = (s.duplex && s.collate) ? padDuplexSeparators(pages).length - pages.length : 0;
 
   var fitLabel = s.fitMode === 'fit' ? '自适应' : s.fitMode === 'fill' ? '拉伸填充'
     : s.fitMode === 'original' ? '原始大小' : (Math.round(s.customScale * 100) + '%');
@@ -327,7 +374,8 @@ function showPrintConfirm(files, s) {
     + row('发票', activeCount + ' 张 \u00D7 ' + copies + ' 份 \u2192 ' + totalPages + ' 页', 'highlight')
     + row('布局', layout + ' \u00B7 ' + paper + orient + ' \u00B7 ' + fitLabel + ' \u00B7 ' + rotLabel)
     + row('边距', marginInfo)
-    + row('选项', colorLabel + ' \u00B7 ' + (s.duplex ? '双面' : '单面') + ' \u00B7 ' + (s.cutline ? '切割线' : '无切割线'));
+    + row('选项', colorLabel + ' \u00B7 ' + (s.duplex ? '双面' : '单面') + ' \u00B7 ' + (s.cutline ? '切割线' : '无切割线')
+      + (sepPages ? ' \u00B7 逐份隔离 +' + sepPages + ' 空白页' : ''));
 
   document.getElementById('printConfirmBody').innerHTML = html;
   document.getElementById('printConfirmModal').classList.remove('hidden');
@@ -364,7 +412,7 @@ async function doSumatraPrint(files, s) {
     }
   }
 
-  var currentRequest = buildLayoutRequest(files, s);
+  var currentRequest = buildLayoutRequest(files, s, null, { forPrint: true });
   if (canUseCachedPdf(currentRequest) && isTauri && invoke) {
     try {
       showLoading('正在使用缓存PDF打印...');
@@ -464,7 +512,7 @@ async function doPdfiumPrint(files, s) {
     }
   }
 
-  var currentRequest = buildLayoutRequest(files, s);
+  var currentRequest = buildLayoutRequest(files, s, null, { forPrint: true });
   if (canUseCachedPdf(currentRequest) && isTauri && invoke) {
     try {
       showLoading('正在使用缓存PDF打印（PDFium）...');
@@ -474,6 +522,7 @@ async function doPdfiumPrint(files, s) {
         printerName: s.printerName || null,
         copies: s.copies || 1,
         duplex: s.duplex || false,
+        collate: !!s.collate,
         colorMode: s.colorMode || 'color',
         paperW: s.paperW || 210,
         paperH: s.paperH || 297
@@ -503,7 +552,8 @@ async function doPdfiumPrint(files, s) {
         request: layoutReq,
         printerName: s.printerName || null,
         copies: s.copies || 1,
-        duplex: s.duplex || false
+        duplex: s.duplex || false,
+        collate: !!s.collate
       });
       if (unlisten) unlisten();
       hideLoading();
@@ -812,6 +862,8 @@ function fallbackPrint(files, s) {
   var w = window.open('', '_blank');
   if (!w) { alert('弹出窗口被阻止'); return; }
   var pages = buildPages(files, s);
+  // 双面 + 逐份：HTML 兜底打印同样插入空白分隔页，保证与 PDFium / SumatraPDF 口径一致
+  if (s.duplex && s.collate) pages = padDuplexSeparators(pages);
   var expanded = s.collate ? Array(s.copies).fill(pages).flat() : pages.flatMap(function(p) { return Array(s.copies).fill(p); });
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>发票酱</title><style>*{margin:0;padding:0;box-sizing:border-box}@page{size:' + s.paperW + 'mm ' + s.paperH + 'mm;margin:0}body{background:white}.page{width:' + s.paperW + 'mm;height:' + s.paperH + 'mm;position:relative;page-break-after:always;background:white;overflow:hidden}.slot{position:absolute;overflow:hidden;display:flex;align-items:center;justify-content:center}.slot img{max-width:100%;max-height:100%;object-fit:contain}';
   // Add cut line styles if enabled (reimburse mode always draws segment cut lines)
@@ -820,6 +872,7 @@ function fallbackPrint(files, s) {
   }
   html += '</style></head><body>';
   expanded.forEach(function(page, pi) {
+    if (page === null) { html += '<div class="page"></div>'; return; }
     html += '<div class="page">';
     var mt = s.marginTop, mb = s.marginBottom, ml = s.marginLeft, mr = s.marginRight;
     var fm = s.footerMargin || 0;

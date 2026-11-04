@@ -348,6 +348,7 @@ pub fn pdfium_vector_print(
     printer_name: &str,
     copies: u32,
     duplex: bool,
+    collate: bool,
     color_mode: &str,
     paper_w_mm: f32,
     paper_h_mm: f32,
@@ -397,7 +398,7 @@ pub fn pdfium_vector_print(
         }
     };
 
-    let dev_mode_buf = build_dev_mode(base_devmode.as_deref_mut(), copies, duplex, color_mode, paper_w_mm, paper_h_mm)?;
+    let dev_mode_buf = build_dev_mode(base_devmode.as_deref_mut(), copies, duplex, collate, color_mode, paper_w_mm, paper_h_mm)?;
     let dev_mode_ptr = dev_mode_buf.as_ptr() as *const DEVMODEW;
 
     let hdc = unsafe {
@@ -691,6 +692,7 @@ fn build_dev_mode(
     base: Option<&mut [u8]>,
     copies: u32,
     duplex: bool,
+    collate: bool,
     color_mode: &str,
     paper_w_mm: f32,
     paper_h_mm: f32,
@@ -720,6 +722,12 @@ fn build_dev_mode(
         if copies > 1 {
             (*dm).Anonymous1.Anonymous1.dmCopies = copies as i16;
             (*dm).dmFields |= DM_COPIES;
+            // 「逐份打印」此前只在浏览器兜底路径生效，静默打印完全没下发。
+            // 只在开启时显式要求逐份；关闭时保留驱动默认，避免强行改成不逐份。
+            if collate {
+                (*dm).dmCollate = DMCOLLATE_TRUE;
+                (*dm).dmFields |= DM_COLLATE;
+            }
         }
 
         if duplex {

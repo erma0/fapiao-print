@@ -101,7 +101,9 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 - `deepEqual()` 深比较整个 `LayoutRenderRequest`，`canUseCachedPdf()` 判断复用——统一三个打印渠道 + 保存 PDF
 - `savePdf` 先生成到临时目录 → `updatePdfCache()` → `copy_file` 到用户路径；布局不变时直接复制缓存。v2.6.12 起保存前先弹窗选页码范围（全部 / 当前页 / 指定范围，单页不弹），范围经 `buildLayoutRequest(files, settings, pageRange)` 第三参切片 `pages`——属内容参数，缓存按范围自然失效
-- 缓存比较排除纯打印机参数（printerName/copies/duplex/collate），避免切打印机误判缓存失效
+- 缓存比较排除纯打印机参数（printerName/copies/duplex/collate），避免切打印机误判缓存失效；**例外**：「双面 / 逐份」在**确实需要插页时**会改变 `pages`（见下条），此时缓存自然失效并重生成；无需插页的场景（如单份且本身偶数页）`pages` 不变，缓存命中且结果正确
+- **双面 + 逐份隔离**（issue #62）：`duplex && collate` 时 `padDuplexSeparators()` 按源文件分组（`_pdfPath|_batchId` / `_filePath`），在页边界插入空白页把上一份补齐到偶数页，末尾也补齐（与份数无关，避免改份数触发 PDF 重生成），保证每份从纸张正面开始。空白页是 `PageSpec.blank`，两条 Rust 生成管道都要真实输出该页（**不能走「空页跳过」**）且不画裁切线 / 页脚 / 边框 / 水印；`pageNum` 的「共 N 页」按物理页计（含空白页），空白页自身不绘制页码。仅 `buildLayoutRequest(..., { forPrint:true })` 的 PDFium / SumatraPDF / HTML 兜底生效；预览、「保存为PDF」与「PDF阅读器」模式（双面由外部阅读器控制）不插页；多拼模式下同页内混排无法隔离
+- `collate` 经 `pdfium_vector_print` / `pdfium_print_pdf` 下发到 `build_dev_mode()`，多份时设 `DM_COLLATE + DMCOLLATE_TRUE`；关闭时保留驱动默认，**勿**强行设 `DMCOLLATE_FALSE`。**仅 PDFium 链路生效**：SumatraPDF 的 `-print-settings` 没有 collate 选项，备用模式下关闭「逐份打印」仍是整份重复打印；空白分隔页在该链路照常插入，故双面隔离不受影响
 
 ### 旋转与适配语义（全链路约定，issue #29）
 
@@ -295,7 +297,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 6. 占位（`_placeholder`）只占槽位：打印/统计/汇总/重命名/OCR 全部排除
 7. 自动去重只删 `no:` key，`sum:` 仅标记
 8. 类型/格式筛选切换后必须重算勾选集合（`selectFilteredOnly()` / `applyFilterSelection()`）
-9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）
+9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）；双面 + 逐份**需要插页时**会改 `pages`，此时缓存自然失效重生成，勿为「缓存稳定」把插页挪到 Rust 端
 10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）逻辑保持一致，同步时机为 **桌面端 release 前**，日常修复不必即时同步
 11. 新增 http 请求一律走 `build_http_agent()`；裸建 `ureq::AgentBuilder` 会丢 TLS 后端（见「关键踩坑」）
 12. 自更新只换 exe（不跑安装器、不动 models）；下载必须过 URL 白名单 + digest/size 校验，替换失败必须回滚，退出用 `TerminateProcess`（见「应用内自更新」）

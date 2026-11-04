@@ -979,6 +979,7 @@ async fn pdfium_vector_print(
     printer_name: Option<String>,
     copies: u32,
     duplex: bool,
+    collate: Option<bool>,
 ) -> Result<pdf_engine::PdfResult, String> {
     use std::sync::atomic::Ordering;
 
@@ -1028,6 +1029,7 @@ async fn pdfium_vector_print(
         Some(resolved_printer),
         copies,
         duplex,
+        collate,
         color_mode,
         paper_w,
         paper_h,
@@ -1046,6 +1048,7 @@ async fn pdfium_print_pdf(
     printer_name: Option<String>,
     copies: u32,
     duplex: bool,
+    collate: Option<bool>,
     color_mode: String,
     paper_w: f32,
     paper_h: f32,
@@ -1086,6 +1089,7 @@ async fn pdfium_print_pdf(
             &printer,
             copies,
             duplex,
+            collate.unwrap_or(false),
             &color_mode,
             paper_w,
             paper_h,
@@ -1227,6 +1231,9 @@ async fn pdfium_vector_print(
     _app: tauri::AppHandle,
     _request: LayoutRenderRequest,
     _printer_name: Option<String>,
+    _copies: u32,
+    _duplex: bool,
+    _collate: Option<bool>,
 ) -> Result<pdf_engine::PdfResult, String> {
     Err("PDFium打印仅支持Windows系统".to_string())
 }
@@ -1239,6 +1246,7 @@ async fn pdfium_print_pdf(
     _printer_name: Option<String>,
     _copies: u32,
     _duplex: bool,
+    _collate: Option<bool>,
     _color_mode: String,
     _paper_w: f32,
     _paper_h: f32,

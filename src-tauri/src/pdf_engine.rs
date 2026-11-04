@@ -3524,6 +3524,9 @@ pub struct SlotSpec {
 #[serde(rename_all = "camelCase")]
 pub struct PageSpec {
     pub slots: Vec<SlotSpec>,
+    /// 双面+逐份的空白分隔页（issue #62）：只保留页框，不画裁切线/页脚/边框/水印。
+    #[serde(default)]
+    pub blank: bool,
 }
 
 /// Full request for layout-based PDF generation.
@@ -4799,6 +4802,16 @@ fn generate_pdf_from_layout_inner(
         // Check shutdown flag — abort PDF generation if app is closing
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
             return Err("应用正在关闭，PDF生成已中止".to_string());
+        }
+        // 双面+逐份的空白分隔页：两条生成管道口径一致，空 ops 也要保留这一页
+        if page_spec.blank {
+            doc.pages.push(printpdf::PdfPage::new(
+                printpdf::Mm(pw), printpdf::Mm(ph), Vec::new()
+            ));
+            if let Some(ref cb) = &on_progress {
+                cb("build", (i + 1) as u32, total_pages);
+            }
+            continue;
         }
         let mut ops = build_page_ops(
             &mut doc,
@@ -6141,6 +6154,31 @@ fn generate_pdf_passthrough(
     for (page_idx, page_spec) in request.pages.iter().enumerate() {
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
             return Err("应用正在关闭，PDF生成已中止".to_string());
+        }
+
+        // 双面+逐份的空白分隔页（issue #62）：只保留页框，不画裁切线/页脚/边框/水印。
+        // 不能走下方「空页跳过」逻辑——分隔页必须真实存在于 PDF 里才会占住纸张背面。
+        if page_spec.blank {
+            let empty_stream = output_doc.add_object(lopdf::Stream::new(
+                lopdf::Dictionary::new(), Vec::<u8>::new()
+            ));
+            let blank_id = output_doc.add_object(lopdf::Dictionary::from_iter(vec![
+                ("Type", lopdf::Object::Name(b"Page".to_vec())),
+                ("Parent", lopdf::Object::Reference(pages_id)),
+                ("MediaBox", lopdf::Object::Array(vec![
+                    lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(pw_pt),
+                    lopdf::Object::Real(ph_pt),
+                ])),
+                ("Contents", lopdf::Object::Reference(empty_stream)),
+                ("Resources", lopdf::Object::Dictionary(lopdf::Dictionary::new())),
+            ]));
+            all_page_ids.push(blank_id);
+            if let Some(ref cb) = &on_progress {
+                cb("build", (page_idx + 1) as u32, request.pages.len() as u32);
+            }
+            continue;
         }
 
         log::info!("lopdf hybrid: page {} has {} slots", page_idx, page_spec.slots.len());
