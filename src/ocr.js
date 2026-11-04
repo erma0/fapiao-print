@@ -3408,9 +3408,70 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
         return ln.map(function(w) { return w.text; }).join('');
       }).join(' ').trim();
     }
+  } else {
+    // 部分模板把「备注」二字画成图形，或与内容并成一个整词，文字层里没有标签：
+    // 按版面区域兜底（合计行之下、页脚行之上、页面左侧 75%）
+    out.invoiceRemark = _extractRemarkByRegion(words, imgW, imgH);
   }
 
   return out;
+}
+
+/** 找不到「备注」标签时的区域兜底：取合计类行之下、页脚行之上、页面左侧的文字。 */
+function _extractRemarkByRegion(words, imgW, imgH) {
+  if (!words || !words.length || !imgW || !imgH) return '';
+  // 上界：页面下半部最靠下的合计类锚点行，取整行底边（金额字可能比标签低一行）
+  var top = imgH * 0.66;
+  var anchorCy = -1;
+  words.forEach(function(w) {
+    if (!/价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写|合\s*计/.test(w.normText)) return;
+    if (w.cy <= imgH * 0.55 || w.cy >= imgH * 0.92) return;
+    if (w.cy > anchorCy) anchorCy = w.cy;
+  });
+  if (anchorCy >= 0) {
+    var anchorBottom = 0;
+    words.forEach(function(w) {
+      if (Math.abs(w.cy - anchorCy) <= Math.max(w.h, 8) * 0.9) anchorBottom = Math.max(anchorBottom, w.y + w.h);
+    });
+    if (anchorBottom > 0) top = anchorBottom;
+  }
+  // 下界：页脚行（开票人 / 收款人 / 复核人）之上，没有则退到 97% 图高
+  var bottomLimit = imgH * 0.97;
+  words.forEach(function(w) {
+    if (/开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/.test(w.normText) && w.cy > top) {
+      bottomLimit = Math.min(bottomLimit, w.y);
+    }
+  });
+  var left = imgW * 0.75;
+  var region = words.filter(function(w) {
+    if (w.confidence < 0.3) return false;
+    if (w.cy < top || w.cy > bottomLimit) return false;
+    if (w.cx > left) return false;
+    // 拆字标签的单字（备 / 注）不是备注内容
+    if (/^(?:备|注|备\s*注)$/.test(w.normText.replace(/\s+/g, ''))) return false;
+    if (/(?:开\s*票\s*人|收\s*款\s*人|复\s*核\s*人)/.test(w.normText)) return false;
+    if (/价\s*税\s*合\s*计|大\s*写|小\s*写/.test(w.normText)) return false;
+    // 金额、二维码/查验提示都不是备注内容
+    if (/^[¥￥]/.test(w.normText.trim())) return false;
+    if (/^[¥￥]?[\d,]+\.\d{2}$/.test(w.normText.trim())) return false;
+    if (/扫\s*码|查\s*验|下\s*载\s*次\s*数|真\s*伪/.test(w.normText)) return false;
+    return true;
+  });
+  if (!region.length) return '';
+  region.sort(function(a, b) { return a.cy - b.cy || a.x - b.x; });
+  var lines = [], cur = [], lastCy = null;
+  region.forEach(function(w) {
+    if (lastCy !== null && Math.abs(w.cy - lastCy) > Math.max(w.h, 8) * 0.6) {
+      lines.push(cur); cur = [];
+    }
+    cur.push(w);
+    lastCy = w.cy;
+  });
+  if (cur.length) lines.push(cur);
+  return lines.map(function(ln) {
+    ln.sort(function(a, b) { return a.x - b.x; });
+    return ln.map(function(w) { return w.text; }).join('');
+  }).join(' ').trim();
 }
 
 /** 备注框上界：取完整合计行底边，兼容标签与金额字号/基线不齐。 */
@@ -3437,7 +3498,7 @@ function _getRemarkTop(words, remark) {
   return top >= 0 ? top : anchorBottom;
 }
 
-/** 定位「备注」标签：可能是整词（备注），也可能是上下拆开的两词（备 / 注） */
+/** 定位「备注」标签：整词（备注）、上下拆开的两词（备 / 注）或同行拉开的两词 */
 function _findRemarkLabel(words) {
   var best = null;
   for (var i = 0; i < words.length; i++) {
@@ -3451,6 +3512,7 @@ function _findRemarkLabel(words) {
       continue;
     }
     if (t !== '备') continue;
+    var label = null;
     // 竖排拆字：同一 x 附近、紧邻下方有「注」
     for (var j = 0; j < words.length; j++) {
       var w2 = words[j];
@@ -3460,16 +3522,43 @@ function _findRemarkLabel(words) {
       // 竖向间距随模板变化：常见 1.9 行，部分数电票模板把「备」「注」拉开到 3.4 行
       if (w2.cy <= w.cy || w2.cy > w.cy + w.h * 4.5) continue;
       // 合成一个虚拟标签，覆盖两词范围
-      var label = {
+      label = {
         text: '备注', normText: '备注',
         x: Math.min(w.x, w2.x), y: w.y,
         w: Math.max(w.w, w2.w), h: w2.y + w2.h - w.y,
         cx: (w.cx + w2.cx) / 2, cy: (w.cy + w2.cy) / 2,
         confidence: 1, _parts: [w, w2]
       };
-      if (!best || label.cy > best.cy) best = label;
       break;
     }
+    // 横排拆字：同行右侧的「注」，字距可能被模板拉宽到数个字宽（须在页面左侧）
+    if (!label && w.nx < 0.7) {
+      for (var k = 0; k < words.length; k++) {
+        var w3 = words[k];
+        if (w3 === w) continue;
+        if (w3.normText.replace(/\s+/g, '') !== '注') continue;
+        if (Math.abs(w3.cy - w.cy) > Math.max(w.h, 8) * 0.5) continue;
+        if (w3.cx <= w.cx) continue;
+        if (w3.x - (w.x + w.w) > w.h * 6) continue;
+        // 与合计标签 / 合计金额同一行的更可能是明细「合计」，不能当备注标签
+        var onTotalRow = words.some(function(o) {
+          if (o === w || o === w3) return false;
+          if (Math.abs(o.cy - w.cy) > Math.max(o.h, w.h, 8) * 0.9) return false;
+          return /价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写|合\s*计/.test(o.normText) || /^[¥￥]/.test(o.normText.trim());
+        });
+        if (onTotalRow) continue;
+        label = {
+          text: '备注', normText: '备注',
+          x: Math.min(w.x, w3.x), y: Math.min(w.y, w3.y),
+          w: w3.x + w3.w - Math.min(w.x, w3.x),
+          h: Math.max(w.y + w.h, w3.y + w3.h) - Math.min(w.y, w3.y),
+          cx: (w.cx + w3.cx) / 2, cy: (w.cy + w3.cy) / 2,
+          confidence: 1, _parts: [w, w3]
+        };
+        break;
+      }
+    }
+    if (label && (!best || label.cy > best.cy)) best = label;
   }
   return best;
 }
