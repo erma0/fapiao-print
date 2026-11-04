@@ -53,14 +53,14 @@ html.dark .go:hover { border-color: #5b8def; background: #1e2a4a; color: #5b8def
 html.dark .go.active { border-color: #5b8def; background: #5b8def; color: white; }
 html.dark .sidebar-tab:hover { color: #5b8def; }
 html.dark .sidebar-tab.active { color: #5b8def; border-bottom-color: #5b8def; }
-html.dark .slot-empty { background: #1a1a2e; border-color: #2a2a4a; color: #636e80; }
+html.dark .slot-empty { background: #1a1a2e; border-color: #2a2a4a; color: #8b97ab; }
 html.dark .preview-container { box-shadow: 0 12px 36px rgba(0,0,0,0.6); }
 html.dark .toast { background: #2a3a5a; color: #e2e8f0; border: 1px solid #3a4a6a; }
 html.dark .modal { background: #16213e; }
 html.dark .loading { background: rgba(26,26,46,0.92); }
 html.dark .loading-progress { background: #2a2a4a; }
 html.dark .statusbar { background: #16213e; border-top-color: #2a2a4a; }
-html.dark .empty-state { color: #636e80; }
+html.dark .empty-state { color: #8b97ab; }
 html.dark input[type="range"] { accent-color: #5b8def; }
 html.dark .file-thumb { background: #1a1a2e; border-color: #2a2a4a; }
 html.dark .copy-badge { background: #3a3520; color: #d69e2e; }
@@ -87,7 +87,7 @@ html.dark .page-dot.active { background: #5b8def; }
 html.dark .modal-bg { background: rgba(0,0,0,0.6); }
 html.dark .invoice-slot.selected { outline-color: #5b8def; }
 html.dark .slot-handle { background: #5b8def; }
-html.dark .sort-btn { color: #636e80; }
+html.dark .sort-btn { color: #8b97ab; }
 html.dark .sort-btn:hover { color: #5b8def !important; }
 html.dark input[type="color"] { border-color: #2a2a4a; background: #1a1a2e; }
 html.dark ::-webkit-scrollbar-thumb { background: #3a3a5a; }
