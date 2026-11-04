@@ -12,7 +12,7 @@
 | 路径 | 内容 |
 | --- | --- |
 | `src/` | 桌面版前端：`index.html` `styles.css` `ocr.js` `layout.js` `print.js` `app.js` |
-| `src-tauri/src/` | Rust 后端：`main.rs` `lib.rs`（IPC 命令层）`pdf_engine.rs`（PDF 生成/渲染）`pdfium_print.rs`（直打引擎）`updater.rs`（应用内自更新） |
+| `src-tauri/src/` | Rust 后端：`main.rs` `lib.rs`（IPC 命令层）`pdf_engine.rs`（PDF 生成/渲染）`pdfium_print.rs`（直打引擎）`updater.rs`（应用内自更新）`diagnostics.rs`（诊断导出）`seh_wrapper.c`（SEH 保护，cc 静态库） |
 | `src-tauri/invoice-engine/` | 独立 crate：OFD / XML 数电票解析 |
 | `web` 分支 | 纯浏览器版（pdf-lib 实现），目录为 `js/` `css/` `vendor/` |
 
@@ -86,9 +86,9 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 | 模式 | 实现 | 说明 |
 | --- | --- | --- |
-| PDF 阅读器（默认） | `ShellExecuteW` print/printto | ⚠️ 无法可靠控制打印机选择（Edge/Chrome 查看器不支持 printto），选了具体打印机时 toast 引导改用 PDFium |
+| PDF 阅读器 | `ShellExecuteW` print/printto | ⚠️ 无法可靠控制打印机选择（Edge/Chrome 查看器不支持 printto），选了具体打印机时 toast 引导改用 PDFium |
 | 弹窗确认 | 自定义对话框 → PDFium/SumatraPDF | — |
-| 静默打印 PDFium（推荐） | `pdfium_print.rs` 矢量直打 DC | 失败自动降级 SumatraPDF（`doPdfiumPrint` 兜底） |
+| 静默打印 PDFium（默认，推荐） | `pdfium_print.rs` 矢量直打 DC | 失败自动降级 SumatraPDF（`doPdfiumPrint` 兜底） |
 | 静默打印 SumatraPDF | 命令行 `-print-settings` | — |
 
 **PDFium 细节**（`pdfium_print.rs`）：
@@ -123,7 +123,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **报销单分段模式**（`S.feat.reimburse`，默认段高 120mm）：单列 N 段（N=⌊paperH÷seg⌋），mt/mb 为段内安全边距，裁切线在 k×seg 绝对位置强制绘制（不经 cutline 开关）；发票**纵向贴段顶、水平对齐可配**（`reimburseAlign`：靠左 / 居中 / 靠右，默认靠左）——JS `renderPage`、Rust `build_nup_content_stream`/`build_page_ops`（统一走 `reimburse_align_offset()`）、`setSlotAlignment` 基准三处同步；rows/cols/gap/footerMargin 扣除均忽略（UI 置灰 `syncReimburseUI()`），关闭后网格布局原样恢复。
 
-**粘贴单模式**（`S.feat.pasteMode`，v2.6.6）：表单式整页版式，票据只排在装订线上方、签字栏下方；**与报销单分段互斥**（开启互关，`enablePasteMode`/`enableReimburse` 同步 UI）。独立边距（`pasteTop/Bottom/Left/Right`，默认上 20.8mm 装订区 / 下·左·右 4.1mm）+ 装订线（`pasteBindLine` 开关 + `pasteBindText` 文字 + `pasteBindSize` 字号）+ 右下角签字栏（`pasteShowSig` + `pasteSigCols` 列名 / `pasteSigWidth` 宽 / `pasteSigRowH` 表头行高 / `pasteSigBodyH` 填写行高 / `pasteSigGap` 区间距），签字栏留空打印后手写；粘贴单下页码/日期/自定义页脚停用（`getPageSettings` 置空）；Rust `calculate_layout_mm` 与 JS 解析规则逐字对应（预览/PDF 同源）；`applyPastePreset()` 一键恢复标准边距，`resetSettings` 的 `layoutOnly` 分支须同步粘贴单 UI。
+**粘贴单模式**（`S.feat.pasteMode`，v2.6.6）：表单式整页版式，票据只排在装订线上方、签字栏下方；**与报销单分段互斥**（开启互关，`enablePasteMode`/`enableReimburse` 同步 UI）。独立边距（`pasteTop/Bottom/Left/Right`，默认上 20.8mm 装订区 / 下·左·右 4.1mm）+ 装订线（`pasteBindLine` 开关 + `pasteBindText` 文字 + `pasteBindSize` 字号）+ 右下角签字栏（`pasteShowSig` + `pasteSigCols` 列名 / `pasteSigWidth` 宽 / `pasteSigRowH` 表头行高 / `pasteSigBodyH` 填写行高 / `pasteSigGap` 区间距），签字栏留空打印后手写；粘贴单下页码/日期/自定义页脚停用（`getSettings()` 中置空）；Rust `calculate_layout_mm` 与 JS 解析规则逐字对应（预览/PDF 同源）；`applyPastePreset()` 一键恢复标准边距，`resetSettings` 的 `layoutOnly` 分支须同步粘贴单 UI。
 
 **单票独立调整**：`fileObj.{slotScale, slotOffsetX, slotOffsetY}`，CSS transform 预览 + Rust `SlotSpec` 参数输出。九宫格快速对齐、数字框/滑块滚轮微调、选中后滚轮缩放单票（5%/步）、拖拽约束按实际显示尺寸动态计算、放大上限 5x、编辑态溢出可见（`.selected/.dragging` 时 `overflow:visible`）。持久化：`perFileAdjustments` Map 按文件名匹配，可选开关。
 
@@ -158,7 +158,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **PDF 渲染双引擎**：首选 WinRT（`render_pdf_pages`，`check_winrt_pdf_available()` 启动检测）→ 失败回退 PDFium（`render_pdf_pages_pdfium`）。
 
-**筛选体系**（侧边栏，可折叠）：类型（专票/普票/车票/通行费/医疗/非税/其他 `S.typeFilter`）× 格式（PDF/OFD/图片/XML `S.formatFilter`）× 状态（全部/未打印/已打印/重复 `S.printedFilter`/`S.fileFilter`）三维正交；类型匹配与票种 chip 共用 `resolveInvoiceType` 单一真源（车票/通行费/医疗直判 `_isTicket`/`_isToll`/`_isMedical` 分类标记），「其他」= 不渲染票种 chip 的文件（未识别 + 无法归专普的粗粒度串），非税/专票/普票对 XML/OFD/PDF 文字层等非 OCR 来源同样生效；类型/格式切换即切换打印批次，`clearInvisibleChecks()` 清除不可见勾选（防筛选切换后残留勾选重复打印）。列表上方工具栏（`.file-header`）与筛选区（`.filter-section`）sticky 钉在滚动容器顶部，仅列表滚动。
+**筛选体系**（侧边栏，可折叠）：类型（专票/普票/车票/通行费/医疗/非税/其他 `S.typeFilter`）× 格式（PDF/OFD/图片/XML `S.formatFilter`）× 状态（全部/未打印/已打印/重复 `S.printedFilter`/`S.fileFilter`）三维正交；类型匹配与票种 chip 共用 `resolveInvoiceType` 单一真源（车票/通行费/医疗直判 `_isTicket`/`_isToll`/`_isMedical` 分类标记），「其他」= 不渲染票种 chip 的文件（未识别 + 无法归专普的粗粒度串），非税/专票/普票对 XML/OFD/PDF 文字层等非 OCR 来源同样生效；类型/格式切换即切换打印批次，`selectFilteredOnly()` / `applyFilterSelection()` 清除不可见勾选（防筛选切换后残留勾选重复打印）。列表上方工具栏（`.file-header`）与筛选区（`.filter-section`）sticky 钉在滚动容器顶部，仅列表滚动。
 
 **文件列表双视图**：`S.fileView`（list/grid），`renderFileList()` grid 分支输出 `.file-card`；`updateFileItem()` 按视图增量更新。
 
@@ -211,7 +211,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 ### 导出与工具命令
 
-**汇总表**（侧边栏 📊）：14 字段按需勾选、双击编辑回写全 UI 同步、三金额合计行 sticky；`exportSummaryCsv()` UTF-8 BOM + CRLF 手写 CSV → `write_text_file`；数据源 `getCheckedFiles()`（不含 copies 展开）。「发票类型」单一真源 `resolveInvoiceType(f)`（分类标记 通行费/车票/非税 → 结构化或 OCR 类型 → 兜底「发票」），`normalizeInvoiceType()` 归一为「专票 / 普票」短标签，列表徽章 / 复制发票信息 / 重命名 / CSV 共用同一口径；**禁止再写死「增值税发票」**（issue #35：普票全被显示成该串）。内嵌批量重命名面板：3 预设模板 + 自定义字段（勾选顺序=文件名顺序）、`resolveNameConflicts()` 自动 `_2` 序号、`executeRename()` → `rename_file` 命令并同步 `S.files` 共享路径与 `_fileAdjMap`/`_notesMap` key；OFD 的 dedup key 排除 `_filePath`。⚠️ **长数字必须按文本导出**：≥15 位纯数字（20 位发票号、18 位税号）用 Excel 文本公式 `="..."` 包裹，否则 Excel/WPS 打开会转科学计数法并丢精度（issue #49）。
+**汇总表**（侧边栏 📊）：16 字段按需勾选（含项目名称 / 发票备注）、双击编辑回写全 UI 同步、三金额合计行 sticky；`exportSummaryCsv()` UTF-8 BOM + CRLF 手写 CSV → `write_text_file`；数据源 `getCheckedFiles()`（不含 copies 展开）。「发票类型」单一真源 `resolveInvoiceType(f)`（分类标记 通行费/车票/非税 → 结构化或 OCR 类型 → 兜底「发票」），`normalizeInvoiceType()` 归一为「专票 / 普票」短标签，列表徽章 / 复制发票信息 / 重命名 / CSV 共用同一口径；**禁止再写死「增值税发票」**（issue #35：普票全被显示成该串）。内嵌批量重命名面板：3 预设模板 + 自定义字段（勾选顺序=文件名顺序）、`resolveNameConflicts()` 自动 `_2` 序号、`executeRename()` → `rename_file` 命令并同步 `S.files` 共享路径与 `_fileAdjMap`/`_notesMap` key；OFD 的 dedup key 排除 `_filePath`。⚠️ **长数字必须按文本导出**：≥15 位纯数字（20 位发票号、18 位税号）用 Excel 文本公式 `="..."` 包裹，否则 Excel/WPS 打开会转科学计数法并丢精度（issue #49）。
 
 **文件命令**（均为 `async fn` + `spawn_blocking`）：`copy_file`、`rename_file`（同盘原子 rename，跨盘 copy+delete）。
 
@@ -259,8 +259,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 - PDFium 非线程安全 → `with_pdfium()` 闭包 + Mutex 串行化
 - `DEVMODEW` 嵌套匿名结构 `dm.Anonymous1.Anonymous1.dmCopies`；`dmDuplex` 是 `DEVMODE_DUPLEX(i16)`；`std::ptr::read` 只复制 `sizeof(DEVMODEW)` 会丢驱动私有数据 → 完整 `Vec<u8>`
 - `DOCINFOW`/`StartDocW`/`StartPage`/`EndPage` 在 `Win32::Storage::Xps` 模块（不是 Gdi）
-- `windows` crate 0.58：`HENHMETAFILE` 是 CopyType，`DeleteEnhMetaFile(h)` 不需要 `&`
-- `CreateEnhMetaFileW` 的 `lpRect` 是 0.01mm 单位（直打 DC 时无需 EMF 中间层）
+- （历史经验）`windows` crate 0.58：`HENHMETAFILE` 是 CopyType，`DeleteEnhMetaFile(h)` 不需要 `&`；`CreateEnhMetaFileW` 的 `lpRect` 是 0.01mm 单位。当前实现已移除 EMF 中间层，直接 `FPDF_RenderPage(printer_dc)`
 
 ### OFD
 
