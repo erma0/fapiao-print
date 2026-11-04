@@ -4602,8 +4602,10 @@ function buildPages(files, settings) {
 var _saveTimer = null;
 var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
 var _restoringSettings = false; // 启动恢复期禁止回写，防止空 DOM / 空 S.files 快照覆盖已恢复的文件级记忆
+var _restoreSavePending = false; // 恢复期内被拦截的保存请求，解锁后补一次，避免吞掉启动瞬间的操作
 function saveSettings() {
-  if (_importingSettings || _restoringSettings) return;
+  if (_importingSettings) return;
+  if (_restoringSettings) { _restoreSavePending = true; return; }
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 function updatePreview() {
@@ -4761,6 +4763,7 @@ function collectSettings() {
   o.quickLayoutMax = normalizeQuickLayoutMax(S.quickLayoutMax);
   o.fileView = S.fileView;
   o.filterCollapsed = S.filterCollapsed;
+  o.viewZoom = S.viewZoom;
   // Save per-file slot adjustments when memory is enabled.
   // 以已恢复的内存 Map 打底再用当前文件覆盖：启动时 S.files 可能还没恢复，
   // 直接重建会把上次记住的调整写成空表。
@@ -4875,6 +4878,11 @@ function loadSettings() {
   if (o.quickLayoutMax != null) S.quickLayoutMax = normalizeQuickLayoutMax(o.quickLayoutMax);
   if (o.fileView === 'grid') S.fileView = 'grid';
   if (o.filterCollapsed === false) S.filterCollapsed = false;
+  if (o.viewZoom != null) {
+    var _zv = parseInt(o.viewZoom, 10);
+    S.viewZoom = (isNaN(_zv) || _zv < 0 || _zv > 500) ? 0 : _zv;
+    updateZoomDisplay();
+  }
   syncFileViewBtn();
   syncFilterPanel();
   updateFilterSummary();
@@ -5711,7 +5719,10 @@ renderPhotoSizeOptions();
 _restoringSettings = true;
 loadSettings();
 if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-setTimeout(function() { _restoringSettings = false; }, 1000);
+setTimeout(function() {
+  _restoringSettings = false;
+  if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
+}, 1000);
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
 
