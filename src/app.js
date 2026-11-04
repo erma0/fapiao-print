@@ -2859,6 +2859,8 @@ function buildDiagSummary(f) {
   parts.push('销方=' + (f.sellerName ? '有' : '无'));
   parts.push('购方=' + (f.buyerName ? '有' : '无'));
   parts.push('金额=' + (f.amountTax > 0 ? '有' : '无'));
+  parts.push('备注=' + (f.invoiceRemark ? '有(' + f.invoiceRemark.length + '字)' : '无'));
+  parts.push('项目=' + (f.itemName ? '有' : '无'));
   parts.push('PDF文字层=' + (f._pdfTextExtracted ? '有' : '无'));
   parts.push('份数=' + (f.copies || 1));
   parts.push('旋转=' + (f.rotation || 0));

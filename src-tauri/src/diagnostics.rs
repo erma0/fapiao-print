@@ -46,6 +46,7 @@ fn build_report(files: &[DiagItem], exported_at: &str) -> String {
     r.push_str(&format!("导出时间: {}\n", exported_at));
     r.push_str("\n说明: 报告已脱敏（汉字→汉 / 数字→9 / 字母→A / 空格→·），不含任何原文内容；\n");
     r.push_str("      数字、标点与坐标结构完整保留，用于定位渲染/识别问题。\n");
+    r.push_str("      坐标原点为左上角；PDF 文字层单位为 pt，图片为像素。\n");
 
     for (i, f) in files.iter().enumerate() {
         r.push_str(&format!("\n【文件 #{}】{}\n", i + 1, sanitize_file_name(&f.path)));
@@ -89,8 +90,39 @@ fn build_report(files: &[DiagItem], exported_at: &str) -> String {
     r
 }
 
-/// PDF：页数 + 文字层提取结果（前 3 页、每页最多 300 个词的脱敏文本与坐标）
-/// 词样本按行顺序输出，300 词可覆盖标题、购销方信息块与备注/页脚区
+/// 诊断关键词：只报告文字层里有没有这些结构词、大概在哪（固定词汇，不含用户原文）。
+/// 「备 / 注」按整词匹配，避免命中「设备」「注明」等正文词。
+const DIAG_KEYWORDS: &[&str] = &[
+    "备注", "备", "注", "价税合计", "金额合计", "大写", "小写", "合计",
+    "开票人", "收款人", "复核人", "项目名称", "规格型号",
+    "购买方", "销售方", "纳税人识别号",
+];
+
+/// 每页一行关键词命中表：`备注=无 价税合计=有@(x,y) …`（取首次命中词的坐标中心）。
+fn keyword_hits(lines: &[crate::pdf_engine::PdfTextLine]) -> String {
+    let mut hits = Vec::new();
+    for kw in DIAG_KEYWORDS {
+        let mut found: Option<(f64, f64)> = None;
+        'scan: for line in lines {
+            for w in &line.words {
+                let t: String = w.text.chars().filter(|c| !c.is_whitespace()).collect();
+                let hit = if kw.len() == 1 { t == *kw } else { t.contains(*kw) };
+                if hit {
+                    found = Some((w.x + w.w / 2.0, w.y + w.h / 2.0));
+                    break 'scan;
+                }
+            }
+        }
+        hits.push(match found {
+            Some((x, y)) => format!("{}=有@({:.0},{:.0})", kw, x, y),
+            None => format!("{}=无", kw),
+        });
+    }
+    hits.join(" ")
+}
+
+/// PDF：页数 + 文字层提取结果（前 3 页、每页最多 1000 个词的脱敏文本与坐标）
+/// 词样本按行顺序输出，1000 词可覆盖标题、购销方信息块与备注/页脚区
 fn dump_pdf(path: &str) -> Result<String, String> {
     let doc = lopdf::Document::load(path).map_err(|e| format!("PDF 加载失败: {}", e))?;
     let total = doc.get_pages().len() as u32;
@@ -101,16 +133,17 @@ fn dump_pdf(path: &str) -> Result<String, String> {
             for idx in &idxs {
                 if let Some(res) = map.get(idx) {
                     r.push_str(&format!(
-                        "[第{}页] 文字层={} 文本{}字 行{}\n",
-                        idx,
+                        "[第{}页] 页面尺寸={}x{} 文字层={} 文本{}字 行{}\n",
+                        idx, res.img_w, res.img_h,
                         if res.has_text_layer { "有" } else { "无" },
                         res.text.chars().count(),
                         res.lines.len()
                     ));
+                    r.push_str(&format!("  关键词: {}\n", keyword_hits(&res.lines)));
                     let mut n = 0usize;
                     'outer: for line in &res.lines {
                         for w in &line.words {
-                            if n >= 300 {
+                            if n >= 1000 {
                                 break 'outer;
                             }
                             r.push_str(&format!(
@@ -121,8 +154,8 @@ fn dump_pdf(path: &str) -> Result<String, String> {
                             n += 1;
                         }
                     }
-                    if n >= 300 {
-                        r.push_str("  …样本截断（每页最多 300 词）\n");
+                    if n >= 1000 {
+                        r.push_str("  …样本截断（每页最多 1000 词）\n");
                     }
                 }
             }
