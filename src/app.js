@@ -413,7 +413,7 @@ function showSumatraDownloadError(errMsg) {
 
 function switchToPdfMode() {
   document.getElementById('printMode').value = 'pdf';
-  try { localStorage.setItem('ticketchan-print-mode', 'pdf'); } catch(e) {}
+  saveSettings();
   var modal1 = document.getElementById('sumatraPdfModal');
   if (modal1) modal1.classList.add('hidden');
   var modal2 = document.getElementById('pdfiumModal');
@@ -5153,6 +5153,7 @@ async function exportSettings() {
   data.ocrPrecision = S.ocrPrecision;
   data.saveDir = getSaveDir();
   data.updateChannel = getUpdateChannel();
+  data.autoUpdateCheck = !isIgnoreAllUpdates();
   var json = JSON.stringify(data, null, 2);
   if (isTauri && invoke) {
     try {
@@ -5229,7 +5230,7 @@ async function importSettings() {
   }
   if (!confirm('导入将覆盖当前全部设置与本地记忆（已打印标记 / 文件列表 / 单票调整 / 备注），并重新加载界面，确认继续？')) return;
   // 设置主体写回 ticketchan-settings；独立存储的偏好项写回各自的 key
-  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir', 'updateChannel'];
+  var extraKeys = ['_meta', 'theme', 'amtMode', 'ocrEnabled', 'pdfTextEnabled', 'ocrPrecision', 'saveDir', 'updateChannel', 'autoUpdateCheck'];
   var settings = {};
   Object.keys(data).forEach(function(k) { if (extraKeys.indexOf(k) < 0) settings[k] = data[k]; });
   _importingSettings = true; // 写入期间起锁：清挂起的防抖保存 + 拦截重载窗口内新触发的自动保存
@@ -5242,6 +5243,7 @@ async function importSettings() {
     if (data.ocrPrecision === 'fast' || data.ocrPrecision === 'standard' || data.ocrPrecision === 'precise') localStorage.setItem('ticketchan-ocr-precision', data.ocrPrecision);
     if (typeof data.saveDir === 'string') localStorage.setItem('ticketchan-save-dir', data.saveDir);
     if (data.updateChannel === 'stable' || data.updateChannel === 'beta') localStorage.setItem('ticketchan-update-channel', data.updateChannel);
+    if (typeof data.autoUpdateCheck === 'boolean') localStorage.setItem(_UPDATE_IGNORE_ALL_KEY, data.autoUpdateCheck ? '' : '1');
   } catch(e) {
     _importingSettings = false; // 写入失败解锁，恢复自动保存
     toast('导入失败: ' + e);
@@ -5264,12 +5266,14 @@ function resetSettings(scope) {
   } else {
     S.feat = featDefaults;
   }
-  S.viewZoom = 0;
-  S.quickLayouts = defaultQuickLayouts();
-  S.quickLayoutMax = 0;
-  document.getElementById('quickLayoutMax').value = 0;
-  renderQuickLayoutBar();
-  renderQuickLayoutList();
+  if (!layoutOnly) {
+    S.viewZoom = 0;
+    S.quickLayouts = defaultQuickLayouts();
+    S.quickLayoutMax = 0;
+    document.getElementById('quickLayoutMax').value = 0;
+    renderQuickLayoutBar();
+    renderQuickLayoutList();
+  }
   document.getElementById('paperUnit').value = 'mm';
   renderPaperOptions();
   syncPaperUnitUI();
@@ -5350,6 +5354,7 @@ function resetSettings(scope) {
   document.getElementById('pasteSigGap').value = 2;
   if (layoutOnly) {
     syncLayoutHighlight();
+    saveSettings();
     updatePreview();
     toast('已恢复默认版面设置');
     return;
@@ -5383,7 +5388,9 @@ function resetSettings(scope) {
   try { localStorage.removeItem('ticketchan-ocr-precision'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-pdf-text-enabled'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-update-channel'); } catch(e) {}
+  try { localStorage.removeItem(_UPDATE_IGNORE_ALL_KEY); } catch(e) {}
   syncUpdateChannelUI();
+  syncAutoUpdateCheckUI();
   try { localStorage.removeItem('ticketchan-settings'); } catch(e) {}
   try { localStorage.removeItem('ticketchan-print-mode'); } catch(e) {}
   _renameTemplate = ['amountTax', 'sellerName', 'invoiceNo'];
@@ -5630,12 +5637,16 @@ document.getElementById('orientation').value = 'landscape';
 (function() {
   try {
     var pm = localStorage.getItem('ticketchan-print-mode');
-    if (pm && (pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
-      document.getElementById('printMode').value = pm;
-    } else {
+    if (!(pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
       // 默认 PDFium 静默打印 — PDF 阅读器模式无法可靠切换打印机(Edge/Chrome 内置查看器不支持 printto)
       document.getElementById('printMode').value = 'pdfium';
+      return;
     }
+    // 旧版独立键 → ticketchan-settings.printMode 的一次性迁移（settings 优先）
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem('ticketchan-settings') || 'null'); } catch(e) {}
+    if (!saved || !saved.printMode) document.getElementById('printMode').value = pm;
+    localStorage.removeItem('ticketchan-print-mode');
   } catch(e) {}
 })();
 
