@@ -143,7 +143,7 @@ function calculateLayout(settings, pxPerMm) {
   // When there is no footer content: no deduction (no footer to collide with).
   var hasFooterContent = settings.pageNum || settings.printDate || (settings.footerText || '').trim();
   var autoFm = 3 + ((settings.pageNum || settings.printDate ? 1 : 0) + ((settings.footerText || '').trim() ? 1 : 0)) * 5;
-  var footerFm = hasFooterContent ? (settings.customFM ? fm : autoFm * pxPerMm) : 0;
+  var footerFm = hasFooterContent ? (settings.customFm ? fm : autoFm * pxPerMm) : 0;
   // 粘贴单：在页面底部为右下角签字栏预留一整条带（表头行 + 填写行 + 与票据区的间距），
   // 保证票据只排版在装订线下方、签字栏上方。签字栏底边落在下边距处，故此处不含 mb。
   var sigPx = (settings.pasteMode && settings.pasteShowSig !== false)
@@ -180,7 +180,7 @@ function calculateLayout(settings, pxPerMm) {
     }
     // Footer cut line: between bottom row and footer area
     if (hasFooterContent) {
-      if (settings.customFM && fm > 0) {
+      if (settings.customFm && fm > 0) {
         // 自定义下边距模式：分割线在用户指定的 fm 位置
         cutLines.push({ type: 'horizontal', pos: ph - fm });
       } else {

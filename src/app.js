@@ -4541,7 +4541,7 @@ function getSettings() {
     // 粘贴单是一张表单，页码/日期/自定义页脚会与装订线/签字栏打架，本模式下停用
     //（与魔改版语义一致；Rust 端 slot_size_mm 对 paste 不叠加页脚扣除）
     footerText: !photoMode && S.feat.footer && !S.feat.pasteMode ? document.getElementById('footerText').value : '',
-    footerMargin: !photoMode && (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
+    footerMargin: !photoMode && !S.feat.pasteMode && (S.feat.pageNum || S.feat.printDate || S.feat.footer) ? (S.feat.customFM ? parseFloat(document.getElementById('footerMargin').value) || 0 : _autoFooterMargin()) : 0,
     customFm: S.feat.customFM,
     // 老打印机兼容模式（issue #46）：生成后整页栅格化为位图 PDF，进缓存比较（切换即失效）
     compatFlat: !!S.feat.compatFlat,
