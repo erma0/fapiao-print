@@ -1460,9 +1460,8 @@ pub fn build_sumatra_print_settings(
         _ => {}
     }
 
-    if duplex {
-        parts.push("duplexlong".to_string());
-    }
+    // 单面也必须显式下发，否则 SumatraPDF 沿用打印机默认（可能是双面）。
+    parts.push(if duplex { "duplexlong" } else { "simplex" }.to_string());
 
     if let (Some(w), Some(h)) = (paper_w, paper_h) {
         if let Some(paper) = infer_paper_size(w, h) {

@@ -399,6 +399,8 @@ pub fn pdfium_vector_print(
     };
 
     let dev_mode_buf = build_dev_mode(base_devmode.as_deref_mut(), copies, duplex, collate, color_mode, paper_w_mm, paper_h_mm)?;
+    // 让驱动把改动合并进私有数据（尤其单/双面这类被驱动缓存的选项）
+    let dev_mode_buf = merge_devmode_with_driver(printer_name, &dev_mode_buf);
     let dev_mode_ptr = dev_mode_buf.as_ptr() as *const DEVMODEW;
 
     let hdc = unsafe {
@@ -688,6 +690,68 @@ fn get_printer_default_devmode(printer_name: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// 把改好的 DEVMODE 交回驱动合并一次（DM_IN_BUFFER | DM_OUT_BUFFER）。
+/// 部分驱动把双面等选项同时写进私有数据，只改 public 字段可能不生效；
+/// 合并失败或缓冲区不足时继续使用原 buffer，不阻断打印。
+fn merge_devmode_with_driver(printer_name: &str, buf: &[u8]) -> Vec<u8> {
+    use windows::Win32::Graphics::Printing::{OpenPrinterW, ClosePrinter, DocumentPropertiesW, PRINTER_DEFAULTSW};
+    use windows::Win32::Foundation::{HANDLE, HWND};
+    use windows::core::PWSTR;
+
+    let printer_name_w: Vec<u16> = printer_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut out = buf.to_vec();
+
+    unsafe {
+        let defaults = PRINTER_DEFAULTSW {
+            pDatatype: PWSTR::null(),
+            pDevMode: std::ptr::null_mut(),
+            DesiredAccess: windows::Win32::Graphics::Printing::PRINTER_ACCESS_USE,
+        };
+        let mut hprinter = HANDLE::default();
+        if OpenPrinterW(PCWSTR(printer_name_w.as_ptr()), &mut hprinter, Some(&defaults)).is_err() {
+            return out;
+        }
+
+        let need = DocumentPropertiesW(
+            HWND::default(),
+            hprinter,
+            PCWSTR(printer_name_w.as_ptr()),
+            None,
+            None,
+            0,
+        );
+        if need <= 0 {
+            log::warn!("Cannot query DEVMODE size for driver merge ({}), skipped", need);
+            let _ = ClosePrinter(hprinter);
+            return out;
+        }
+        if need as usize > out.len() {
+            log::warn!(
+                "DEVMODE buffer too small for driver merge ({} < {}), skipped",
+                out.len(), need
+            );
+            let _ = ClosePrinter(hprinter);
+            return out;
+        }
+
+        let dm = out.as_mut_ptr() as *mut DEVMODEW;
+        let result = DocumentPropertiesW(
+            HWND::default(),
+            hprinter,
+            PCWSTR(printer_name_w.as_ptr()),
+            Some(dm),
+            Some(dm as *const DEVMODEW),
+            (DM_IN_BUFFER.0 | DM_OUT_BUFFER.0) as u32,
+        );
+        let _ = ClosePrinter(hprinter);
+        if result != 1 {
+            log::warn!("Driver DEVMODE merge failed ({}), using raw buffer", result);
+        }
+    }
+
+    out
+}
+
 fn build_dev_mode(
     base: Option<&mut [u8]>,
     copies: u32,
@@ -730,10 +794,14 @@ fn build_dev_mode(
             }
         }
 
-        if duplex {
-            (*dm).dmDuplex = DEVMODE_DUPLEX(DMDUP_VERTICAL.0);
-            (*dm).dmFields |= DM_DUPLEX;
-        }
+        // 单面也必须显式下发：不设置时沿用驱动默认，不少机型默认双面，
+        // 于是应用里关掉「双面打印」实际仍打双面（issue #63）。
+        (*dm).dmDuplex = DEVMODE_DUPLEX(if duplex {
+            DMDUP_VERTICAL.0
+        } else {
+            DMDUP_SIMPLEX.0
+        });
+        (*dm).dmFields |= DM_DUPLEX;
 
         match color_mode {
             "grayscale" | "monochrome" | "bw" => {

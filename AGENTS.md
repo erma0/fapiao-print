@@ -96,6 +96,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 - DLL: `{exe}/tools/pdfium.dll`，下载源 `bblanchon/pdfium-binaries` via `gh-proxy.com`，`AtomicBool DOWNLOAD_CANCELLED` 支持取消
 - 渲染：`FPDF_LoadMemDocument` → 逐页 `FPDF_RenderPage(printer_dc)` 原生 DPI；SEH 捕获异常时 fallback `FPDF_RenderPageBitmap` + `StretchDIBits` 位图（`seh_wrapper.c`，`cc` 编译为静态库）
 - DEVMODE: `build_dev_mode()` + `infer_paper_size()`；`get_printer_default_devmode()` 返回**完整** `Vec<u8>` 缓冲区（含 `dmDriverExtra` 驱动私有数据）
+- **单/双面两种状态都显式下发**（issue #63）：`duplex=false` 也写 `DMDUP_SIMPLEX`，不能留给驱动默认（不少机型默认双面）；改好的 DEVMODE 再经 `merge_devmode_with_driver()`（`DM_IN_BUFFER|DM_OUT_BUFFER`）交回驱动合并私有数据，合并失败或缓冲区不足时回退原 buffer。SumatraPDF 链路同理，始终带 `simplex` / `duplexlong`
 
 **智能 PDF 缓存**（`print.js`）：
 

@@ -1,5 +1,15 @@
 # 📋 更新日志
 
+## v2.7.1-beta.4 — 单面打印修复
+
+_2026-11-05_
+
+### 🐛 修复
+
+- **单面打印实际仍打双面**（[issue #63](https://github.com/erma0/fapiao-print/issues/63)）：应用只在勾选「双面打印」时下发双面指令，关闭时完全沿用打印机驱动默认，而不少机型（如 KONICA MINOLTA）默认双面，导致「单面」从未生效。现在单面也显式下发 `DMDUP_SIMPLEX`，并让驱动合并一次 DEVMODE（私有数据同步）；SumatraPDF 备用链路同样始终传 `simplex` / `duplexlong`。
+
+---
+
 ## v2.7.1-beta.3 — 双面逐份隔离
 
 _2026-11-04_
