@@ -2316,15 +2316,18 @@ function _extractByText(fullText, words) {
   }
 
   // --- 发票备注（文字正则优先）---
-  // 取「备注」标签之后的内容，截到页脚（开票人/收款人/复核人）之前
+  // 取「备注」标签之后的内容，截到页脚落款行（开票人/收款人/复核人）之前
   if (!result.invoiceRemark) {
     var _rmRe = /备\s*注/g, _rmM, _rmEnd = -1;
     while ((_rmM = _rmRe.exec(text)) !== null) _rmEnd = _rmM.index + _rmM[0].length;
     if (_rmEnd >= 0) {
-      var _rmRest = text.substring(_rmEnd);
-      var _rmStop = _rmRest.search(/\n\s*(?:开\s*票\s*人|收\s*款\s*人|复\s*核\s*人)/);
-      if (_rmStop >= 0) _rmRest = _rmRest.substring(0, _rmStop);
-      result.invoiceRemark = _cleanRemark(_rmRest);
+      var _rmLines = text.substring(_rmEnd).split('\n');
+      var _rmBuf = [];
+      for (var _rli = 0; _rli < _rmLines.length; _rli++) {
+        if (_isFooterLineText(_rmLines[_rli])) break;
+        _rmBuf.push(_rmLines[_rli]);
+      }
+      result.invoiceRemark = _cleanRemark(_rmBuf.join('\n'));
     }
   }
 
@@ -3369,14 +3372,14 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
     }
     for (var ri2 = 0; ri2 < _footerRows.length; ri2++) {
       var _rowWords = _footerRows[ri2].words.slice().sort(function(a, b) { return a.x - b.x; });
-      var _rowText = _rowWords.map(function(w) { return w.normText; }).join('');
-      if (/开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/.test(_rowText) && _footerRows[ri2].y < bottomLimit) {
+      var _rowText = _rowWords.map(function(w) { return w.text; }).join('');
+      if (_isFooterLineText(_rowText) && _footerRows[ri2].y < bottomLimit) {
         bottomLimit = _footerRows[ri2].y;
       }
     }
     var parts = remarkLabel._parts || [];
     var rx = remarkLabel.x + remarkLabel.w * 0.5;
-    var _topLimit = _getRemarkTop(words, remarkLabel);
+    var _topLimit = _getRemarkTop(words, remarkLabel, true);
     var rcand = words.filter(function(w) {
       if (w.confidence < 0.3) return false;
       if (w === remarkLabel || parts.indexOf(w) >= 0) return false;
@@ -3468,21 +3471,44 @@ function _extractRemarkByRegion(words, imgW, imgH) {
     lastCy = w.cy;
   });
   if (cur.length) lines.push(cur);
-  return lines.map(function(ln) {
+  var texts = lines.map(function(ln) {
     ln.sort(function(a, b) { return a.x - b.x; });
     return ln.map(function(w) { return w.text; }).join('');
-  }).join(' ').trim();
+  });
+  // 页脚落款行（开票人/收款人/复核人）不是备注内容，拆字/交错排版下也要整行剔除
+  return texts.filter(function(t) { return !_isFooterLineText(t); }).join(' ').trim();
 }
 
-/** 备注框上界：取完整合计行底边，兼容标签与金额字号/基线不齐。 */
-function _getRemarkTop(words, remark) {
+/**
+ * 判定一整行文本是不是页脚落款（开票人 / 收款人 / 复核人）。
+ * 文字层可能把标签拆成单字，并与取值交错排列（如「开票张xx人：」），
+ * 故除整词匹配外，再按「行首 + 字间容忍 + 人后紧跟冒号/空白」兜底；
+ * 后者要求冒号，避免把「开票金额合计人民币」这类正文误判成页脚。
+ */
+function _isFooterLineText(s) {
+  if (!s) return false;
+  var t = String(s).replace(/\s+/g, '');
+  if (/开票人|收款人|复核人/.test(t)) return true;
+  var m = t.match(/开[\s\S]{0,10}?票[\s\S]{0,10}?人|收[\s\S]{0,10}?款[\s\S]{0,10}?人|复[\s\S]{0,10}?核[\s\S]{0,10}?人/);
+  if (!m || m.index > 2) return false;
+  return /^[：:]/.test(t.substring(m.index + m[0].length));
+}
+
+/**
+ * 备注框上界：取完整合计行底边，兼容标签与金额字号/基线不齐。
+ * @param {boolean} [extendAboveLabel] 无合计锚点时是否向上收标签上方的正文
+ *   （仅备注提取开启；销售方名称兜底排除备注区时保持默认，避免误杀名称）
+ */
+function _getRemarkTop(words, remark, extendAboveLabel) {
   var parts = remark._parts || [];
   var lineH = parts.length ? parts[0].h : remark.h;
   var top = remark.y - Math.max(lineH, 8) * 1.5;
   var anchors = words.filter(function(w) {
     return /价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写/.test(w.normText) && w.y < remark.y;
   });
-  if (!anchors.length) return top;
+  if (!anchors.length) {
+    return extendAboveLabel ? _remarkTopAboveLabel(words, remark, lineH, top) : top;
+  }
   // 大写金额/数字可能比标签低近一行；只按标签底边会把它们收进备注。
   // 用整行几何位置排除，备注本身含有金额时仍正常保留。
   var anchorBottom = 0;
@@ -3496,6 +3522,48 @@ function _getRemarkTop(words, remark) {
   });
   // 合计行只有标签一个词时不能返回 -1：那会让备注区上界失效
   return top >= 0 ? top : anchorBottom;
+}
+
+/**
+ * 无合计锚点的模板：正文可能整体位于「备注」标签上方（标签在备注框内垂直居中/偏下，
+ * issue #56 的模板就是这样）。从标签顶向上逐行收，遇金额/合计等结构性行即停，
+ * 最多向上 4 行；且向上收的行须含「标签:值」式分隔符，否则保持默认上界。
+ */
+function _remarkTopAboveLabel(words, remark, lineH, fallbackTop) {
+  var parts = remark._parts || [];
+  var limit = remark.y - Math.max(lineH, 8) * 4;
+  var rows = [];
+  words.forEach(function(w) {
+    if (w === remark || parts.indexOf(w) >= 0) return;
+    if (w.confidence < 0.3) return;
+    if (w.cy >= remark.y) return;
+    if (w.y + w.h < limit) return;
+    var row = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (Math.abs(w.cy - rows[i].cy) <= Math.max(w.h, 8) * 0.6) { row = rows[i]; break; }
+    }
+    if (!row) { row = { cy: w.cy, y: w.y, words: [] }; rows.push(row); }
+    row.words.push(w);
+    if (w.y < row.y) row.y = w.y;
+  });
+  rows.sort(function(a, b) { return b.cy - a.cy; });
+  var top = fallbackTop;
+  for (var r = 0; r < rows.length; r++) {
+    var rowText = rows[r].words.slice().sort(function(a, b) { return a.x - b.x; })
+      .map(function(w) { return w.text; }).join('');
+    if (_isRemarkStructuralRow(rowText)) break;
+    if (!/[：:；;]/.test(rowText)) break;
+    if (rows[r].y < top) top = rows[r].y;
+  }
+  return top;
+}
+
+/** 金额 / 合计类结构行不是备注正文：上界扩到这里就停。带冒号的备注行即便含金额也放行。 */
+function _isRemarkStructuralRow(s) {
+  var t = String(s || '').replace(/\s+/g, '');
+  if (/价税合计|金额合计|大写|小写|合计|税额|税率|征收率/.test(t)) return true;
+  if (/[¥￥]/.test(t)) return true;
+  return !/[：:；;]/.test(t) && /\d{1,3}(?:,\d{3})*\.\d{2}/.test(t);
 }
 
 /** 定位「备注」标签：整词（备注）、上下拆开的两词（备 / 注）或同行拉开的两词 */

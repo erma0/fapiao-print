@@ -131,10 +131,38 @@ async function run() {
       }) };
       return _extractItemNameRemarkByCoords(_buildWords(input.lines, input.imgW, input.imgH), input.imgW, input.imgH).invoiceRemark;
     }
-    return [extract(false), extract(true)];
+    // issue #56：无合计锚点、竖排「备/注」标签在备注框下部、正文在标签上方、
+    // 页脚取值与标签字交错（开/票/张三/人/：）——页脚既不能混进备注，也不能按 x 排序拼出错序文本
+    function sample(hasLabel, withAmounts) {
+      var content = '购买方名称:测试公司;纳税人识别号:91310000123456789A;地址:测试地址;开户行及账号:测试银行1234567890';
+      var lines = [];
+      if (withAmounts) lines.push(
+        { confidence: 1, words: [
+          { text: '¥', x: 1775.0, y: 1080.8, w: 16.7, h: 33.3 },
+          { text: '1,250.00', x: 1808.3, y: 1080.8, w: 100.0, h: 33.3 }] },
+        { confidence: 1, words: [{ text: '（壹仟贰佰伍拾圆整）', x: 222.0, y: 1149.8, w: 500.0, h: 33.3 }] });
+      lines.push({ confidence: 1, words: [{ text: content, x: 187.9, y: 1226.8, w: 1600.0, h: 33.3 }] });
+      if (hasLabel) lines.push({ confidence: 1, words: [
+        { text: '备', x: 121.0, y: 1296.8, w: 35.4, h: 33.3 },
+        { text: '注', x: 121.0, y: 1364.8, w: 35.4, h: 33.3 }] });
+      lines.push({ confidence: 1, words: [
+        { text: '开', x: 205.5, y: 1572.3, w: 35.4, h: 33.3 },
+        { text: '票', x: 276.4, y: 1572.3, w: 35.4, h: 33.3 },
+        { text: '张三', x: 333.5, y: 1576.8, w: 100.0, h: 33.3 },
+        { text: '人', x: 347.3, y: 1572.3, w: 35.4, h: 33.3 },
+        { text: '：', x: 417.7, y: 1572.3, w: 35.4, h: 33.3 }] });
+      return _extractItemNameRemarkByCoords(_buildWords(lines, 2480, 1653), 2480, 1653).invoiceRemark;
+    }
+    return [extract(false), extract(true), sample(true, true), sample(false, false),
+      _isFooterLineText('开票金额合计人民币'), _isFooterLineText('开票张三人：')];
   });
   equal(remarks[0], '', '空备注不混入基线较低的大写/数字金额');
   equal(remarks[1], '合同金额250元，按月结算 收款银行：测试银行', '居中备注标签上方的正文及正文金额保留');
+  equal(remarks[2], '购买方名称:测试公司;纳税人识别号:91310000123456789A;地址:测试地址;开户行及账号:测试银行1234567890',
+    'issue #56 无锚点时取标签上方正文，交错页脚不混入');
+  equal(remarks[3], '购买方名称:测试公司;纳税人识别号:91310000123456789A;地址:测试地址;开户行及账号:测试银行1234567890',
+    'issue #56 无标签兜底同样剔除交错页脚行');
+  equal([remarks[4], remarks[5]], [false, true], '交错页脚识别不误伤正文');
 
   await evaluate(() => {
     window.reviewSetup = function(cols, reverse, ordinal) {
