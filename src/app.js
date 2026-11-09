@@ -6253,19 +6253,26 @@ function showUpdateModal(info) {
 
   document.getElementById('updateNotes').innerHTML = renderReleaseNotes(info.release_notes);
 
-  // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」
+  // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」；
+  // 可直接替换 exe 的那一项点击即走应用内更新，其余产物仍交浏览器下载
+  var autoUrl = _updateAssetPicked ? _updateAssetPicked.download_url : '';
   var assetsHtml = '';
   if (info.assets && info.assets.length) {
     assetsHtml = '<div class="update-assets-title">下载文件：</div><ul class="update-assets">';
     info.assets.forEach(function(a) {
       var variant = getAssetVariant(a.name);
       var recommended = isOcrBuild() ? variant.ocr : !variant.ocr;
-      assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + '" onclick="openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')">' +
+      var isAuto = !!autoUrl && a.download_url === autoUrl;
+      var click = isAuto
+        ? 'startUpdateDownload()'
+        : 'openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')';
+      var badge = isAuto
+        ? '<span class="update-asset-rec">应用内更新</span>'
+        : (recommended ? '<span class="update-asset-rec">推荐</span>' : '');
+      assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + (isAuto ? ' auto' : '') + '" onclick="' + click + '">' +
         '<div class="update-asset-info">' +
           '<span class="update-asset-name">📥 ' + escHtml(a.name) + '</span>' +
-          '<span class="update-asset-meta">' + variant.label +
-            (recommended ? '<span class="update-asset-rec">推荐</span>' : '') +
-          '</span>' +
+          '<span class="update-asset-meta">' + variant.label + badge + '</span>' +
         '</div>' +
         '<span class="update-asset-size">' + formatUpdateSize(a.size) + '</span></li>';
     });

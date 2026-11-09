@@ -769,6 +769,7 @@ html.dark .toast-spinner { border-color: rgba(226,232,240,0.3); border-top-color
 }
 .update-asset:hover { border-color: var(--accent); background: var(--accent-light); }
 .update-asset.recommended { border-color: var(--accent); }
+.update-asset.auto { border-color: var(--accent); background: var(--accent-light); }
 .update-asset-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .update-asset-name { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .update-asset-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
