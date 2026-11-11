@@ -210,7 +210,7 @@
             <div class="adj-empty" id="adjEmpty">点击预览中的发票进行选中</div>
             <div id="adjContent" style="display:none">
               <span class="adj-file-name" id="adjFileName"></span>
-              <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="300" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="300" value="100" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
+              <div class="row"><label class="lbl">缩放</label><div class="rr ctrl"><input type="range" id="adjScale" min="20" max="500" value="100" oninput="syncSlider(this,'adjScaleN');onAdjScaleChange()"><input type="number" id="adjScaleN" min="20" max="500" value="100" onchange="syncRange(this,'adjScale');onAdjScaleChange()"></div></div>
               <div class="row"><label class="lbl">X偏移</label><div class="rr ctrl"><input type="range" id="adjOffX" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffXN');onAdjOffsetChange()"><input type="number" id="adjOffXN" min="-150" max="150" value="0" step="0.5" onchange="syncRange(this,'adjOffX');onAdjOffsetChange()"></div></div>
               <div class="row"><label class="lbl">Y偏移</label><div class="rr ctrl"><input type="range" id="adjOffY" min="-150" max="150" value="0" step="0.5" oninput="syncSlider(this,'adjOffYN');onAdjOffsetChange()"><input type="number" id="adjOffYN" min="-150" max="150" value="0" step="0.5" onchange="syncRange(this,'adjOffY');onAdjOffsetChange()"></div></div>
               <div style="display:flex;gap:6px;margin-top:6px">
@@ -344,12 +344,12 @@
       <div id="previewPages" style="display:none"></div>
       <!-- 选中槽位浮动工具条（同步桌面版 #33）：随槽位定位，随内容滚动 -->
       <div class="slot-toolbar hidden" id="slotToolbar">
-        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
-        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
+        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置选中票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
+        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="选中票居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
         <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票"><span class="tb-ico">⧉</span><span class="tb-text">应用到全部</span></button>
-        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置此票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
-        <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转此票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
-        <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除这张发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
+        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置选中票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
+        <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转选中票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
+        <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除选中的发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
       </div>
       <div class="slot-copy-menu hidden" id="slotCopyMenu">
         <div class="copy-menu-label">此票份数</div>

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Pure Web](https://img.shields.io/badge/Platform-Pure%20Web-blue.svg)]()
 [![PDF.js](https://img.shields.io/badge/PDF.js-4.10-orange.svg)]()
-[![Version](https://img.shields.io/badge/Version-3.2.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/Version-3.6.0-blue.svg)]()
 
 **纯前端电子发票批量排版打印工具**。单页应用,零后端,零构建,浏览器即开即用。
 
@@ -19,6 +19,7 @@
 - **多张拼版**: 自定义 1-10×1-10 网格,A4/A5/B5/Letter/Legal/自定义纸张;新增常用证件照预设(小一寸/一寸/大一寸/小二寸/二寸/身份证照片·社保卡,带使用场景)、5寸/6寸相纸、毫米/像素(300DPI) 单位切换,以及「相纸模式」——按证件照实际尺寸自动整版居中排列,默认间距2mm/留边3mm,支持常用张数(4/6/8/9/12/16)一键排列,另含身份证实际卡片尺寸 85.6×54mm 与可开关的切割线(v3.4.9)
 - **完整排版控制**: 边距、间距、缩放、旋转、切割线、边框、水印、页码、页脚
 - **单票独立调整**: 拖拽移动 + 滚轮缩放 (5%/步) + 九宫格对齐 + 调整记忆
+- **预览多选**: Ctrl+点击或空白处拖框多选（仅当前页），滚轮同步缩放全部选中票；工具条重置 / 居中 / 份数 / 旋转 / 删除批量生效
 - **版面拖拽排序**: 拖到发票边缘 = 顺位插入,拖到中间 = 两张对调
 - **预览滚轮交互**: 普通滚轮翻页 (触底/触顶),Ctrl+滚轮缩放视图,选中槽位滚轮缩放单票
 - **列表双向联动**: 点击列表项跳页选中槽位,选中槽位反向高亮定位列表
@@ -100,7 +101,7 @@ fapiao/
 
 ## 📝 版本
 
-- **v3.5.0** (本分支): 纯前端,零后端零依赖 — 🕸️ 在线试用 [fapiao.erma0.cn](https://fapiao.erma0.cn)
+- **v3.6.0** (本分支): 纯前端,零后端零依赖 — 🕸️ 在线试用 [fapiao.erma0.cn](https://fapiao.erma0.cn)
 - **v2.5.1** ([`master` 分支](https://github.com/erma0/fapiao-print/tree/master)): Tauri 桌面版,Rust 后端 + PDFium 引擎,支持 OCR / 静默打印 / 批量重命名 / 报销单分段
 
 ## ⚠️ 与桌面版的差异
