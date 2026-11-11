@@ -317,13 +317,15 @@
     var data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     var doc = await PDFLib.PDFDocument.load(data, { ignoreEncryption: true, updateMetadata: false });
     var page = doc.getPage(pageIndex || 0);
-    var size = page.getSize();
+    // pdf.js 的 viewport 以 CropBox 为准（裁切框原点常非 0），尺寸必须同口径，
+    // 否则调用方的「页尺寸一致」校验失败、兜底被整体跳过
+    var box = (typeof page.getCropBox === 'function' ? page.getCropBox() : null) || page.getMediaBox();
     var fontMap = readFonts(doc, page, PDFLib);
     var src = readContent(doc, page, PDFLib);
     var runs = src ? parseText(src, fontMap) : [];
     return {
-      widthPt: size.width,
-      heightPt: size.height,
+      widthPt: box.width,
+      heightPt: box.height,
       rotation: page.getRotation ? page.getRotation().angle : 0,
       runs: runs
     };
@@ -350,7 +352,8 @@
   }
 
   // 与 pdf.js extractTextWithCoords 同构的文本行（单位：dpi 换算后的像素）
-  function buildTextResult(extracted, dpi, baseResult) {
+  // vp1 = getViewport({scale:1})，用于把用户空间坐标投到视口（含 CropBox 偏移与 /Rotate）
+  function buildTextResult(extracted, dpi, baseResult, vp1) {
     var scale = dpi / 72;
     var pageH = extracted.heightPt;
     var lines = [];
@@ -358,8 +361,9 @@
     var lastY = null;
     var texts = [];
     extracted.runs.forEach(function (r) {
-      var px = r.x * scale;
-      var py = (pageH - r.y - r.size) * scale;
+      var p = vp1 ? vp1.convertToViewportPoint(r.x, r.y) : [r.x, pageH - r.y];
+      var px = p[0] * scale;
+      var py = (p[1] - r.size) * scale;
       var word = { text: r.text, x: px, y: Math.max(0, py), w: approxWidth(r.text) * r.size * scale, h: r.size * scale };
       // 基线差 ≤ 2pt 归为同一行（与 extractTextWithCoords 的阈值一致）
       if (lastY === null || Math.abs(r.y - lastY) > 2) {
@@ -375,8 +379,8 @@
     return {
       text: texts.join('\n'),
       lines: lines,
-      imgW: Math.round(extracted.widthPt * scale),
-      imgH: Math.round(pageH * scale),
+      imgW: Math.round((vp1 ? vp1.width : extracted.widthPt) * scale),
+      imgH: Math.round((vp1 ? vp1.height : pageH) * scale),
       hasTextLayer: lines.length > 0,
       textLayerDiagnostic: base.textLayerDiagnostic || null,
       rawFallback: true

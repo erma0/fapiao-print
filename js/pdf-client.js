@@ -32,7 +32,6 @@ async function loadDocument(arrayBuffer, opts) {
     data: data,
     cMapUrl: CMAP_URL,
     cMapPacked: true,
-    standardFontDataUrl: CMAP_URL.replace(/cmaps\/$/, ''),
     isEvalSupported: false,
     workerSrc: _workerSrcUrl,
     // 暴露 font.missingFile / toUnicode / cidEncoding，用于检测 12306 等字体未嵌入的 PDF
@@ -65,6 +64,9 @@ async function extractTextWithCoords(pdfPage) {
   var scale = PDF_RENDER_DPI / 72;
   var imgW = Math.round(pageW * scale);
   var imgH = Math.round(pageH * scale);
+  // 文字坐标必须经 viewport 变换：CropBox 原点非 0（如电子发票 y 从 453 起）或 /Rotate 非 0 时，
+  // 直接用 pageH - ty 会把整页文字压到图片顶部（y 全变 0），字段识别随之全灭
+  var vm = vp.transform;
 
   var LINE_Y_THRESHOLD = 2;
   var lines = [];
@@ -97,8 +99,11 @@ async function extractTextWithCoords(pdfPage) {
 
     var textW = item.width > 0 ? item.width : fontSize * item.str.length * 0.5;
 
-    var px = tx * scale;
-    var py = (pageH - ty - fontSize) * scale;
+    // 文字基线经 viewport 矩阵投到视口坐标（y 向下），再换算成图片像素
+    var vx = vm[0] * tx + vm[2] * ty + vm[4];
+    var vy = vm[1] * tx + vm[3] * ty + vm[5];
+    var px = vx * scale;
+    var py = (vy - fontSize) * scale;
     var pw = textW * scale;
     var ph = fontSize * scale;
 
@@ -207,9 +212,12 @@ export async function loadPdfFromArrayBuffer(arrayBuffer) {
         // 原始字节只能从文档里再取一份，且仅兜底路径才付这份开销。
         rawBytes = rawBytes || (typeof pdf.getData === 'function' ? await pdf.getData() : arrayBuffer.slice(0));
         var raw = await window.__pdfRawText.extract(rawBytes, i - 1);
-        if (raw.runs.length && Math.abs(raw.widthPt - vp.width) < 1 && Math.abs(raw.heightPt - vp.height) < 1) {
+        // pdf-lib 只给页框尺寸，/Rotate 90/270 时宽高需互换后再与 viewport 比
+        var rawW = raw.widthPt, rawH = raw.heightPt;
+        if ((raw.rotation || 0) % 180 !== 0) { var _t = rawW; rawW = rawH; rawH = _t; }
+        if (raw.runs.length && Math.abs(rawW - vp.width) < 1 && Math.abs(rawH - vp.height) < 1) {
           window.__pdfRawText.draw(rendered.canvas, raw.runs, vp);
-          pdfTextResult = window.__pdfRawText.buildTextResult(raw, PDF_RENDER_DPI, pdfTextResult);
+          pdfTextResult = window.__pdfRawText.buildTextResult(raw, PDF_RENDER_DPI, pdfTextResult, vp);
           console.info('[PDF加载] 内容流文字兜底: 第' + i + '页 ' + raw.runs.length + ' 段');
         }
       } catch (e) {
