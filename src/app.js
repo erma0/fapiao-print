@@ -5550,6 +5550,12 @@ document.addEventListener('keydown', function(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeZoom(-5); }
   if ((e.ctrlKey || e.metaKey) && e.key === '0') { e.preventDefault(); setZoom('fit'); }
   if (e.key === 'Escape') {
+    var um = document.getElementById('updateModal');
+    if (um && !um.classList.contains('hidden')) {
+      e.preventDefault();
+      requestCloseUpdateModal();
+      return;
+    }
     var sm = document.getElementById('summaryModal');
     if (sm && !sm.classList.contains('hidden')) {
       e.preventDefault();
@@ -6245,6 +6251,8 @@ function syncUpdateDownloadUI() {
   }
   if (cancel) cancel.classList.toggle('hidden', !busy);
   if (open) open.disabled = busy || _updateApplying;
+  var modal = document.getElementById('updateModal');
+  if (modal) modal.classList.toggle('is-busy', busy || _updateApplying);
   setUpdateProgressUI(busy || _updateApplying);
 }
 
@@ -6252,16 +6260,23 @@ function resetUpdateProgressState() {
   _updateDownloading = false;
   _updateApplying = false;
   var fill = document.getElementById('updateProgressFill');
-  if (fill) fill.style.width = '0%';
+  if (fill) { fill.style.width = '0%'; fill.classList.remove('done'); }
   var txt = document.getElementById('updateProgressText');
   if (txt) txt.textContent = '准备下载…';
+  var pct = document.getElementById('updateProgressPct');
+  if (pct) pct.textContent = '0%';
 }
 
 function renderUpdateProgress(p) {
   var pct = (p && typeof p.percent === 'number' && isFinite(p.percent)) ? p.percent : 0;
   pct = Math.max(0, Math.min(100, pct));
   var fill = document.getElementById('updateProgressFill');
-  if (fill) fill.style.width = pct.toFixed(1) + '%';
+  if (fill) {
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.classList.toggle('done', pct >= 100);
+  }
+  var pctEl = document.getElementById('updateProgressPct');
+  if (pctEl) pctEl.textContent = pct.toFixed(0) + '%';
   var txt = document.getElementById('updateProgressText');
   if (!txt) return;
   txt.textContent = p && p.total > 0
@@ -6332,7 +6347,9 @@ function showUpdateModal(info) {
   }
   syncUpdateDownloadUI();
 
-  document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '🧪 发现新测试版' : '🆕 发现新版本';
+  document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '发现新测试版' : '发现新版本';
+  var heroIcon = document.getElementById('updateHeroIcon');
+  if (heroIcon) heroIcon.textContent = info.is_prerelease ? '🧪' : '🚀';
   var badge = document.getElementById('updateChannelBadge');
   if (badge) {
     badge.textContent = info.is_prerelease ? '测试版' : '正式版';
@@ -6353,12 +6370,20 @@ function showUpdateModal(info) {
 
   document.getElementById('updateNotes').innerHTML = renderReleaseNotes(info.release_notes);
 
+  // 主按钮文案带上更新包大小，让用户下载前心里有数
+  var dlBtn = document.getElementById('updateDownloadBtn');
+  if (dlBtn) {
+    dlBtn.textContent = _updateAssetPicked
+      ? '⬇ 下载并更新（' + formatUpdateSize(_updateAssetPicked.size) + '）'
+      : '⬇ 下载并更新';
+  }
+
   // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」；
   // 可直接替换 exe 的那一项点击即走应用内更新，其余产物仍交浏览器下载
   var autoUrl = _updateAssetPicked ? _updateAssetPicked.download_url : '';
   var assetsHtml = '';
   if (info.assets && info.assets.length) {
-    assetsHtml = '<div class="update-assets-title">下载文件：</div><ul class="update-assets">';
+    assetsHtml = '<div class="update-section-title">下载文件</div><ul class="update-assets">';
     info.assets.forEach(function(a) {
       var variant = getAssetVariant(a.name);
       var recommended = isOcrBuild() ? variant.ocr : !variant.ocr;
@@ -6366,15 +6391,18 @@ function showUpdateModal(info) {
       var click = isAuto
         ? 'startUpdateDownload()'
         : 'openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')';
-      var badge = isAuto
-        ? '<span class="update-asset-rec">应用内更新</span>'
-        : (recommended ? '<span class="update-asset-rec">推荐</span>' : '');
+      var icon = variant.kind === 'portable-exe' ? '⚡'
+        : variant.kind === 'portable-zip' ? '📦' : '🛠';
+      var recBadge = (!isAuto && recommended) ? '<span class="update-asset-rec">推荐</span>' : '';
+      var cta = isAuto
+        ? '<span class="update-asset-cta auto">应用内更新 →</span>'
+        : '<span class="update-asset-cta">下载</span>';
       assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + (isAuto ? ' auto' : '') + '" onclick="' + click + '">' +
+        '<span class="update-asset-icon">' + icon + '</span>' +
         '<div class="update-asset-info">' +
-          '<span class="update-asset-name">📥 ' + escHtml(a.name) + '</span>' +
-          '<span class="update-asset-meta">' + variant.label + badge + '</span>' +
-        '</div>' +
-        '<span class="update-asset-size">' + formatUpdateSize(a.size) + '</span></li>';
+          '<span class="update-asset-name">' + variant.label + recBadge + '</span>' +
+          '<span class="update-asset-meta">' + escHtml(a.name) + ' · ' + formatUpdateSize(a.size) + '</span>' +
+        '</div>' + cta + '</li>';
     });
     assetsHtml += '</ul>';
   }
@@ -6384,7 +6412,7 @@ function showUpdateModal(info) {
   var openBtn = document.getElementById('updateOpenBtn');
   if (openBtn) {
     // 没有可自动更新的产物时，「前往 GitHub」升为主按钮
-    openBtn.textContent = _updateAssetPicked ? '🌐 前往 GitHub 下载' : '⬇️ 前往 GitHub 下载';
+    openBtn.textContent = _updateAssetPicked ? '🌐 前往 GitHub 下载' : '⬇ 前往 GitHub 下载';
     openBtn.classList.toggle('btn-primary', !_updateAssetPicked);
     openBtn.disabled = false;
     openBtn.onclick = function() {
@@ -6395,6 +6423,16 @@ function showUpdateModal(info) {
   }
 
   modal.classList.remove('hidden');
+}
+
+/** 关闭更新弹窗：下载/替换进行中只允许通过「取消下载」退出，避免后台静默更新 */
+function requestCloseUpdateModal() {
+  if (_updateDownloading) {
+    toast('正在下载更新，可先点击「取消下载」', 2500);
+    return;
+  }
+  if (_updateApplying) return;
+  closeUpdateModal();
 }
 
 function closeUpdateModal() {

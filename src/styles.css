@@ -752,39 +752,114 @@ html.dark .toast-spinner { border-color: rgba(226,232,240,0.3); border-top-color
 .sort-btn.disabled { opacity: 0.15; cursor: default; pointer-events: none; }
 
 /* ===== Update Modal (检查更新) ===== */
-.update-modal { width: 520px; max-width: 92vw; }
-.update-version-row { display: flex; align-items: center; gap: 14px; justify-content: center; padding: 16px 0 12px; }
-.update-ver-old { font-size: 16px; color: var(--text-muted); font-weight: 500; }
-.update-arrow { font-size: 22px; color: var(--accent); font-weight: 700; }
-.update-ver-new { font-size: 22px; color: var(--accent); font-weight: 700; }
-.update-date { font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 16px; }
-.update-section-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
-.update-notes {
-  font-size: 13px; color: var(--text-primary); line-height: 1.6;
-  background: var(--surface2); border-radius: 8px; padding: 12px 14px;
-  max-height: 220px; overflow-y: auto; white-space: normal; word-break: break-word;
+.update-modal { width: 560px; max-width: 92vw; padding: 0; border: none; }
+
+/* 顶部渐变横幅：版本概览 + 关闭 */
+.update-hero {
+  position: relative; overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 22px 24px 20px; color: #fff;
+  background: linear-gradient(135deg, #2563eb 0%, #6d28d9 100%);
 }
-.update-assets-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 14px 0 8px; }
-.update-assets { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.update-hero::after {
+  content: ''; position: absolute; right: -50px; top: -70px; width: 200px; height: 200px;
+  border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(255,255,255,0.22), transparent 70%);
+}
+.update-hero-icon {
+  flex-shrink: 0; width: 44px; height: 44px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
+  background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.22);
+}
+.update-hero-main { min-width: 0; flex: 1; }
+.update-hero-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 700; line-height: 1.35; }
+.update-hero .ver-badge { background: rgba(255,255,255,0.2); color: #fff; font-weight: 600; }
+.update-hero-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 13px; }
+.update-ver-old { color: rgba(255,255,255,0.62); }
+.update-arrow { color: rgba(255,255,255,0.5); font-weight: 700; }
+.update-ver-new { color: #fff; font-weight: 700; font-size: 14px; }
+.update-hero-dot { color: rgba(255,255,255,0.35); }
+.update-date { color: rgba(255,255,255,0.62); font-size: 12px; }
+.update-close {
+  position: absolute; top: 12px; right: 12px; z-index: 1;
+  width: 28px; height: 28px; border: none; border-radius: 50%; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1; color: #fff; background: rgba(255,255,255,0.15);
+  transition: background 0.15s;
+}
+.update-close:hover { background: rgba(255,255,255,0.3); }
+
+.update-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 6px; }
+.update-body::-webkit-scrollbar { width: 5px; }
+.update-body::-webkit-scrollbar-track { background: transparent; }
+.update-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.update-section-title { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.04em; margin-bottom: 8px; }
+.update-notes {
+  font-size: 13px; color: var(--text-primary); line-height: 1.7;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 16px;
+  max-height: 200px; overflow-y: auto; white-space: normal; word-break: break-word;
+}
+.update-notes::-webkit-scrollbar { width: 5px; }
+.update-notes::-webkit-scrollbar-track { background: transparent; }
+.update-notes::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.update-assets { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .update-asset {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: 8px; cursor: pointer; transition: all 0.15s; font-size: 13px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer; transition: all 0.15s; font-size: 13px;
 }
 .update-asset:hover { border-color: var(--accent); background: var(--accent-light); }
 .update-asset.recommended { border-color: var(--accent); }
 .update-asset.auto { border-color: var(--accent); background: var(--accent-light); }
-.update-asset-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.update-asset-name { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.update-asset-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
-.update-asset-rec { font-size: 10px; font-weight: 700; color: var(--accent); background: var(--accent-light); border-radius: 3px; padding: 0 5px; }
-.update-asset-size { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.update-asset-icon {
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.update-asset.auto .update-asset-icon { border-color: transparent; }
+.update-asset-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.update-asset-name { display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 600; }
+.update-asset-meta { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-asset-rec { flex-shrink: 0; font-size: 10px; font-weight: 700; color: var(--accent); background: var(--accent-light); border-radius: 3px; padding: 0 5px; }
+.update-asset-cta { flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.update-asset-cta.auto { color: var(--accent); }
+.update-asset:hover .update-asset-cta { color: var(--accent); }
+
+/* 底部操作区 */
+.update-footer { flex-shrink: 0; padding: 14px 24px 16px; border-top: 1px solid var(--border); background: var(--surface); }
+.update-actions { display: flex; gap: 10px; }
+.update-actions .btn { height: 40px; border-radius: 10px; font-size: 13px; }
+.update-main-btn { flex: 1; font-weight: 700; box-shadow: 0 6px 16px rgba(37,99,235,0.25); }
+.update-cancel { flex: 1; }
+.update-ghost { flex-shrink: 0; background: transparent; color: var(--text-secondary); }
+.update-ghost:not(.btn-primary):hover { background: var(--surface2); border-color: var(--accent); color: var(--accent); }
+.update-ghost.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.update-ghost.btn-primary:hover { background: var(--accent-hover); }
+html.dark .update-ghost { background: transparent; color: var(--text-secondary); }
+html.dark .update-ghost:not(.btn-primary):hover { background: #2a3a5a; color: var(--text-secondary); }
+.update-links { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; }
+.update-link {
+  border: none; background: none; padding: 2px 6px; border-radius: 4px;
+  font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
+}
+.update-link:hover { color: var(--accent); background: var(--accent-light); }
+.update-link.muted { color: var(--text-muted); }
+.update-link-sep { font-size: 12px; color: var(--border); }
 
 /* 应用内自更新进度 */
-.update-progress { margin-top: 12px; }
-.update-progress-track { height: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
-.update-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
-.update-progress-text { margin-top: 6px; font-size: 12px; color: var(--text-muted); text-align: center; }
+.update-progress { margin-bottom: 12px; }
+.update-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.update-progress-text { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-progress-pct { flex-shrink: 0; font-size: 14px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.update-progress-track { height: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.update-progress-fill { height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #7c3aed); transition: width 0.2s ease; }
+.update-progress-fill.done { background: var(--success); }
+
+/* 下载/替换中：锁定内容区，只允许取消 */
+.update-modal.is-busy .update-body { opacity: 0.55; pointer-events: none; }
+.update-modal.is-busy .update-links { opacity: 0.45; pointer-events: none; }
 .update-modal .btn:disabled { opacity: 0.5; cursor: default; pointer-events: none; }
 
 /* 更新内容 Markdown 渲染后的基础排版 */
@@ -799,11 +874,6 @@ html.dark .toast-spinner { border-color: rgba(226,232,240,0.3); border-top-color
 .update-notes code { font-family: Consolas, monospace; font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 3px; }
 .update-notes hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
 .update-notes .update-quote { color: var(--text-muted); font-size: 12px; margin-bottom: 6px; }
-
-/* 主操作（前往下载）独占一行置顶，三个次要按钮一行平铺 */
-.update-modal .modal-actions { display: flex; flex-direction: column; gap: 8px; }
-.update-modal .modal-actions .btn { padding: 9px 10px; font-size: 13px; white-space: nowrap; }
-.update-modal .update-secondary-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 
 /* Statusbar version — clickable */
 #stVersion { display: flex; align-items: center; gap: 6px; transition: color 0.15s; }

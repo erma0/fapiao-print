@@ -497,32 +497,46 @@
 <div class="modal-bg hidden" id="savePdfModal" onclick="closeSavePdfDialog()"><div class="modal print-confirm-modal" onclick="event.stopPropagation()"><div class="modal-title">📥 保存为PDF</div><div class="modal-body" id="savePdfBody"></div><div class="modal-actions"><button class="btn" onclick="closeSavePdfDialog()">取消</button><button class="btn btn-warning" id="savePdfConfirmBtn" onclick="confirmSavePdf()">保存</button></div></div></div>
 
 <!-- Update available modal -->
-<div class="modal-bg hidden" id="updateModal" onclick="closeUpdateModal()">
+<div class="modal-bg hidden" id="updateModal" onclick="requestCloseUpdateModal()">
   <div class="modal update-modal" onclick="event.stopPropagation()">
-    <div class="modal-title"><span id="updateModalTitle">🆕 发现新版本</span><span class="ver-badge hidden" id="updateChannelBadge"></span></div>
-    <div class="modal-body">
-      <div class="update-version-row">
-        <span class="update-ver-old" id="updateCurrentVersion">v—</span>
-        <span class="update-arrow">→</span>
-        <span class="update-ver-new" id="updateLatestVersion">v—</span>
+    <div class="update-hero">
+      <div class="update-hero-icon" id="updateHeroIcon">🚀</div>
+      <div class="update-hero-main">
+        <div class="update-hero-title"><span id="updateModalTitle">发现新版本</span><span class="ver-badge hidden" id="updateChannelBadge"></span></div>
+        <div class="update-hero-sub">
+          <span class="update-ver-old" id="updateCurrentVersion">v—</span>
+          <span class="update-arrow">→</span>
+          <span class="update-ver-new" id="updateLatestVersion">v—</span>
+          <span class="update-hero-dot">·</span>
+          <span class="update-date">发布于 <span id="updatePubDate">—</span></span>
+        </div>
       </div>
-      <div class="update-date">发布日期：<span id="updatePubDate">—</span></div>
+      <button class="update-close" onclick="requestCloseUpdateModal()" title="关闭">✕</button>
+    </div>
+    <div class="update-body">
       <div class="update-section-title">更新内容</div>
       <div class="update-notes" id="updateNotes"></div>
       <div id="updateAssets"></div>
-      <div class="update-progress hidden" id="updateProgress">
-        <div class="update-progress-track"><div class="update-progress-fill" id="updateProgressFill"></div></div>
-        <div class="update-progress-text" id="updateProgressText">准备下载…</div>
-      </div>
     </div>
-    <div class="modal-actions">
-      <button class="btn btn-primary" id="updateDownloadBtn" onclick="startUpdateDownload()">⬇️ 下载并更新</button>
-      <button class="btn hidden" id="updateCancelBtn" onclick="cancelUpdateDownload()">取消下载</button>
-      <button class="btn" id="updateOpenBtn">⬇️ 前往 GitHub 下载</button>
-      <div class="update-secondary-actions">
-        <button class="btn" onclick="ignoreUpdateVersion()">跳过此版本</button>
-        <button class="btn" onclick="closeUpdateModal()">稍后再说</button>
-        <button class="btn" onclick="ignoreAllUpdates()">不再提醒</button>
+    <div class="update-footer">
+      <div class="update-progress hidden" id="updateProgress">
+        <div class="update-progress-head">
+          <span class="update-progress-text" id="updateProgressText">准备下载…</span>
+          <span class="update-progress-pct" id="updateProgressPct">0%</span>
+        </div>
+        <div class="update-progress-track"><div class="update-progress-fill" id="updateProgressFill"></div></div>
+      </div>
+      <div class="update-actions">
+        <button class="btn btn-primary update-main-btn" id="updateDownloadBtn" onclick="startUpdateDownload()">⬇ 下载并更新</button>
+        <button class="btn update-cancel hidden" id="updateCancelBtn" onclick="cancelUpdateDownload()">取消下载</button>
+        <button class="btn update-ghost" id="updateOpenBtn">🌐 前往 GitHub 下载</button>
+      </div>
+      <div class="update-links">
+        <button class="update-link" onclick="ignoreUpdateVersion()">跳过此版本</button>
+        <span class="update-link-sep">·</span>
+        <button class="update-link" onclick="closeUpdateModal()">稍后再说</button>
+        <span class="update-link-sep">·</span>
+        <button class="update-link muted" onclick="ignoreAllUpdates()">不再提醒</button>
       </div>
     </div>
   </div>
