@@ -1,5 +1,23 @@
 # 📋 更新日志
 
+## v2.7.1-beta.7 — 灰度 PDF 修复与预览多选
+
+_2026-11-11_
+
+### 🐛 修复
+
+- **灰度图片导出的 PDF 在 Edge/Chrome 中横向重复 3 次、彩色重影**（[issue #66](https://github.com/erma0/fapiao-print/issues/66)）：灰度图重编码后只有 1 个分量，Image XObject 却固定声明 `DeviceRGB`，PDFium 按 3 字节/像素解读导致画面错位。现在由 `build_lopdf_jpeg_xobject()` 按 JPEG SOF 段的真实分量数声明 `DeviceGray / DeviceRGB / DeviceCMYK`，直通、解码重编码与兼容模式栅格化三条路径统一生效；PDFium 静默打印也一并恢复正常。
+
+### ✨ 新增
+
+- **预览多选与滚轮同步缩放**（[issue #64](https://github.com/erma0/fapiao-print/issues/64)）：Ctrl+点击或预览空白处拖框多选（仅当前页），悬停在任一选中票面滚轮即可对全部选中票同步缩放；工具条的重置 / 居中 / 份数 / 旋转 / 删除批量作用于选中票。
+
+### 📝 文档
+
+- 回归用例新增 8 项多选 / 框选 / 批量工具条检查，共 57 项通过。
+
+---
+
 ## v2.7.1-beta.6 — 拆字模板识别修复
 
 _2026-11-08_

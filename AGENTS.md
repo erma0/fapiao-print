@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.7.1-beta.6（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.7.1-beta.7（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -66,6 +66,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 - PDF 页面 → `extract_page_as_form_xobject()` 提取为 Form XObject（矢量保真），标注（印章/签章）从 `/Annots` 经 `/AP /N` 烘焙进内容流（跳过隐藏标注；后缀 `Q` 必须先于标注绘制命令）
 - 图片/OFD → `image_to_lopdf_xobject()` 编码为 JPEG DCTDecode Image XObject；旋转烘焙进像素（`RENDER_DPI=300` 换算 pt）
+- 图片 XObject 的 `/ColorSpace` 由 `build_lopdf_jpeg_xobject()` 按 JPEG SOF 段的真实分量数决定（灰度=`DeviceGray`），**禁止调用方硬编码**——错声明会让 PDFium 按 3 字节/像素解读，画面横向三连 + 彩色重影（issue #66）
 - 源 PDF `/Rotate` 属性烘焙进内容流前缀（PDF spec：显示时顺时针旋转），90=`[0 -1 1 0 0 w]`、180=`[-1 0 0 -1 w h]`、270=`[0 1 -1 0 h 0]`
 - 页面组装：`build_nup_content_stream()` 按 slot 计算 cm 矩阵 + `q re W n` 槽位裁剪 + Do；页脚/编号/水印为 PNG Image XObject 叠加
 
