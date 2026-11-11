@@ -336,7 +336,7 @@ function renderPage(pageFiles, pi, total, s) {
     var perScale = f ? (f.slotScale || 1) : 1;
     var perOffX = f ? (f.slotOffsetX || 0) : 0;
     var perOffY = f ? (f.slotOffsetY || 0) : 0;
-    var isSelected = (S.selectedSlot === i);
+    var isSelected = isSlotSelected(i);
     var selClass = isSelected ? ' selected' : '';
 
     if (f && f.previewUrl) {
@@ -494,10 +494,7 @@ function renderPage(pageFiles, pi, total, s) {
   document.getElementById('pageNav').style.display = 'flex';
 
   // Re-apply selection highlight and bind interaction
-  if (S.selectedSlot >= 0) {
-    var selEl = document.querySelector('.invoice-slot[data-slot-idx="' + S.selectedSlot + '"]');
-    if (selEl) selEl.classList.add('selected');
-  }
+  applySlotSelectionHighlight();
   initSlotInteraction();
 }
 
@@ -512,6 +509,8 @@ var _slotInteractionBound = false;
 var _dragHintShown = false; // 本次会话是否已提示过拖拽手势
 
 var _slotTempDrag = null; // 尾部空槽拖拽的临时占位对象（未移动则销毁）
+
+var _slotMarquee = null; // 预览空白处拖框多选状态（issue #64，仅当前页）
 
 var _slotSuppressClick = false; // 槽位拖拽松手后吞掉浏览器合成的 click
 
@@ -534,12 +533,14 @@ function initSlotInteraction() {
     e.stopPropagation();
     e.preventDefault();
   }, true);
-  // Click on empty area deselects (floating slot toolbar excluded, issue #33)
+  // Click on empty area deselects; drag on empty area starts a marquee multi-select (issue #64)
   document.getElementById('previewWrap').addEventListener('mousedown', function(e) {
-    if (!e.target.closest('.invoice-slot') && !e.target.closest('.slot-handle') &&
-        !e.target.closest('#slotCopyMenu') && !hitSlotToolbar(e)) {
-      selectSlot(-1);
-    }
+    if (e.button !== 0) return;
+    if (e.target.closest('.invoice-slot') || e.target.closest('.slot-handle') ||
+        e.target.closest('#slotCopyMenu') || e.target.closest('.empty-state') ||
+        e.target.closest('button') || e.target.closest('input') || e.target.closest('select') ||
+        hitSlotToolbar(e)) return;
+    startMarqueeSelection(e);
   });
 }
 
@@ -551,6 +552,90 @@ function hitSlotToolbar(e) {
   if (!tb || tb.classList.contains('hidden')) return false;
   var r = tb.getBoundingClientRect();
   return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+}
+
+// 预览空白处拖框多选：未移动 = 原「点空白取消选中」；移动后按矩形与槽位相交选中（仅当前页）
+function startMarqueeSelection(e) {
+  var container = document.querySelector('.preview-container');
+  var wrap = document.getElementById('previewWrap');
+  if (!container || !wrap) { selectSlot(-1); return; }
+  var wr = wrap.getBoundingClientRect();
+  // 落在滚动条上不当作框选
+  if (e.clientX - wr.left >= wrap.clientWidth || e.clientY - wr.top >= wrap.clientHeight) return;
+  var cr = container.getBoundingClientRect();
+  if (e.clientX < cr.left || e.clientX > cr.right || e.clientY < cr.top || e.clientY > cr.bottom) {
+    selectSlot(-1);
+    return;
+  }
+  e.preventDefault();
+  var box = document.createElement('div');
+  box.className = 'slot-marquee';
+  container.appendChild(box);
+  _slotMarquee = {
+    startX: e.clientX, startY: e.clientY,
+    cRect: cr, box: box, container: container, moved: false
+  };
+  document.addEventListener('mousemove', onMarqueeMove);
+  document.addEventListener('mouseup', onMarqueeUp);
+}
+
+function onMarqueeMove(e) {
+  var m = _slotMarquee;
+  if (!m) return;
+  if (!m.moved && Math.hypot(e.clientX - m.startX, e.clientY - m.startY) < DRAG_THRESHOLD_PX) return;
+  m.moved = true;
+  m.box.style.left = (Math.min(m.startX, e.clientX) - m.cRect.left) + 'px';
+  m.box.style.top = (Math.min(m.startY, e.clientY) - m.cRect.top) + 'px';
+  m.box.style.width = Math.abs(e.clientX - m.startX) + 'px';
+  m.box.style.height = Math.abs(e.clientY - m.startY) + 'px';
+}
+
+function onMarqueeUp(e) {
+  var m = _slotMarquee;
+  if (!m) return;
+  _slotMarquee = null;
+  document.removeEventListener('mousemove', onMarqueeMove);
+  document.removeEventListener('mouseup', onMarqueeUp);
+  if (m.box.parentNode) m.box.parentNode.removeChild(m.box);
+  if (!m.moved) { selectSlot(-1); return; }
+
+  var left = Math.min(m.startX, e.clientX);
+  var top = Math.min(m.startY, e.clientY);
+  var right = Math.max(m.startX, e.clientX);
+  var bottom = Math.max(m.startY, e.clientY);
+  var files = getActiveFiles();
+  var perPage = getPerPage(getSettings());
+  var pageStart = S.currentPage * perPage;
+  var hits = [];
+  // 拖框期间预览可能被 OCR/排版刷新替换，按当前 DOM 计算槽位矩形
+  var live = document.querySelector('.preview-container') || m.container;
+  live.querySelectorAll('.invoice-slot').forEach(function(el) {
+    var r = el.getBoundingClientRect();
+    if (r.right < left || r.left > right || r.bottom < top || r.top > bottom) return;
+    var i = parseInt(el.dataset.slotIdx);
+    if (isNaN(i)) return;
+    var f = files[pageStart + i];
+    if (!f || f._placeholder) return;
+    hits.push(i);
+  });
+  hits.sort(function(a, b) { return a - b; });
+
+  var additive = e.ctrlKey || e.metaKey;
+  if (!hits.length) {
+    if (!additive) selectSlot(-1);
+    return;
+  }
+  if (additive) {
+    var merged = getSelectedSlotIndices();
+    hits.forEach(function(i) { if (merged.indexOf(i) < 0) merged.push(i); });
+    var primary = (S.selectedSlot >= 0 && merged.indexOf(S.selectedSlot) >= 0) ? S.selectedSlot : merged[0];
+    setSlotSelection(primary, merged.filter(function(i) { return i !== primary; }));
+  } else {
+    setSlotSelection(hits[0], hits.slice(1));
+  }
+  updateAdjPanel();
+  applySlotSelectionHighlight();
+  if (S.selectedSlot >= 0) syncSidebarToSelectedSlot();
 }
 
 // 尾部空槽按下即拖：临时创建空白占位进入拖拽链路，松手落到实体之间 = 中间留白，未移动则销毁
@@ -582,6 +667,13 @@ function onSlotMouseDown(e) {
 
   var idx = parseInt(slotEl.dataset.slotIdx);
   if (isNaN(idx)) return;
+
+  // Ctrl+点击：切换多选，不进入拖拽/缩放（issue #64）
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    toggleSlotSelection(idx);
+    return;
+  }
 
   // Check if clicking a resize handle
   var handle = e.target.closest('.slot-handle');
@@ -970,7 +1062,7 @@ function moveSlotInvoice(fromIdx, toIdx, zone) {
   var newDi = getActiveFiles().indexOf(a);
   if (newDi >= 0) {
     S.currentPage = Math.floor(newDi / perPage);
-    S.selectedSlot = newDi % perPage;
+    setSelectedSlot(newDi % perPage);
   }
   renderFileList();
   toast('已调整顺序');
@@ -1009,7 +1101,7 @@ function moveSlotInvoiceToTail(fromIdx) {
   var newDi = getActiveFiles().indexOf(a);
   if (newDi >= 0) {
     S.currentPage = Math.floor(newDi / perPage);
-    S.selectedSlot = newDi % perPage;
+    setSelectedSlot(newDi % perPage);
   }
   renderFileList();
   toast('已移到末尾');

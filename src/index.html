@@ -429,12 +429,12 @@
       <div id="previewPages" style="display:none"></div>
       <!-- 选中槽位浮动工具条（issue #33）：随槽位定位，随内容滚动 -->
       <div class="slot-toolbar hidden" id="slotToolbar">
-        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置此票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
-        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="票面居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
+        <button class="btn btn-sm" onclick="resetSlotAdj()" title="重置选中票的缩放与偏移"><span class="tb-ico">↩</span><span class="tb-text">重置</span></button>
+        <button class="btn btn-sm" onclick="setSlotAlignment('center','center')" title="选中票居中"><span class="tb-ico">⊙</span><span class="tb-text">居中</span></button>
         <button class="btn btn-sm" onclick="applySlotAdjToAll()" title="将此票的调整应用到全部发票"><span class="tb-ico">⧉</span><span class="tb-text">应用到全部</span></button>
-        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置此票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
-        <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转此票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
-        <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除这张发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
+        <button class="btn btn-sm" id="slotCopiesBtn" onclick="toggleSlotCopyMenu(event)" title="设置选中票排版份数"><span class="tb-ico" id="slotCopiesIco">×1</span><span class="tb-text">份数</span></button>
+        <button class="btn btn-sm" id="slotRotateBtn" onclick="rotateSelected()" title="旋转选中票 90°（顺时针）"><span class="tb-ico">↻</span><span class="tb-text">旋转</span></button>
+        <button class="btn btn-sm danger" onclick="deleteSlotInvoice()" title="删除选中的发票"><span class="tb-ico">✕</span><span class="tb-text">删除</span></button>
       </div>
       <!-- 工具条「份数」弹出菜单（fixed 定位，锚在按钮下方） -->
       <div class="slot-copy-menu hidden" id="slotCopyMenu">

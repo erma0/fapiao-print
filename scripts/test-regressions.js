@@ -306,6 +306,67 @@ async function run() {
   await click(blankHit);
   equal(await evaluate(() => S.selectedSlot), -1, '点预览空白仍取消选中');
 
+  // issue #64：Ctrl+点击 / 拖框多选，滚轮与工具条批量作用于全部选中票（仅当前页）
+  const multi = await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    function setup() {
+      S.feat.reimburse = false; S.feat.pasteMode = false; S.feat.photoMode = false;
+      S.layout = { cols: 1, rows: 2 };
+      S.files = ['A', 'B'].map(function(n) {
+        return createFileObj({ name: n + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 });
+      });
+      S.currentPage = 0;
+      selectSlot(-1);
+      updatePreview();
+    }
+    function slot(idx) { return document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]'); }
+    function ctrlClick(idx) {
+      slot(idx).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
+    }
+    var out = {};
+    setup();
+    selectSlot(0);
+    ctrlClick(1);
+    out.selected = getSelectedSlotIndices();
+    slot(1).dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100 }));
+    out.scaled = [S.files[0].slotScale, S.files[1].slotScale];
+    resetSlotAdj();
+    out.reset = [S.files[0].slotScale, S.files[1].slotScale];
+    rotateSelected();
+    out.rotated = [S.files[0].rotation, S.files[1].rotation];
+
+    setup();
+    selectSlot(0);
+    ctrlClick(1);
+    setSlotCopies(2);
+    out.copies = [S.files[0].copies, S.files[1].copies];
+
+    setup();
+    var box = document.querySelector('.preview-container');
+    var c = box.getBoundingClientRect();
+    var s0 = slot(0).getBoundingClientRect();
+    var start = { clientX: Math.max(c.left + 1, s0.left - 3), clientY: Math.max(c.top + 1, s0.top - 3) };
+    var end = { clientX: c.right - 2, clientY: c.bottom - 2 };
+    box.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: start.clientX, clientY: start.clientY }));
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: end.clientX, clientY: end.clientY }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: end.clientX, clientY: end.clientY }));
+    out.marquee = getSelectedSlotIndices();
+    out.marqueePrimary = S.selectedSlot;
+
+    deleteSlotInvoice();
+    out.afterDelete = S.files.length;
+    out.afterDeleteSel = S.selectedSlot;
+    return out;
+  });
+  equal(multi.selected, [0, 1], 'Ctrl+点击多选两个槽位');
+  equal(multi.scaled, [1.05, 1.05], '滚轮同步缩放全部选中票');
+  equal(multi.reset, [1, 1], '工具条重置作用于全部选中票');
+  equal(multi.rotated, [90, 90], '工具条旋转作用于全部选中票');
+  equal(multi.copies, [2, 2], '工具条份数作用于全部选中票');
+  equal(multi.marquee, [0, 1], '拖框选中当前页两张票');
+  equal(multi.marqueePrimary, 0, '拖框后首张为主选中');
+  equal([multi.afterDelete, multi.afterDeleteSel], [0, -1], '工具条删除批量移除选中票并清空选中');
+
   // 删除后按文件对象重定位选中：槽位序号会整体前移，沿用旧索引会指到别的票
   const rmState = await evaluate(() => {
     var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
