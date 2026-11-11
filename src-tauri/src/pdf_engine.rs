@@ -5901,12 +5901,11 @@ fn image_to_lopdf_xobject(
     let rot = ((rotation % 360) + 360) % 360;
 
     match source {
-        ImageSource::JpegPassthrough { raw_bytes, width, height, num_components } if trim.is_none() && rot == 0 => {
+        ImageSource::JpegPassthrough { raw_bytes, width, height, .. } if trim.is_none() && rot == 0 => {
             // No rotation & no crop: embed raw JPEG bytes directly (zero re-encoding)
-            let nc = *num_components;
             let w_pt = *width as f32 * 72.0 / RENDER_DPI as f32;
             let h_pt = *height as f32 * 72.0 / RENDER_DPI as f32;
-            let xobj_id = build_lopdf_jpeg_xobject(output_doc, raw_bytes, *width, *height, nc);
+            let xobj_id = build_lopdf_jpeg_xobject(output_doc, raw_bytes, *width, *height);
             Ok((xobj_id, w_pt, h_pt))
         }
         _ => {
@@ -5949,7 +5948,7 @@ fn image_to_lopdf_xobject(
             let jpeg_bytes = encode_image_to_jpeg_bytes(&rotated)?;
             let w_pt = w as f32 * 72.0 / RENDER_DPI as f32;
             let h_pt = h as f32 * 72.0 / RENDER_DPI as f32;
-            let xobj_id = build_lopdf_jpeg_xobject(output_doc, &jpeg_bytes, w, h, 3);
+            let xobj_id = build_lopdf_jpeg_xobject(output_doc, &jpeg_bytes, w, h);
             Ok((xobj_id, w_pt, h_pt))
         }
     }
@@ -6059,13 +6058,18 @@ fn image_to_raw_rgb(img: &image::DynamicImage) -> (Vec<u8>, u8) {
 }
 
 /// Build a lopdf Image XObject from JPEG bytes using DCTDecode.
+///
+/// `/ColorSpace` 必须按 JPEG 头（SOF 段）里的真实分量数声明，不能由调用方指定：
+/// 灰度图经 JpegEncoder 编码后只有 1 个分量，若声明成 DeviceRGB，PDFium 会按
+/// 3 字节/像素解读，画面横向重复 3 次并出现彩色重影（issue #66）。
 fn build_lopdf_jpeg_xobject(
     output_doc: &mut lopdf::Document,
     jpeg_bytes: &[u8],
     width: u32,
     height: u32,
-    num_components: u8,
 ) -> lopdf::ObjectId {
+    // 解析失败按 RGB 兜底（与历史行为一致）；正常 JPEG 均能取到 SOF 段
+    let num_components = parse_jpeg_info(jpeg_bytes).map(|(_, _, nc)| nc).unwrap_or(3);
     let color_space: &[u8] = match num_components {
         1 => b"DeviceGray",
         4 => b"DeviceCMYK",
@@ -6857,7 +6861,7 @@ fn flatten_pdf_to_raster(
         let h_pt = page.height as f32 * 72.0 / dpi as f32;
 
         let jpeg_bytes = encode_image_to_jpeg_bytes(&img)?;
-        let xobj_id = build_lopdf_jpeg_xobject(&mut doc, &jpeg_bytes, page.width, page.height, 3);
+        let xobj_id = build_lopdf_jpeg_xobject(&mut doc, &jpeg_bytes, page.width, page.height);
         let content = format!("q {:.4} 0 0 {:.4} 0 0 cm /Im0 Do Q", w_pt, h_pt);
         let content_id = doc.add_object(lopdf::Object::Stream(
             lopdf::Stream::new(lopdf::Dictionary::new(), content.into_bytes()).with_compression(true),
@@ -7663,5 +7667,49 @@ mod pdf_text_tests {
         }
         std::fs::write(output, serde_json::to_vec(&report).unwrap()).unwrap();
         println!("Real PDF sample pages verified: {}", report.len());
+    }
+}
+
+#[cfg(test)]
+mod image_xobject_tests {
+    use super::*;
+
+    fn xobject_color_space(doc: &lopdf::Document, id: lopdf::ObjectId) -> String {
+        let name = doc.get_object(id).unwrap().as_stream().unwrap()
+            .dict.get(b"ColorSpace").unwrap().as_name().unwrap();
+        String::from_utf8(name.to_vec()).unwrap()
+    }
+
+    fn decoded_gray() -> image::DynamicImage {
+        image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(8, 8, image::Luma([128u8])))
+    }
+
+    /// 灰度图解码回退路径：JPEG 实际只有 1 个分量，XObject 必须声明 DeviceGray（issue #66）
+    #[test]
+    fn test_decoded_grayscale_image_declares_device_gray() {
+        let mut doc = lopdf::Document::with_version("1.4");
+        let (id, _, _) = image_to_lopdf_xobject(&ImageSource::Decoded(decoded_gray()), 0, &mut doc, None).unwrap();
+        assert_eq!(xobject_color_space(&doc, id), "DeviceGray");
+        let stream = doc.get_object(id).unwrap().as_stream().unwrap();
+        assert_eq!(parse_jpeg_info(&stream.content).unwrap().2, 1, "JPEG 实际应为单分量");
+    }
+
+    /// JPEG 直通路径同样按实际分量声明
+    #[test]
+    fn test_gray_jpeg_passthrough_declares_device_gray() {
+        let raw_bytes = encode_image_to_jpeg_bytes(&decoded_gray()).unwrap();
+        let source = ImageSource::JpegPassthrough { raw_bytes, width: 8, height: 8, num_components: 1 };
+        let mut doc = lopdf::Document::with_version("1.4");
+        let (id, _, _) = image_to_lopdf_xobject(&source, 0, &mut doc, None).unwrap();
+        assert_eq!(xobject_color_space(&doc, id), "DeviceGray");
+    }
+
+    /// 彩色图保持 DeviceRGB，不能被灰度判定误伤
+    #[test]
+    fn test_rgb_image_still_declares_device_rgb() {
+        let rgb = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([200u8, 100, 50])));
+        let mut doc = lopdf::Document::with_version("1.4");
+        let (id, _, _) = image_to_lopdf_xobject(&ImageSource::Decoded(rgb), 0, &mut doc, None).unwrap();
+        assert_eq!(xobject_color_space(&doc, id), "DeviceRGB");
     }
 }
