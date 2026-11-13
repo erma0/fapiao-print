@@ -931,17 +931,19 @@ function _betterCoordName(coord, cross) {
 }
 
 /**
- * 销售方名称兜底：按销售方信用代码定位购销方信息块，取代码行及上方最近的带后缀名称。
+ * 按信用代码定位购销方信息块，取代码行及上方最近的带后缀名称。
  * 名称标签/文字顺序异常时，不再用「全文最后一个公司名」这种会被备注、监制章污染的策略。
  *
  * @param {Array} words - _buildWords() 输出的词数组
- * @param {string} sellerCreditCode - 销售方统一社会信用代码
- * @param {string} [buyerName] - 已识别的购买方名称（排除同名）
+ * @param {string} creditCode - 统一社会信用代码
+ * @param {string} [excludeName] - 已识别的另一侧名称（排除同名）
+ * @param {string} [side] - 'buyer' 时固定按左列取（购方块在左侧/上方）；
+ *                          省略时沿用代码词自身位置（兼容旧票下部左侧的销方）
  * @returns {string} 名称，找不到返回空串
  */
-function _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName) {
-  if (!words || !words.length || !sellerCreditCode) return '';
-  var code = String(sellerCreditCode).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+function _findNameNearCreditCode(words, creditCode, excludeName, side) {
+  if (!words || !words.length || !creditCode) return '';
+  var code = String(creditCode).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
   if (code.length < 15) return '';
   var ccWord = null;
   for (var i = 0; i < words.length; i++) {
@@ -950,7 +952,7 @@ function _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName) {
   }
   if (!ccWord) return '';
   var boundary = _getSideBoundary(words);
-  var codeOnRight = ccWord.nx >= boundary;
+  var codeOnRight = side === 'buyer' ? false : (ccWord.nx >= boundary);
   function inCodeColumn(w) { return (w.nx >= boundary) === codeOnRight; }
 
   var _suffix = '(?:公司|集团|商行|商店|厂|部|院|所|中心|店|馆|站|社|行|会|处|室|局|办|坊|铺|有限合伙|合伙企业|个体工商户|个体户|工作室|经营部|门市部|分公司|事业部|事务所|医院|学校|幼儿园|合作社|企业|商社|贸易行|服务部)';
@@ -965,7 +967,7 @@ function _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName) {
     if (!_nameRe.test(t)) return false;
     if (_isLabelFragmentWord(w) || _isTaxAuthorityText(t) || _notNameRe.test(t)) return false;
     if (_isRemarkAreaName(t, '', -1, words)) return false;
-    if (buyerName && (t.indexOf(buyerName) >= 0 || buyerName.indexOf(t) >= 0)) return false;
+    if (excludeName && (t.indexOf(excludeName) >= 0 || excludeName.indexOf(t) >= 0)) return false;
     return true;
   });
   if (!cands.length) return '';
@@ -1363,6 +1365,66 @@ function _getSideBoundary(words) {
 }
 
 /**
+ * 收集「统一社会信用代码」标签词，用于信用代码的侧别判定。
+ * 优先用融合标签；拆字模板（dzcp 等）把「统一社会」拆成单字时，用
+ * 统/一/社/会 合成虚拟标签。issue #56：没有虚拟标签时 Method 1 只能用
+ * 代码词自身的 x 判侧，而横向压缩过的长代码中心会跨过动态边界，
+ * 购方代码因此被当成销方，后续交叉校验再把购方名称搬到销方。
+ * 同位置已有融合标签时不重复合成。
+ */
+function _synthesizeCreditLabels(words) {
+  if (!words || !words.length) return [];
+  var labels = words.filter(function(w) {
+    return /统一社会(?:信用代码)?/.test(w.text) || /统一社会(?:信用代码)?/.test(w.normText);
+  });
+  var tongWords = words.filter(function(w) {
+    return (w.text === '统' || w.normText === '统') && w.w < w.h * 3;
+  });
+  var usedTong = [];
+  for (var ti = 0; ti < tongWords.length; ti++) {
+    var tw = tongWords[ti];
+    if (usedTong.indexOf(tw) >= 0) continue;
+    var yiWords = words.filter(function(w) {
+      return (w.text === '一' || w.normText === '一') && w.w < w.h * 3 &&
+             Math.abs(w.y - tw.y) <= tw.h * 0.5 && w.x >= tw.x - tw.h * 0.5;
+    });
+    for (var yi = 0; yi < yiWords.length; yi++) {
+      var yw = yiWords[yi];
+      var sheWords = words.filter(function(w) {
+        return (w.text === '社' || w.normText === '社') && w.w < w.h * 3 &&
+               Math.abs(w.y - yw.y) <= yw.h * 0.5 && w.x >= yw.x - yw.h * 0.5;
+      });
+      if (!sheWords.length) continue;
+      var sw = sheWords[0];
+      var huiWords = words.filter(function(w) {
+        return (w.text === '会' || w.normText === '会') && w.w < w.h * 3 &&
+               Math.abs(w.y - sw.y) <= sw.h * 0.5 && w.x >= sw.x - sw.h * 0.5;
+      });
+      var hw = huiWords.length > 0 ? huiWords[0] : null;
+      var vcRight = hw || sw;
+      var covered = labels.some(function(l) {
+        return Math.abs(l.cy - tw.cy) <= tw.h &&
+               l.x <= vcRight.x + vcRight.w && l.x + l.w >= tw.x;
+      });
+      if (!covered) {
+        labels.push({
+          text: '统一社会', normText: '统一社会',
+          x: tw.x, y: tw.y,
+          w: (vcRight.x + vcRight.w) - tw.x, h: tw.h,
+          cx: (tw.cx + vcRight.cx) / 2, cy: (tw.cy + vcRight.cy) / 2,
+          nx: (tw.nx + vcRight.nx) / 2, ny: (tw.ny + vcRight.ny) / 2,
+          confidence: Math.min(tw.confidence || 0.9, yw.confidence || 0.9, sw.confidence || 0.9),
+          _isVirtual: true
+        });
+      }
+      usedTong.push(tw);
+      break;
+    }
+  }
+  return labels;
+}
+
+/**
  * Extract buyer/seller names using coordinate-based region matching.
  * Strategy: Find "名称" label positions, then collect all words in the
  * region to the right of each label (and slightly below for multi-line names).
@@ -1591,12 +1653,15 @@ function _extractNamesByCoords(words, result) {
       var isNotCcSingleChar = !(_wTrimmed.length === 1 && /[A-Za-z0-9]/.test(_wTrimmed));
       // 过滤纯空格词(内容流顺序混乱时可能独立出现)
       var isNotWhitespace = !/^\s*$/.test(w.text || '');
+      // 过滤竖排/旋转词(右边缘的竖排落款、旋转水印等):h 远大于 w,
+      // 不可能是公司名,混进来会把票面无关文字拼进名称(issue #56)
+      var isNotVertical = !(w.h > w.w * 1.8 && w.w < 80);
 
       // 税务机关/监制章/查验平台文本（如「国家税务总局」）只可能出现在右侧，
       // 不能当销售方名称候选
       var isNotTaxAuthority = isLeftSide || !_isTaxAuthorityText(w.text) && !_isTaxAuthorityText(w.normText);
 
-      if (isRightOfLabel && isInYRange && isNotLabel && isNotCreditLabel && isNotSectionLabel && isNotPagination && isNotDateFragment && isNotFullDate && isNotMetadata && isNotCreditCodeWord && isNotCcSingleChar && isNotWhitespace && isNotTaxAuthority) {
+      if (isRightOfLabel && isInYRange && isNotLabel && isNotCreditLabel && isNotSectionLabel && isNotPagination && isNotDateFragment && isNotFullDate && isNotMetadata && isNotCreditCodeWord && isNotCcSingleChar && isNotWhitespace && isNotVertical && isNotTaxAuthority) {
         var blockedByCredit = false;
         for (var ci = 0; ci < creditLabels.length; ci++) {
           var cl = creditLabels[ci];
@@ -1851,6 +1916,9 @@ function _extractByText(fullText, words) {
   // Some PDF text extractions (especially ride invoices) have "开票日期：" and the
   // actual date far apart in coordinates, so coordinate-based search fails.
   // Only use this if "开票日期" label exists (confirms it's an invoice with a date).
+  // 无标签兜底（issue #56）：部分模板把「开票日期」整词拆成单字并加宽字距，
+  // 上面所有 Pattern 都依赖整词标签而落空；此时取页面上部唯一的整词日期
+  // （标签区/票头区，ny < 0.35），值本身仍是完整词，不属猜测。
   if (!result.invoiceDate && words && words.length > 0) {
     var hasDateLabel = words.some(function(w) {
       return /开\s*票\s*日\s*期/.test(w.text) || /开\s*票\s*日\s*期/.test(w.normText);
@@ -1869,6 +1937,24 @@ function _extractByText(fullText, words) {
             break;
           }
         }
+      }
+    } else {
+      var _topDate = null;
+      for (var _tdi = 0; _tdi < words.length; _tdi++) {
+        var _tdw = words[_tdi];
+        if (_tdw.ny > 0.35) continue;
+        var _tdText = (_tdw.text || '').trim();
+        var _tdm = _tdText.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日$/) ||
+                   _tdText.match(/^(\d{4})\s*[-\/]\s*(\d{1,2})\s*[-\/]\s*(\d{1,2})$/);
+        if (!_tdm) continue;
+        var _tdYr = parseInt(_tdm[1], 10);
+        if (_tdYr < 2020 || _tdYr > 2035) continue;
+        if (!_topDate || _tdw.ny < _topDate.ny) _topDate = { ny: _tdw.ny, parts: _tdm };
+      }
+      if (_topDate) {
+        result.invoiceDate = _topDate.parts[1] + '-' +
+          _topDate.parts[2].padStart(2, '0') + '-' +
+          _topDate.parts[3].padStart(2, '0');
       }
     }
   }
@@ -1945,9 +2031,8 @@ function _extractByText(fullText, words) {
     // 预先收集所有"统一社会信用代码"标签词,用于信用代码的侧别判定
     // 信用代码词本身的nx可能跨越边界(如购方代码nx=0.12 > boundaryNx=0.10),
     // 应该用其上方最近的"统一社会信用代码"标签的nx来判定侧别
-    var _ccLabels = words.filter(function(w) {
-      return /统一社会(?:信用代码)?/.test(w.text) || /统一社会(?:信用代码)?/.test(w.normText);
-    });
+    // （拆字模板下标签由 _synthesizeCreditLabels 用 统/一/社/会 合成）
+    var _ccLabels = _synthesizeCreditLabels(words);
     words.forEach(function(w) {
       var cleaned = w.normText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
       // 18-char code: allow pure digits (统一社会信用代码 can be all digits per GB 32100-2015)
@@ -1989,53 +2074,7 @@ function _extractByText(fullText, words) {
   // Some PDFs (dzcp format) split "91320200796148368W" into '9','1','3',...
   // The label word contains "统一社会信用代码/纳税人识别号:9" (first digit fused).
   if ((!result.buyerCreditCode || !result.sellerCreditCode) && words && words.length > 0) {
-    var ccLabelWords = words.filter(function(w) {
-      return /统一社会(?:信用代码)?/.test(w.text) || /统一社会(?:信用代码)?/.test(w.normText);
-    });
-    // Fallback: synthesize virtual "统一社会" labels from single CJK chars (dzcp/iloveofd format)
-    // Handles PDFs where ALL chars are split into single-char words — no word contains "统一社会"
-    if (ccLabelWords.length === 0) {
-      var _tongWords = words.filter(function(w) {
-        return (w.text === '统' || w.normText === '统') && w.w < w.h * 3;
-      });
-      var _usedTong = [];
-      for (var _ti = 0; _ti < _tongWords.length; _ti++) {
-        var _tw = _tongWords[_ti];
-        if (_usedTong.indexOf(_tw) >= 0) continue;
-        var _yiWords = words.filter(function(w) {
-          return (w.text === '一' || w.normText === '一') && w.w < w.h * 3 &&
-                 Math.abs(w.y - _tw.y) <= _tw.h * 0.5 && w.x >= _tw.x - _tw.h * 0.5;
-        });
-        for (var _yi = 0; _yi < _yiWords.length; _yi++) {
-          var _yw = _yiWords[_yi];
-          var _sheWords = words.filter(function(w) {
-            return (w.text === '社' || w.normText === '社') && w.w < w.h * 3 &&
-                   Math.abs(w.y - _yw.y) <= _yw.h * 0.5 && w.x >= _yw.x - _yw.h * 0.5;
-          });
-          if (_sheWords.length > 0) {
-            var _sw = _sheWords[0];
-            var _huiWords = words.filter(function(w) {
-              return (w.text === '会' || w.normText === '会') && w.w < w.h * 3 &&
-                     Math.abs(w.y - _sw.y) <= _sw.h * 0.5 && w.x >= _sw.x - _sw.h * 0.5;
-            });
-            var _hw = _huiWords.length > 0 ? _huiWords[0] : null;
-            var _vcRight = _hw || _sw;
-            var virtualCreditLabel = {
-              text: '统一社会', normText: '统一社会',
-              x: _tw.x, y: _tw.y,
-              w: (_vcRight.x + _vcRight.w) - _tw.x, h: _tw.h,
-              cx: (_tw.cx + _vcRight.cx) / 2, cy: (_tw.cy + _vcRight.cy) / 2,
-              nx: (_tw.nx + _vcRight.nx) / 2, ny: (_tw.ny + _vcRight.ny) / 2,
-              confidence: Math.min(_tw.confidence || 0.9, _yw.confidence || 0.9, _sw.confidence || 0.9),
-              _isVirtual: true
-            };
-            ccLabelWords.push(virtualCreditLabel);
-            _usedTong.push(_tw);
-            break;
-          }
-        }
-      }
-    }
+    var ccLabelWords = _synthesizeCreditLabels(words);
     var _tracedCodes = [];
     for (var _tci = 0; _tci < ccLabelWords.length; _tci++) {
       var _tcLabel = ccLabelWords[_tci];
@@ -2192,8 +2231,15 @@ function _extractByText(fullText, words) {
   // 只补空：个人销售方没有企业后缀，可靠标签提取的名称不得被公司名候选覆盖。
   if (!result.sellerName &&
       result.sellerCreditCode && words && words.length > 0) {
-    var _nearSellerName = _findSellerNameNearCreditCode(words, result.sellerCreditCode, result.buyerName || '');
+    var _nearSellerName = _findNameNearCreditCode(words, result.sellerCreditCode, result.buyerName || '');
     if (_nearSellerName) result.sellerName = _nearSellerName;
+  }
+
+  // Priority 3.5b: 购方名称同样贴着购方信用代码取（信息块内）。
+  // 拆字模板下「名称」标签缺失/被判到销方时，购方名称会整体丢失（issue #56）。
+  if (!result.buyerName && result.buyerCreditCode && words && words.length > 0) {
+    var _nearBuyerName = _findNameNearCreditCode(words, result.buyerCreditCode, result.sellerName || '', 'buyer');
+    if (_nearBuyerName) result.buyerName = _nearBuyerName;
   }
 
   // Priority 4: "收款单位" / "销货单位" / "开票方" (non-standard invoices)
@@ -2316,15 +2362,18 @@ function _extractByText(fullText, words) {
   }
 
   // --- 发票备注（文字正则优先）---
-  // 取「备注」标签之后的内容，截到页脚（开票人/收款人/复核人）之前
+  // 取「备注」标签之后的内容，截到页脚落款行（开票人/收款人/复核人）之前
   if (!result.invoiceRemark) {
     var _rmRe = /备\s*注/g, _rmM, _rmEnd = -1;
     while ((_rmM = _rmRe.exec(text)) !== null) _rmEnd = _rmM.index + _rmM[0].length;
     if (_rmEnd >= 0) {
-      var _rmRest = text.substring(_rmEnd);
-      var _rmStop = _rmRest.search(/\n\s*(?:开\s*票\s*人|收\s*款\s*人|复\s*核\s*人)/);
-      if (_rmStop >= 0) _rmRest = _rmRest.substring(0, _rmStop);
-      result.invoiceRemark = _cleanRemark(_rmRest);
+      var _rmLines = text.substring(_rmEnd).split('\n');
+      var _rmBuf = [];
+      for (var _rli = 0; _rli < _rmLines.length; _rli++) {
+        if (_isFooterLineText(_rmLines[_rli])) break;
+        _rmBuf.push(_rmLines[_rli]);
+      }
+      result.invoiceRemark = _cleanRemark(_rmBuf.join('\n'));
     }
   }
 
@@ -2428,7 +2477,8 @@ function _crossValidateBuyerSeller(result, words) {
     var bNx2 = _findWordNx(result.buyerName);
     // Use dynamic boundary (v2.1.1) instead of fixed 0.5 for side determination
     var _rule4Bound = _getSideBoundary(words);
-    if (sCcNx2 !== null && bNx2 !== null && Math.abs(sCcNx2 - bNx2) < MARGIN * 2 && sCcNx2 >= _rule4Bound) {
+    if (sCcNx2 !== null && bNx2 !== null && Math.abs(sCcNx2 - bNx2) < MARGIN * 2 &&
+        sCcNx2 >= _rule4Bound && bNx2 >= _rule4Bound) {
       // buyerName sits at the same x as sellerCreditCode (seller side) → buyerName is actually seller
       result.sellerName = result.buyerName;
       result.buyerName = '';
@@ -3369,14 +3419,14 @@ function _extractItemNameRemarkByCoords(words, imgW, imgH) {
     }
     for (var ri2 = 0; ri2 < _footerRows.length; ri2++) {
       var _rowWords = _footerRows[ri2].words.slice().sort(function(a, b) { return a.x - b.x; });
-      var _rowText = _rowWords.map(function(w) { return w.normText; }).join('');
-      if (/开\s*票\s*人|收\s*款\s*人|复\s*核\s*人/.test(_rowText) && _footerRows[ri2].y < bottomLimit) {
+      var _rowText = _rowWords.map(function(w) { return w.text; }).join('');
+      if (_isFooterLineText(_rowText) && _footerRows[ri2].y < bottomLimit) {
         bottomLimit = _footerRows[ri2].y;
       }
     }
     var parts = remarkLabel._parts || [];
     var rx = remarkLabel.x + remarkLabel.w * 0.5;
-    var _topLimit = _getRemarkTop(words, remarkLabel);
+    var _topLimit = _getRemarkTop(words, remarkLabel, true);
     var rcand = words.filter(function(w) {
       if (w.confidence < 0.3) return false;
       if (w === remarkLabel || parts.indexOf(w) >= 0) return false;
@@ -3468,21 +3518,44 @@ function _extractRemarkByRegion(words, imgW, imgH) {
     lastCy = w.cy;
   });
   if (cur.length) lines.push(cur);
-  return lines.map(function(ln) {
+  var texts = lines.map(function(ln) {
     ln.sort(function(a, b) { return a.x - b.x; });
     return ln.map(function(w) { return w.text; }).join('');
-  }).join(' ').trim();
+  });
+  // 页脚落款行（开票人/收款人/复核人）不是备注内容，拆字/交错排版下也要整行剔除
+  return texts.filter(function(t) { return !_isFooterLineText(t); }).join(' ').trim();
 }
 
-/** 备注框上界：取完整合计行底边，兼容标签与金额字号/基线不齐。 */
-function _getRemarkTop(words, remark) {
+/**
+ * 判定一整行文本是不是页脚落款（开票人 / 收款人 / 复核人）。
+ * 文字层可能把标签拆成单字，并与取值交错排列（如「开票张xx人：」），
+ * 故除整词匹配外，再按「行首 + 字间容忍 + 人后紧跟冒号/空白」兜底；
+ * 后者要求冒号，避免把「开票金额合计人民币」这类正文误判成页脚。
+ */
+function _isFooterLineText(s) {
+  if (!s) return false;
+  var t = String(s).replace(/\s+/g, '');
+  if (/开票人|收款人|复核人/.test(t)) return true;
+  var m = t.match(/开[\s\S]{0,10}?票[\s\S]{0,10}?人|收[\s\S]{0,10}?款[\s\S]{0,10}?人|复[\s\S]{0,10}?核[\s\S]{0,10}?人/);
+  if (!m || m.index > 2) return false;
+  return /^[：:]/.test(t.substring(m.index + m[0].length));
+}
+
+/**
+ * 备注框上界：取完整合计行底边，兼容标签与金额字号/基线不齐。
+ * @param {boolean} [extendAboveLabel] 无合计锚点时是否向上收标签上方的正文
+ *   （仅备注提取开启；销售方名称兜底排除备注区时保持默认，避免误杀名称）
+ */
+function _getRemarkTop(words, remark, extendAboveLabel) {
   var parts = remark._parts || [];
   var lineH = parts.length ? parts[0].h : remark.h;
   var top = remark.y - Math.max(lineH, 8) * 1.5;
   var anchors = words.filter(function(w) {
     return /价\s*税\s*合\s*计|金\s*额\s*合\s*计|大\s*写|小\s*写/.test(w.normText) && w.y < remark.y;
   });
-  if (!anchors.length) return top;
+  if (!anchors.length) {
+    return extendAboveLabel ? _remarkTopAboveLabel(words, remark, lineH, top) : top;
+  }
   // 大写金额/数字可能比标签低近一行；只按标签底边会把它们收进备注。
   // 用整行几何位置排除，备注本身含有金额时仍正常保留。
   var anchorBottom = 0;
@@ -3496,6 +3569,48 @@ function _getRemarkTop(words, remark) {
   });
   // 合计行只有标签一个词时不能返回 -1：那会让备注区上界失效
   return top >= 0 ? top : anchorBottom;
+}
+
+/**
+ * 无合计锚点的模板：正文可能整体位于「备注」标签上方（标签在备注框内垂直居中/偏下，
+ * issue #56 的模板就是这样）。从标签顶向上逐行收，遇金额/合计等结构性行即停，
+ * 最多向上 4 行；且向上收的行须含「标签:值」式分隔符，否则保持默认上界。
+ */
+function _remarkTopAboveLabel(words, remark, lineH, fallbackTop) {
+  var parts = remark._parts || [];
+  var limit = remark.y - Math.max(lineH, 8) * 4;
+  var rows = [];
+  words.forEach(function(w) {
+    if (w === remark || parts.indexOf(w) >= 0) return;
+    if (w.confidence < 0.3) return;
+    if (w.cy >= remark.y) return;
+    if (w.y + w.h < limit) return;
+    var row = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (Math.abs(w.cy - rows[i].cy) <= Math.max(w.h, 8) * 0.6) { row = rows[i]; break; }
+    }
+    if (!row) { row = { cy: w.cy, y: w.y, words: [] }; rows.push(row); }
+    row.words.push(w);
+    if (w.y < row.y) row.y = w.y;
+  });
+  rows.sort(function(a, b) { return b.cy - a.cy; });
+  var top = fallbackTop;
+  for (var r = 0; r < rows.length; r++) {
+    var rowText = rows[r].words.slice().sort(function(a, b) { return a.x - b.x; })
+      .map(function(w) { return w.text; }).join('');
+    if (_isRemarkStructuralRow(rowText)) break;
+    if (!/[：:；;]/.test(rowText)) break;
+    if (rows[r].y < top) top = rows[r].y;
+  }
+  return top;
+}
+
+/** 金额 / 合计类结构行不是备注正文：上界扩到这里就停。带冒号的备注行即便含金额也放行。 */
+function _isRemarkStructuralRow(s) {
+  var t = String(s || '').replace(/\s+/g, '');
+  if (/价税合计|金额合计|大写|小写|合计|税额|税率|征收率/.test(t)) return true;
+  if (/[¥￥]/.test(t)) return true;
+  return !/[：:；;]/.test(t) && /\d{1,3}(?:,\d{3})*\.\d{2}/.test(t);
 }
 
 /** 定位「备注」标签：整词（备注）、上下拆开的两词（备 / 注）或同行拉开的两词 */
@@ -3868,7 +3983,7 @@ function extractByCoordinates(ocrResult) {
   }
   // 仍取不到时，按销售方信用代码就近补空；保留个人销售方名称。
   if (!sellerName) {
-    var _nearSeller = _findSellerNameNearCreditCode(words, sellerCreditCode, buyerName);
+    var _nearSeller = _findNameNearCreditCode(words, sellerCreditCode, buyerName);
     if (_nearSeller) sellerName = _nearSeller;
   }
 

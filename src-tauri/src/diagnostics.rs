@@ -106,7 +106,8 @@ fn keyword_hits(lines: &[crate::pdf_engine::PdfTextLine]) -> String {
         'scan: for line in lines {
             for w in &line.words {
                 let t: String = w.text.chars().filter(|c| !c.is_whitespace()).collect();
-                let hit = if kw.len() == 1 { t == *kw } else { t.contains(*kw) };
+                // 单字按整词匹配（len() 是字节数，中文恒为 3，必须用 chars().count()）
+                let hit = if kw.chars().count() == 1 { t == *kw } else { t.contains(*kw) };
                 if hit {
                     found = Some((w.x + w.w / 2.0, w.y + w.h / 2.0));
                     break 'scan;

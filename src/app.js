@@ -81,6 +81,7 @@ var S = {
   quickLayoutMax: 0,  // 顶部显示数量，0=全部
   editIdx: -1,
   selectedSlot: -1,  // Index of currently selected slot in preview (for per-slot adjustment)
+  extraSlots: [],    // 多选：除主选中外的同页槽位索引；翻页/列表重排即清空（issue #64）
   amtMode: 'tax',
   printedFilter: 'all',
   fileFilter: 'all',
@@ -577,36 +578,42 @@ function ocrMaxDim() {
 // =====================================================
 async function restoreFiles(paths) {
   _isRestoringFiles = true;
-  var checks = await Promise.all(paths.map(function(p) {
-    return invoke('check_path_exists', { path: p })
-      .then(function(info) { return { path: p, valid: !!(info && info.exists && info.isFile) }; })
-      .catch(function() { return { path: p, valid: false }; });
-  }));
-  var valid = checks.filter(function(c) { return c.valid; }).map(function(c) { return c.path; });
-  var skipped = paths.length - valid.length;
-  if (!valid.length) {
-    _isRestoringFiles = false;
-    renderFileList();
-    if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
-    return;
-  }
+  _restoringFileList = true; // 恢复期内禁止落盘快照：S.files 尚不完整，会把上次的文件列表写成残表
   try {
-    if (valid.length <= 3) {
-      toastLoading('恢复 ' + valid.length + ' 个文件...');
-      var fileDataList = await invoke('open_invoice_files', { paths: valid });
-      if (fileDataList && fileDataList.length > 0) {
-        await processFileDataList(fileDataList);
-      }
-    } else {
-      await processFilesIncremental(valid);
+    var checks = await Promise.all(paths.map(function(p) {
+      return invoke('check_path_exists', { path: p })
+        .then(function(info) { return { path: p, valid: !!(info && info.exists && info.isFile) }; })
+        .catch(function() { return { path: p, valid: false }; });
+    }));
+    var valid = checks.filter(function(c) { return c.valid; }).map(function(c) { return c.path; });
+    var skipped = paths.length - valid.length;
+    if (!valid.length) {
+      _isRestoringFiles = false;
+      renderFileList();
+      if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
+      return;
     }
-  } catch(e) {
-    toast('恢复发票列表失败: ' + String(e));
+    try {
+      if (valid.length <= 3) {
+        toastLoading('恢复 ' + valid.length + ' 个文件...');
+        var fileDataList = await invoke('open_invoice_files', { paths: valid });
+        if (fileDataList && fileDataList.length > 0) {
+          await processFileDataList(fileDataList);
+        }
+      } else {
+        await processFilesIncremental(valid);
+      }
+    } catch(e) {
+      toast('恢复发票列表失败: ' + String(e));
+    }
+    // Delay to allow async applyPdfTextToResults callbacks to finish
+    // before clearing the OCR-skip flag (they fire after processFileDataList returns)
+    setTimeout(function() { _isRestoringFiles = false; }, 3000);
+    if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
+  } finally {
+    _restoringFileList = false;
+    if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
   }
-  // Delay to allow async applyPdfTextToResults callbacks to finish
-  // before clearing the OCR-skip flag (they fire after processFileDataList returns)
-  setTimeout(function() { _isRestoringFiles = false; }, 3000);
-  if (skipped > 0) toast('上次的 ' + skipped + ' 个文件已不存在，已自动跳过');
 }
 
 var _insertSlotIdx = -1;   // 点击版面空白槽位加号上传时的目标槽位，-1 表示普通追加
@@ -787,7 +794,7 @@ function locateInsertedFile(id) {
   var perPage = getPerPage(getSettings());
   S.currentPage = Math.floor(activeIdx / perPage);
   _activeFileIdx = S.files.indexOf(f);
-  S.selectedSlot = activeIdx % perPage;
+  setSelectedSlot(activeIdx % perPage);
 }
 
 // 左侧文件列表滚动到当前激活项（renderFileList 之后调用）
@@ -2937,7 +2944,7 @@ function deleteSelected() {
 // 沿用旧索引会指到别的票，接下来点删除 / 改份数就作用在错的发票上（选中票已不在排版里则清空）
 function reflowAfterListChange(keep) {
   if (keep) refreshAfterCopiesChange(keep);
-  else { S.selectedSlot = -1; renderFileList(); updatePreview(); }
+  else { setSelectedSlot(-1); renderFileList(); updatePreview(); }
   // 删空时 updatePreview 会在无票分支提前返回，这里兜住工具条与单票调整面板
   updateAdjPanel();
   updatePrintBtn(); updateSummaryBtn();
@@ -2983,11 +2990,11 @@ function finalizeMedicalDetailPages(results) {
 }
 function rotFile(i) { S.files[i].rotation = (S.files[i].rotation + 90) % 360; renderFileList(); updatePreview(); }
 function rotateSelected() {
-  var f = getSelectedFileObj();
-  if (!f) { toast('请先选中版面中的发票'); return; }
-  var i = S.files.indexOf(f);
-  if (i < 0) return;
-  rotFile(i);
+  var targets = getSelectedSlotFileObjs();
+  if (!targets.length) { toast('请先选中版面中的发票'); return; }
+  targets.forEach(function(f) { f.rotation = (f.rotation + 90) % 360; });
+  renderFileList();
+  updatePreview();
   syncSlotToolbar();
 }
 // OCR 仅对图像与 PDF 有意义；XML/OFD 为结构化数据，字段直接解析，无需 OCR（用户要求禁用入口）
@@ -3044,13 +3051,12 @@ function clickFileItem(idx, event, opts) {
   }
   if (activeIdx >= 0) {
     S.currentPage = Math.floor(activeIdx / perPage);
-    S.selectedSlot = activeIdx % perPage;
+    setSelectedSlot(activeIdx % perPage);
     updatePreview();
   } else {
     // 不参与排版的文件（如 XML 数电票）：清除预览槽位选中态并刷新面板
-    S.selectedSlot = -1;
-    var selEl = document.querySelector('.invoice-slot.selected');
-    if (selEl) selEl.classList.remove('selected');
+    setSelectedSlot(-1);
+    applySlotSelectionHighlight();
     updateAdjPanel();
     updatePrintBtn();
   }
@@ -3434,14 +3440,82 @@ function fallbackCopy(text, btn) {
 // =====================================================
 // Per-slot Adjustment
 // =====================================================
-function selectSlot(idx) {
-  S.selectedSlot = idx;
+// 多选状态：selectedSlot 为主选中（工具条/调整面板指向它），extraSlots 保存同页其余选中槽位。
+// 主选中存在时才可能有多选；翻页/列表变化统一经 setSelectedSlot 清空额外选中。
+function setSlotSelection(primary, extras) {
+  S.selectedSlot = (typeof primary === 'number' && primary >= 0) ? primary : -1;
+  var out = [];
+  (extras || []).forEach(function(i) {
+    if (i >= 0 && i !== S.selectedSlot && out.indexOf(i) < 0) out.push(i);
+  });
+  S.extraSlots = S.selectedSlot >= 0 ? out : [];
+}
+
+function setSelectedSlot(idx) {
+  setSlotSelection(idx, []);
+}
+
+function getSelectedSlotIndices() {
+  var out = [];
+  if (S.selectedSlot >= 0) out.push(S.selectedSlot);
+  (S.extraSlots || []).forEach(function(i) {
+    if (i >= 0 && i !== S.selectedSlot && out.indexOf(i) < 0) out.push(i);
+  });
+  return out;
+}
+
+function isSlotSelected(idx) {
+  return S.selectedSlot === idx || (S.extraSlots || []).indexOf(idx) >= 0;
+}
+
+// 选中槽位对应的文件（去重：同一张票多份副本只返回一次）
+// includePlaceholder=true 时包含空白占位（删除入口需要能删掉占位）
+function getSelectedSlotFileObjs(includePlaceholder) {
+  var files = getActiveFiles();
+  var perPage = getPerPage(getSettings());
+  var pageStart = S.currentPage * perPage;
+  var out = [];
+  getSelectedSlotIndices().forEach(function(i) {
+    var f = files[pageStart + i];
+    if (f && (includePlaceholder || !f._placeholder) && out.indexOf(f) < 0) out.push(f);
+  });
+  return out;
+}
+
+function applySlotSelectionHighlight() {
+  document.querySelectorAll('.invoice-slot').forEach(function(el) {
+    var i = parseInt(el.dataset.slotIdx);
+    el.classList.toggle('selected', !isNaN(i) && isSlotSelected(i));
+  });
+}
+
+// Ctrl+点击：加入/移出多选；移出主选中时把另一个选中项提升为主选中
+function toggleSlotSelection(idx) {
+  if (idx < 0) return;
+  var files = getActiveFiles();
+  var perPage = getPerPage(getSettings());
+  var f = files[S.currentPage * perPage + idx];
+  if (!f || f._placeholder) return;
+  if (idx === S.selectedSlot) {
+    var extras = S.extraSlots.slice();
+    setSlotSelection(extras.length ? extras[0] : -1, extras.slice(1));
+  } else if (S.extraSlots.indexOf(idx) >= 0) {
+    setSlotSelection(S.selectedSlot, S.extraSlots.filter(function(i) { return i !== idx; }));
+  } else if (S.selectedSlot < 0) {
+    setSlotSelection(idx, []);
+  } else {
+    setSlotSelection(S.selectedSlot, S.extraSlots.concat([idx]));
+  }
   updateAdjPanel();
-  // Highlight in preview
-  document.querySelectorAll('.invoice-slot').forEach(function(el) { el.classList.remove('selected'); });
+  applySlotSelectionHighlight();
+  if (S.selectedSlot >= 0) syncSidebarToSelectedSlot();
+}
+
+function selectSlot(idx) {
+  setSelectedSlot(idx);
+  updateAdjPanel();
+  applySlotSelectionHighlight();
   if (idx >= 0) {
-    var slotEl = document.querySelector('.invoice-slot[data-slot-idx="' + idx + '"]');
-    if (slotEl) slotEl.classList.add('selected');
     syncSidebarToSelectedSlot();
     // 首次选中提示隐藏手势（issue #33 / #60）：浮动工具条设份数 / 右键菜单，跨会话仅提示一次
     if (!window._slotHintShown) {
@@ -3585,9 +3659,9 @@ function refreshAfterCopiesChange(selection) {
       var pos = matches[Math.min(selection.ordinal, matches.length - 1)];
       var perPage = getPerPage(getSettings());
       S.currentPage = Math.floor(pos / perPage);
-      S.selectedSlot = pos % perPage;
+      setSelectedSlot(pos % perPage);
     } else {
-      S.selectedSlot = -1;
+      setSelectedSlot(-1);
     }
   }
   renderFileList();
@@ -3596,10 +3670,11 @@ function refreshAfterCopiesChange(selection) {
 }
 function setSlotCopies(n) {
   closeSlotCopyMenu();
-  var f = getSelectedFileObj();
-  if (!f) return;
+  var targets = getSelectedSlotFileObjs();
+  if (!targets.length) return;
   var selection = captureSlotSelection();
-  f.copies = Math.max(1, Math.min(99, parseInt(n) || 1));
+  var v = Math.max(1, Math.min(99, parseInt(n) || 1));
+  targets.forEach(function(f) { f.copies = v; });
   refreshAfterCopiesChange(selection);
 }
 // 「自定义…」：打开发票选项弹窗（含 1-99 份数输入），排版页无需再切回列表
@@ -3611,15 +3686,23 @@ function openSlotInvModal() {
   if (idx >= 0) openInvModal(idx);
 }
 
-// 浮动工具条「✕ 删除」（issue #43②）：删除选中槽位对应的那张发票
+// 浮动工具条「✕ 删除」（issue #43②）：删除选中槽位对应的发票（多选时批量删除）
 function deleteSlotInvoice() {
-  var f = getSelectedFileObj();
-  if (!f) return;
-  var idx = S.files.indexOf(f);
-  if (idx < 0) return;
-  rmFile(idx);
-  S.selectedSlot = -1;
-  updateAdjPanel();
+  var targets = getSelectedSlotFileObjs(true);
+  if (!targets.length) return;
+  var idxs = [];
+  targets.forEach(function(f) {
+    var i = S.files.indexOf(f);
+    if (i >= 0) idxs.push(i);
+  });
+  idxs.sort(function(a, b) { return b - a; });
+  idxs.forEach(function(i) {
+    S.files.splice(i, 1);
+    if (_activeFileIdx === i) _activeFileIdx = -1;
+    else if (_activeFileIdx > i) _activeFileIdx--;
+  });
+  setSelectedSlot(-1);
+  reflowAfterListChange(null);
 }
 
 // 右侧选中版面槽位时，左侧文件列表同步高亮并滚动到对应发票
@@ -3685,11 +3768,13 @@ function onAdjOffsetChange() {
 }
 
 function resetSlotAdj() {
-  var f = getSelectedFileObj();
-  if (!f) return;
-  f.slotScale = 1;
-  f.slotOffsetX = 0;
-  f.slotOffsetY = 0;
+  var targets = getSelectedSlotFileObjs();
+  if (!targets.length) return;
+  targets.forEach(function(f) {
+    f.slotScale = 1;
+    f.slotOffsetX = 0;
+    f.slotOffsetY = 0;
+  });
   updateAdjPanel();
   updatePreview();
 }
@@ -3838,20 +3923,8 @@ function syncEnhanceBtn(f) {
   }
 }
 
-/**
- * Quick alignment: snap the selected invoice to a slot edge or center.
- * @param {string} alignH - 'left' | 'center' | 'right'
- * @param {string} alignV - 'top' | 'center' | 'bottom'
- */
-function setSlotAlignment(alignH, alignV) {
-  var f = getSelectedFileObj();
-  if (!f) return;
-
-  var settings = getSettings();
-  var layout = calculateLayout(settings);
-  var slot = layout.slots[S.selectedSlot];
-  if (!slot) return;
-
+// 把单张票对齐到槽位边缘/居中（几何计算与 renderPage 镜像）
+function alignFileInSlot(f, slot, settings, alignH, alignV) {
   // Use rotated visual dimensions — same as renderPage/PDF export (rotate-then-fit).
   // renderPage computes the wrapper from rotated visual dims; offsets move the
   // visual (post-rotation) box, so alignment gaps must use visual dims too.
@@ -3916,7 +3989,28 @@ function setSlotAlignment(alignH, alignV) {
 
   f.slotOffsetX = Math.round(offsetX * 10) / 10;
   f.slotOffsetY = Math.round(offsetY * 10) / 10;
+}
 
+/**
+ * Quick alignment: snap the selected invoice(s) to a slot edge or center.
+ * @param {string} alignH - 'left' | 'center' | 'right'
+ * @param {string} alignV - 'top' | 'center' | 'bottom'
+ */
+function setSlotAlignment(alignH, alignV) {
+  var files = getActiveFiles();
+  var settings = getSettings();
+  var perPage = getPerPage(settings);
+  var pageStart = S.currentPage * perPage;
+  var layout = calculateLayout(settings);
+  var changed = 0;
+  getSelectedSlotIndices().forEach(function(i) {
+    var f = files[pageStart + i];
+    var slot = layout.slots[i];
+    if (!f || f._placeholder || !slot) return;
+    alignFileInSlot(f, slot, settings, alignH, alignV);
+    changed++;
+  });
+  if (!changed) return;
   updateAdjPanel();
   updatePreview();
 }
@@ -4602,10 +4696,11 @@ function buildPages(files, settings) {
 var _saveTimer = null;
 var _importingSettings = false; // 导入写入后到 reload 之间禁止自动保存，防止内存旧配置覆盖刚导入的内容
 var _restoringSettings = false; // 启动恢复期禁止回写，防止空 DOM / 空 S.files 快照覆盖已恢复的文件级记忆
+var _restoringFileList = false; // 文件列表恢复期：S.files 尚未完整，期间禁止落盘快照
 var _restoreSavePending = false; // 恢复期内被拦截的保存请求，解锁后补一次，避免吞掉启动瞬间的操作
 function saveSettings() {
   if (_importingSettings) return;
-  if (_restoringSettings) { _restoreSavePending = true; return; }
+  if (_restoringSettings || _restoringFileList) { _restoreSavePending = true; return; }
   try { localStorage.setItem('ticketchan-settings', JSON.stringify(collectSettings())); } catch(e) {}
 }
 function updatePreview() {
@@ -4635,9 +4730,18 @@ function updatePreview() {
     document.getElementById('stPages').textContent = '0 页'; return;
   }
   var settings = getSettings();
+  // 多选只保留当前版式下真实存在的槽位；每页槽数变少时清掉越界索引（issue #64）
+  var _perPageNow = getPerPage(settings);
+  if (S.selectedSlot >= _perPageNow) {
+    setSlotSelection(-1, []);
+  } else {
+    S.extraSlots = S.extraSlots.filter(function(i) { return i >= 0 && i < _perPageNow; });
+  }
   var pages = buildPages(files, settings);
   S.totalPages = pages.length;
+  var _prevPage = S.currentPage;
   S.currentPage = Math.max(0, Math.min(S.currentPage, pages.length - 1));
+  if (S.currentPage !== _prevPage) setSlotSelection(-1, []);
   document.getElementById('stPages').textContent = pages.length + ' 页';
   renderPage(pages[S.currentPage], S.currentPage, pages.length, settings);
   updatePageDots(pages.length);
@@ -4671,9 +4775,9 @@ function updatePageDots(t) {
     d.innerHTML = html;
   }
 }
-function prevPage() { if (S.currentPage > 0) { S.currentPage--; S.selectedSlot = -1; updatePreview(); } }
-function nextPage() { if (S.currentPage < S.totalPages - 1) { S.currentPage++; S.selectedSlot = -1; updatePreview(); } }
-function gotoPage(i) { S.currentPage = i; S.selectedSlot = -1; updatePreview(); }
+function prevPage() { if (S.currentPage > 0) { S.currentPage--; setSelectedSlot(-1); updatePreview(); } }
+function nextPage() { if (S.currentPage < S.totalPages - 1) { S.currentPage++; setSelectedSlot(-1); updatePreview(); } }
+function gotoPage(i) { S.currentPage = i; setSelectedSlot(-1); updatePreview(); }
 function getFitZoom() {
   var wrap = document.getElementById('previewWrap');
   if (!wrap) return 100;
@@ -5446,6 +5550,12 @@ document.addEventListener('keydown', function(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeZoom(-5); }
   if ((e.ctrlKey || e.metaKey) && e.key === '0') { e.preventDefault(); setZoom('fit'); }
   if (e.key === 'Escape') {
+    var um = document.getElementById('updateModal');
+    if (um && !um.classList.contains('hidden')) {
+      e.preventDefault();
+      requestCloseUpdateModal();
+      return;
+    }
     var sm = document.getElementById('summaryModal');
     if (sm && !sm.classList.contains('hidden')) {
       e.preventDefault();
@@ -5457,16 +5567,19 @@ document.addEventListener('keydown', function(e) {
 // Wheel: selected slot + cursor over it → zoom slot; plain → flip page; Ctrl → zoom view
 var _wheelFlipTs = 0; // 上次滚轮翻页时间，节流防触控板惯性连翻
 document.getElementById('previewWrap').addEventListener('wheel', function(e) {
-  if (!e.ctrlKey && S.selectedSlot >= 0) {
+  if (!e.ctrlKey) {
+    // 悬停在任一选中票面上滚轮：对全部选中票同步缩放（issue #64）
     var slotEl = e.target.closest('.invoice-slot');
-    if (slotEl && parseInt(slotEl.dataset.slotIdx) === S.selectedSlot) {
-      e.preventDefault();
-      var f = getSelectedFileObj();
-      if (f) {
-        var step = 5;
-        var curPct = Math.round((f.slotScale || 1) * 100);
-        var newPct = e.deltaY > 0 ? curPct - step : curPct + step;
-        f.slotScale = Math.max(0.2, Math.min(5.0, newPct / 100));
+    var slotIdx = slotEl ? parseInt(slotEl.dataset.slotIdx) : -1;
+    if (slotIdx >= 0 && isSlotSelected(slotIdx)) {
+      var targets = getSelectedSlotFileObjs();
+      if (targets.length) {
+        e.preventDefault();
+        var step = e.deltaY > 0 ? -5 : 5;
+        targets.forEach(function(f) {
+          var pct = Math.round((f.slotScale || 1) * 100) + step;
+          f.slotScale = Math.max(0.2, Math.min(5.0, pct / 100));
+        });
         updatePreview();
         updateAdjPanel();
         return;
@@ -5650,7 +5763,9 @@ document.getElementById('orientation').value = 'landscape';
   } catch(e) {}
 })();
 
-(function() {
+// 旧版独立键 ticketchan-print-mode → ticketchan-settings.printMode 的一次性迁移。
+// 抽成函数便于回归测试；写入失败时保留旧键，下次启动还能再迁移。
+function migrateLegacyPrintMode() {
   try {
     var pm = localStorage.getItem('ticketchan-print-mode');
     if (!(pm === 'confirm' || pm === 'direct' || pm === 'pdfium' || pm === 'pdf')) {
@@ -5658,13 +5773,19 @@ document.getElementById('orientation').value = 'landscape';
       document.getElementById('printMode').value = 'pdfium';
       return;
     }
-    // 旧版独立键 → ticketchan-settings.printMode 的一次性迁移（settings 优先）
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem('ticketchan-settings') || 'null'); } catch(e) {}
-    if (!saved || !saved.printMode) document.getElementById('printMode').value = pm;
-    localStorage.removeItem('ticketchan-print-mode');
+    var migrated = true;
+    if (!saved || !saved.printMode) {
+      document.getElementById('printMode').value = pm;
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
+      saved.printMode = pm;
+      try { localStorage.setItem('ticketchan-settings', JSON.stringify(saved)); } catch(e) { migrated = false; }
+    }
+    if (migrated) localStorage.removeItem('ticketchan-print-mode');
   } catch(e) {}
-})();
+}
+migrateLegacyPrintMode();
 
 // Restore OCR enabled setting
 (function() {
@@ -5721,7 +5842,11 @@ loadSettings();
 if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
 setTimeout(function() {
   _restoringSettings = false;
-  if (_restoreSavePending) { _restoreSavePending = false; saveSettings(); }
+  if (!_restoreSavePending) return;
+  // 文件列表还没开始/还没恢复完时先别落盘，否则 filePaths 会被残缺的 S.files 覆盖
+  if (_restoringFileList || (_restoreFilePaths && _restoreFilePaths.length)) return;
+  _restoreSavePending = false;
+  saveSettings();
 }, 1000);
 syncPhotoModeUI();
 applyPerSectionLabelWidth();
@@ -6126,6 +6251,8 @@ function syncUpdateDownloadUI() {
   }
   if (cancel) cancel.classList.toggle('hidden', !busy);
   if (open) open.disabled = busy || _updateApplying;
+  var modal = document.getElementById('updateModal');
+  if (modal) modal.classList.toggle('is-busy', busy || _updateApplying);
   setUpdateProgressUI(busy || _updateApplying);
 }
 
@@ -6133,16 +6260,23 @@ function resetUpdateProgressState() {
   _updateDownloading = false;
   _updateApplying = false;
   var fill = document.getElementById('updateProgressFill');
-  if (fill) fill.style.width = '0%';
+  if (fill) { fill.style.width = '0%'; fill.classList.remove('done'); }
   var txt = document.getElementById('updateProgressText');
   if (txt) txt.textContent = '准备下载…';
+  var pct = document.getElementById('updateProgressPct');
+  if (pct) pct.textContent = '0%';
 }
 
 function renderUpdateProgress(p) {
   var pct = (p && typeof p.percent === 'number' && isFinite(p.percent)) ? p.percent : 0;
   pct = Math.max(0, Math.min(100, pct));
   var fill = document.getElementById('updateProgressFill');
-  if (fill) fill.style.width = pct.toFixed(1) + '%';
+  if (fill) {
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.classList.toggle('done', pct >= 100);
+  }
+  var pctEl = document.getElementById('updateProgressPct');
+  if (pctEl) pctEl.textContent = pct.toFixed(0) + '%';
   var txt = document.getElementById('updateProgressText');
   if (!txt) return;
   txt.textContent = p && p.total > 0
@@ -6213,7 +6347,9 @@ function showUpdateModal(info) {
   }
   syncUpdateDownloadUI();
 
-  document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '🧪 发现新测试版' : '🆕 发现新版本';
+  document.getElementById('updateModalTitle').textContent = info.is_prerelease ? '发现新测试版' : '发现新版本';
+  var heroIcon = document.getElementById('updateHeroIcon');
+  if (heroIcon) heroIcon.textContent = info.is_prerelease ? '🧪' : '🚀';
   var badge = document.getElementById('updateChannelBadge');
   if (badge) {
     badge.textContent = info.is_prerelease ? '测试版' : '正式版';
@@ -6234,21 +6370,39 @@ function showUpdateModal(info) {
 
   document.getElementById('updateNotes').innerHTML = renderReleaseNotes(info.release_notes);
 
-  // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」
+  // 主按钮文案带上更新包大小，让用户下载前心里有数
+  var dlBtn = document.getElementById('updateDownloadBtn');
+  if (dlBtn) {
+    dlBtn.textContent = _updateAssetPicked
+      ? '⬇ 下载并更新（' + formatUpdateSize(_updateAssetPicked.size) + '）'
+      : '⬇ 下载并更新';
+  }
+
+  // Build asset list — 与当前安装类型一致（轻量/OCR）的产物标记「推荐」；
+  // 可直接替换 exe 的那一项点击即走应用内更新，其余产物仍交浏览器下载
+  var autoUrl = _updateAssetPicked ? _updateAssetPicked.download_url : '';
   var assetsHtml = '';
   if (info.assets && info.assets.length) {
-    assetsHtml = '<div class="update-assets-title">下载文件：</div><ul class="update-assets">';
+    assetsHtml = '<div class="update-section-title">下载文件</div><ul class="update-assets">';
     info.assets.forEach(function(a) {
       var variant = getAssetVariant(a.name);
       var recommended = isOcrBuild() ? variant.ocr : !variant.ocr;
-      assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + '" onclick="openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')">' +
+      var isAuto = !!autoUrl && a.download_url === autoUrl;
+      var click = isAuto
+        ? 'startUpdateDownload()'
+        : 'openUpdateAsset(\'' + a.download_url.replace(/'/g, "\\'") + '\')';
+      var icon = variant.kind === 'portable-exe' ? '⚡'
+        : variant.kind === 'portable-zip' ? '📦' : '🛠';
+      var recBadge = (!isAuto && recommended) ? '<span class="update-asset-rec">推荐</span>' : '';
+      var cta = isAuto
+        ? '<span class="update-asset-cta auto">应用内更新 →</span>'
+        : '<span class="update-asset-cta">下载</span>';
+      assetsHtml += '<li class="update-asset' + (recommended ? ' recommended' : '') + (isAuto ? ' auto' : '') + '" onclick="' + click + '">' +
+        '<span class="update-asset-icon">' + icon + '</span>' +
         '<div class="update-asset-info">' +
-          '<span class="update-asset-name">📥 ' + escHtml(a.name) + '</span>' +
-          '<span class="update-asset-meta">' + variant.label +
-            (recommended ? '<span class="update-asset-rec">推荐</span>' : '') +
-          '</span>' +
-        '</div>' +
-        '<span class="update-asset-size">' + formatUpdateSize(a.size) + '</span></li>';
+          '<span class="update-asset-name">' + variant.label + recBadge + '</span>' +
+          '<span class="update-asset-meta">' + escHtml(a.name) + ' · ' + formatUpdateSize(a.size) + '</span>' +
+        '</div>' + cta + '</li>';
     });
     assetsHtml += '</ul>';
   }
@@ -6258,7 +6412,7 @@ function showUpdateModal(info) {
   var openBtn = document.getElementById('updateOpenBtn');
   if (openBtn) {
     // 没有可自动更新的产物时，「前往 GitHub」升为主按钮
-    openBtn.textContent = _updateAssetPicked ? '🌐 前往 GitHub 下载' : '⬇️ 前往 GitHub 下载';
+    openBtn.textContent = _updateAssetPicked ? '🌐 前往 GitHub 下载' : '⬇ 前往 GitHub 下载';
     openBtn.classList.toggle('btn-primary', !_updateAssetPicked);
     openBtn.disabled = false;
     openBtn.onclick = function() {
@@ -6269,6 +6423,16 @@ function showUpdateModal(info) {
   }
 
   modal.classList.remove('hidden');
+}
+
+/** 关闭更新弹窗：下载/替换进行中只允许通过「取消下载」退出，避免后台静默更新 */
+function requestCloseUpdateModal() {
+  if (_updateDownloading) {
+    toast('正在下载更新，可先点击「取消下载」', 2500);
+    return;
+  }
+  if (_updateApplying) return;
+  closeUpdateModal();
 }
 
 function closeUpdateModal() {

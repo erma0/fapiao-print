@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **版本**: v2.7.1-beta.2（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
+- **版本**: v2.7.1（数据源 `package.json`，`npm run bump` 同步到 Cargo.toml + tauri.conf.json；`Cargo.lock` 的 `ticketchan` 包版本行需手动同步）
 - **技术栈**: Tauri 2.x (Rust) + 原生 HTML/CSS/JS（无框架、无打包）
 - **双版本**: 轻量版 / OCR 版（PP-OCRv6）；Cargo.toml 定义 `ocr` feature，`lib.rs` 按 `#[cfg(feature = "ocr")]` 条件注册命令，OCR 构建用 `tauri.ocr.conf.json` 叠加配置（仅追加 bundle.resources）
 - **目录结构**:
@@ -66,6 +66,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 - PDF 页面 → `extract_page_as_form_xobject()` 提取为 Form XObject（矢量保真），标注（印章/签章）从 `/Annots` 经 `/AP /N` 烘焙进内容流（跳过隐藏标注；后缀 `Q` 必须先于标注绘制命令）
 - 图片/OFD → `image_to_lopdf_xobject()` 编码为 JPEG DCTDecode Image XObject；旋转烘焙进像素（`RENDER_DPI=300` 换算 pt）
+- 图片 XObject 的 `/ColorSpace` 由 `build_lopdf_jpeg_xobject()` 按 JPEG SOF 段的真实分量数决定（灰度=`DeviceGray`），**禁止调用方硬编码**——错声明会让 PDFium 按 3 字节/像素解读，画面横向三连 + 彩色重影（issue #66）
 - 源 PDF `/Rotate` 属性烘焙进内容流前缀（PDF spec：显示时顺时针旋转），90=`[0 -1 1 0 0 w]`、180=`[-1 0 0 -1 w h]`、270=`[0 1 -1 0 h 0]`
 - 页面组装：`build_nup_content_stream()` 按 slot 计算 cm 矩阵 + `q re W n` 槽位裁剪 + Do；页脚/编号/水印为 PNG Image XObject 叠加
 
@@ -96,12 +97,15 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 - DLL: `{exe}/tools/pdfium.dll`，下载源 `bblanchon/pdfium-binaries` via `gh-proxy.com`，`AtomicBool DOWNLOAD_CANCELLED` 支持取消
 - 渲染：`FPDF_LoadMemDocument` → 逐页 `FPDF_RenderPage(printer_dc)` 原生 DPI；SEH 捕获异常时 fallback `FPDF_RenderPageBitmap` + `StretchDIBits` 位图（`seh_wrapper.c`，`cc` 编译为静态库）
 - DEVMODE: `build_dev_mode()` + `infer_paper_size()`；`get_printer_default_devmode()` 返回**完整** `Vec<u8>` 缓冲区（含 `dmDriverExtra` 驱动私有数据）
+- **单/双面两种状态都显式下发**（issue #63）：`duplex=false` 也写 `DMDUP_SIMPLEX`，不能留给驱动默认（不少机型默认双面）；改好的 DEVMODE 再经 `merge_devmode_with_driver()`（`DM_IN_BUFFER|DM_OUT_BUFFER`）交回驱动合并私有数据，合并失败或缓冲区不足时回退原 buffer。SumatraPDF 链路同理，始终带 `simplex` / `duplexlong`
 
 **智能 PDF 缓存**（`print.js`）：
 
 - `deepEqual()` 深比较整个 `LayoutRenderRequest`，`canUseCachedPdf()` 判断复用——统一三个打印渠道 + 保存 PDF
 - `savePdf` 先生成到临时目录 → `updatePdfCache()` → `copy_file` 到用户路径；布局不变时直接复制缓存。v2.6.12 起保存前先弹窗选页码范围（全部 / 当前页 / 指定范围，单页不弹），范围经 `buildLayoutRequest(files, settings, pageRange)` 第三参切片 `pages`——属内容参数，缓存按范围自然失效
-- 缓存比较排除纯打印机参数（printerName/copies/duplex/collate），避免切打印机误判缓存失效
+- 缓存比较排除纯打印机参数（printerName/copies/duplex/collate），避免切打印机误判缓存失效；**例外**：「双面 / 逐份」在**确实需要插页时**会改变 `pages`（见下条），此时缓存自然失效并重生成；无需插页的场景（如单份且本身偶数页）`pages` 不变，缓存命中且结果正确
+- **双面 + 逐份隔离**（issue #62）：`duplex && collate` 时 `padDuplexSeparators()` 按源文件分组（`_pdfPath|_batchId` / `_filePath`），在页边界插入空白页把上一份补齐到偶数页，末尾也补齐（与份数无关，避免改份数触发 PDF 重生成），保证每份从纸张正面开始。空白页是 `PageSpec.blank`，两条 Rust 生成管道都要真实输出该页（**不能走「空页跳过」**）且不画裁切线 / 页脚 / 边框 / 水印；`pageNum` 的「共 N 页」按物理页计（含空白页），空白页自身不绘制页码。仅 `buildLayoutRequest(..., { forPrint:true })` 的 PDFium / SumatraPDF / HTML 兜底生效；预览、「保存为PDF」与「PDF阅读器」模式（双面由外部阅读器控制）不插页；多拼模式下同页内混排无法隔离
+- `collate` 经 `pdfium_vector_print` / `pdfium_print_pdf` 下发到 `build_dev_mode()`，多份时设 `DM_COLLATE + DMCOLLATE_TRUE`；关闭时保留驱动默认，**勿**强行设 `DMCOLLATE_FALSE`。**仅 PDFium 链路生效**：SumatraPDF 的 `-print-settings` 没有 collate 选项，备用模式下关闭「逐份打印」仍是整份重复打印；空白分隔页在该链路照常插入，故双面隔离不受影响
 
 ### 旋转与适配语义（全链路约定，issue #29）
 
@@ -127,11 +131,13 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **单票独立调整**：`fileObj.{slotScale, slotOffsetX, slotOffsetY}`，CSS transform 预览 + Rust `SlotSpec` 参数输出。九宫格快速对齐、数字框/滑块滚轮微调、选中后滚轮缩放单票（5%/步）、拖拽约束按实际显示尺寸动态计算、放大上限 5x、编辑态溢出可见（`.selected/.dragging` 时 `overflow:visible`）。持久化：`perFileAdjustments` Map 按文件名匹配，可选开关。
 
+**预览多选与批量调整**（issue #64）：`S.selectedSlot` 是主选中（工具条 / 调整面板指向它），`S.extraSlots` 保存**同页**其余选中槽位；Ctrl+点击切换选中，预览区任意空白处（**含纸张外灰底**，选框挂在 `previewWrap` 内并补滚动偏移）左键拖框按矩形相交多选（移动 <4px 仍按原「点空白取消选中」处理，滚动条 / 工具条 / 空状态上不启动框选）。悬停在任一选中票面滚轮 → 对全部选中文件同步 ±5%（各自 20%–500% 钳制，同一文件的多份副本只算一次）；工具条的重置 / 居中 / 份数 / 旋转 / 删除均作用于全部选中（「应用到全部」仍作用于全部发票）。⚠️ 多选只限当前页：翻页、点列表项、份数 / 排序 / 删除等列表变化、`updatePreview` 发现每页槽数变少或当前页被钳制时，统一经 `setSelectedSlot()` / `setSlotSelection()` 清空或裁剪 `extraSlots`；业务代码禁止直接写 `S.selectedSlot = x`，否则会留下跨页脏索引。
+
 **选中票面浮动工具条**（v2.6.1，v2.6.8 钳制 + 删除，v2.6.9 按格子归位）：`app.js syncSlotToolbar()` 把 `#slotToolbar` 锚在选中槽位上方 36px 居中（CSS `translateX(-50%)`），随 `previewWrap` 滚动与窗口 resize 重算。⚠️ 六条硬约定：①上方那块位置**一旦与别的格子相交就贴回本格子内侧顶部**（下排格子、报销单第 2 段起、3×3 中下排都命中）——否则工具条骑在裁切线上压住邻格票面，就是 issue #43① 的「跑到框外」；②**水平必须左右钳制**（内侧放置先钳在本格子框内，再统一钳在预览区可视宽度内各留 8px）——否则右列槽位的右半截会跑出预览框；③**先 `classList.remove('hidden')` 再读 `offsetWidth`**，`display:none` 时宽度为 0 会让钳制失效；且**旋转按钮文案要在测量之前刷新**（`旋转` → `90°` 宽约 +12px，否则钳制用过期宽度）。④**「是否收成纯图标（.compact）」必须用「非 compact」的固有宽度判定**：直接读 `offsetWidth` 拿到的是上一档宽度，会在两档之间来回翻转（3×3 中间列卡在 395px、每边压邻格 66px）。⑤**容器 `pointer-events:none`、只有 `.btn` 是 `auto`**：工具条浮在票面上时，空隙不拦鼠标，点票面不会误触按钮；⑥因为容器不接收事件，`previewWrap` 的「点空白取消选中」**不能再靠 `closest('#slotToolbar')`**，要用 `hitSlotToolbar(e)` 按矩形兜底，否则点按钮内边距偏出 2px 就把选中和工具条一起清掉。工具条宽于格子时自动加 `.compact`（只留图标）。按钮：重置 / 居中 / 应用到全部 / **份数**（`#slotCopiesBtn`，图标位显示当前份数 ×N） / 旋转 / **✕ 删除**（`deleteSlotInvoice()`，删完清空选中）。份数按钮是单票份数的**唯一**入口，见下条。
 
 **选中态跟随列表变化**（v2.6.16-beta.10）：浮动工具条指向的「选中槽位」只是一个页内索引，而 `S.files` 的**删除 / 勾选 / 排序 / 列表拖拽**都会让同一槽位换成别的票。凡改变 active 序列的操作统一走 `reflowAfterListChange(keep)`：动手前 `captureSlotSelection()` 记下「文件对象 + 第几份」，改完按对象重定位；选中票已不在排版里就 `selectedSlot = -1`（工具条随之隐藏）。⚠️ 无票时 `updatePreview()` 会提前 return、不会触发 `updateAdjPanel()`，所以 `reflowAfterListChange` 里要额外调一次 `updateAdjPanel()`，否则删光最后一张后工具条仍浮在空预览上。**禁止**只写 `renderFileList(); updatePreview();` 收尾。
 
-**预览滚轮交互**（`previewWrap` wheel 三分支，按优先级）：选中槽位+悬停 → 缩放单票；Ctrl+滚轮 → 缩放整体视图；普通滚轮 → 滚动内容，触顶/触底翻页。`_wheelFlipTs` 150ms 节流。
+**预览滚轮交互**（`previewWrap` wheel 三分支，按优先级）：悬停在任一选中槽位 → 缩放选中票（多选时全部同步）；Ctrl+滚轮 → 缩放整体视图；普通滚轮 → 滚动内容，触顶/触底翻页。`_wheelFlipTs` 150ms 节流。
 
 **单票份数设置**（issue #59 / #60）：只从浮动工具条的「份数」按钮进入（`toggleSlotCopyMenu()` → `openSlotCopyMenu()`，×1 / ×2 / ×3 / 自定义…）。份数变动会重排展开序列，改前 `captureSlotSelection()` 记「文件对象 + 第几份」，改后按它重定位选中，**不能沿用原槽位编号**（会操作到别的票）。⚠️ **不要恢复「双击票面设份数」**：第一次点击就 `updatePreview()` 重建预览 DOM，第二次点击的 `click/dblclick` 目标已 detach，实测 `e.detail` 恒为 1、原生 `dblclick` 不派发，只能靠「500ms / 12px」自判，慢速双击（>500ms）必失效；而且工具条宽于格子时按上方硬约定①贴回本格内侧顶部，实际压住票面上部约 33px，双击靠上位置会直接落到工具条按钮上。issue #60 用户明确要求只保留工具条入口，代码里 `_lastSlotDown` / `_slotCopyMenuClickGuard` 已随之删除，勿再引入。预览空白处双击仍是「重置视图缩放」（`previewWrap` 的 dblclick），槽位内双击不做任何事。
 
@@ -168,7 +174,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 
 **打印状态追踪**：四种模式成功后 `markFilesAsPrinted()` → ✓ 标识；`_printedMap` 持久化 localStorage；`clearAll()/executeRename()/resetSettings()` 迁移 key。
 
-**文件列表记忆**（可选 `S.feat.fileListMemory`）：启动 `restoreFiles()` 批量恢复路径，`check_path_exists` 校验；`_isRestoringFiles` 阻止恢复期触发 OCR。
+**文件列表记忆**（可选 `S.feat.fileListMemory`）：启动 `restoreFiles()` 批量恢复路径，`check_path_exists` 校验；`_isRestoringFiles` 阻止恢复期触发 OCR。启动期三层保存锁：`_restoringSettings`（loadSettings 后 1s 内禁止回写，防空 DOM 快照）、`_restoringFileList`（restoreFiles 全程禁止落盘，防残缺 `S.files` 覆盖 `filePaths`）、`_restoreSavePending`（被拦截的保存待恢复完成后补一次）；`slotAdj` / `notes` / `printed` 另以内存 Map 打底。
 
 **重复发票识别**：`getDupKey()` 按发票号（`no:`）或 销售方+金额+日期（`sum:` 疑似）生成 key 标记 `_dup`。**安全边界**：自动删除只信任 `no:` key，`sum:` 一律跳过（同日同销售方同金额的真发票会被误判，仅标记交人工核对）；「重复」筛选会覆盖原有勾选（toast 明示）。
 
@@ -194,7 +200,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 **项目名称 / 发票备注提取**（v2.6.13，best-effort）：**两路互补**——项目名称**坐标优先**、备注**文字优先**，缺失再互相补空（原因：项目名称有严格列边界，坐标能剔除「规格型号」列 / 合并换行续行；备注是大区域无列边界，文字正则更稳）。
 - **项目名称 · 坐标路**（`_extractItemNameRemarkByCoords()`）：需同时找到「项目名称」表头与右侧列边界（规格型号/单位/数量/单价表头左缘），否则交文字路。取左缘落在品名列内的词（`分类列` 右缘越界的词裁掉尾部型号串，如 `…便携式气KP826` → `…便携式气`）；按行高 ×0.6 分行；**数电票明细以 `*` 开头，不以 `*` 开头的行是上一行品名的换行续行，直接并回上一条**；行文本命中共 `合计`/表头等结构性词（`_isStructuralItemRow()`，含被拆成「合」「计」两词的合计标签）直接丢弃。
 - **项目名称 · 文字路**（`_extractByText` 内）：兜底用——`*类别*品名` 星号模式全局收集（星号段后裁到下一个表头关键词），再退到「项目名称」标签后换行内容。
-- **备注 · 文字路**：取「备注」标签之后、截到页脚（开票人/收款人/复核人）之前，`_cleanRemark()` 清洗；**坐标路**：取左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上区域。`_getRemarkTop()` 按完整合计行底边确定上界（包含标签基线下方的大写/数字金额），与公司名备注区排除逻辑共用；不能仅按标签底边或固定页面高度截取；合计行只有标签一个词时兜底为标签底边（不能返回 -1）。`_findRemarkLabel()` 的竖排「备/注」合成容差为 4.5 行——不同模板间距从 1.9 行到 3.4 行不等，卡得太紧会整段备注取不到。
+- **备注 · 文字路**：取「备注」标签之后、截到页脚（开票人/收款人/复核人）之前，`_cleanRemark()` 清洗；**坐标路**：取左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上区域。`_getRemarkTop()` 按完整合计行底边确定上界（包含标签基线下方的大写/数字金额），与公司名备注区排除逻辑共用；不能仅按标签底边或固定页面高度截取；合计行只有标签一个词时兜底为标签底边（不能返回 -1）。`_findRemarkLabel()` 的竖排「备/注」合成容差为 4.5 行——不同模板间距从 1.9 行到 3.4 行不等，卡得太紧会整段备注取不到。**无锚点模板**（整页没有 `价税合计/金额合计/大写/小写` 时）`_getRemarkTop(..., true)` 会从标签顶向上逐行收标签上方的正文——遇 `¥`/合计/金额/税率/金额格式行即停，最多 4 行，且只收含 `：`/`；` 的「标签:值」式行（这类模板把「备注」标签画在备注框下部、正文整体在标签上方）；该扩展仅在备注提取开启，销售方名称兜底排除备注区时保持旧上界，避免误杀名称。**页脚落款行**统一走 `_isFooterLineText()` 整行判定：整词（`开票人/收款人/复核人`）优先，拆字 + 取值交错时按「行首 + 字间容忍 + 人后紧跟冒号」兜底（`开…票…张三…人：` 也命中，但「开票金额合计人民币」不会被误判）；文字路截断、坐标路下界、无标签兜底三处共用。
 - **多条项目名称用「、」去重合并**（`_joinItems()`，总长上限 `ITEM_NAME_MAX=120`，按整条边界截断）；**备注多行合并为一行**（空格分隔，上限 200 字）。`_cleanItemName()` 把数电票的 `*类别*品名` 还原成 **`【类别】品名`**（分类保留、不与品名连成一片），单条上限 80 字。
 - **结构化路径（OFD / XML 数电票）**（`invoice-engine`）：XML 直接取 `IssuItemInformation/ItemName`（多条合并）+ `<Remark>`（多个标签合并）。**XML 没有备注就留空**——`BuyerBankName/BuyerBankAccNum/SellerBankName/SellerBankAccNum` 是独立银行字段，**不属于备注，禁止拼接成备注**（曾误用其「还原」，已撤销：同票 XML 里 `Remark/备注/Note` 出现 0 次，而 OFD 的 `<Note>` 才有该内容，两者本就不一致）。OFD **两级**：①首选 `CustomTag.xml` 语义标签（`<Item>` / `<Note>` 直接指向文字对象 ID，税局标准 OFD 均带，最精准；该文件缺失时再读 `CustomTags.xml` 兜底，后者多数只是索引、解析为空即无副作用）；**`<Item>` 必须按组解析**（`parse_custom_tag_item_groups()`）——生成器会把长品名拆成多个文字对象（如「*生产生活服务*技术服务」+「费」），同组各段按序拼接成一条明细，逐段当独立明细会把 3 条拆成 5 条；②无 CustomTag 时才退到坐标推断——`extract_ofd_item_name()` 按「项目名称」列边界取（**不做全局星号扫描**）：用「项目名称」表头 + 同排右侧最近表头的左缘（再往里收 `OFD_COL_MARGIN=2mm`，避免收进邻列数值）定出品名列，只取列内、表头下方的文字对象，`*` 开头为新条目、否则为换行续行并回上一条；下界取「合计/价税合计/备注」锚点。坐标统一走 `ofd_page_pos()` = Boundary 原点 + CTM 作用于 TextCode 的 X/Y（无 CTM 时即 Boundary + X/Y），**模板层与数电票数据层（Boundary 覆盖整页、X/Y 为页面绝对坐标）因此可跨层比较**。备注坐标路 `extract_ofd_remark()`：左下角「备注」标签（支持竖排拆字 备/注）右侧、页脚行之上的文字，上界由「价税合计/大写/小写」行推出（标签常在框内垂直居中），并剔除与落款标签同行的落款值；CustomTag 的 `<Note>` 里形如「复核人:…」的独立落款行同样剔除。两侧共用 Rust 清洗 `normalize_item_name()`（`*类别*品名` → `【类别】品名`）/ `join_item_names()`（「、」去重合并、上限 120）/ `normalize_remark()`，与 JS 侧口径一致；前端 OFD/XML 加载路径直接把 `info.itemName` / `info.remark` 写进 fileObj。
 - **版式不固定，取不到就留空、绝不猜测**，故两字段仅作参考；在发票弹窗、汇总表内可人工修正，并已加入批量重命名可选字段。**覆盖 图片 OCR / PDF 文字层 / OFD / XML 数电票**（车票、非税票分支不调用）。
@@ -295,7 +301,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 6. 占位（`_placeholder`）只占槽位：打印/统计/汇总/重命名/OCR 全部排除
 7. 自动去重只删 `no:` key，`sum:` 仅标记
 8. 类型/格式筛选切换后必须重算勾选集合（`selectFilteredOnly()` / `applyFilterSelection()`）
-9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）
+9. `deepEqual` 缓存比较排除纯打印机参数（printerName/copies/duplex/collate）；双面 + 逐份**需要插页时**会改 `pages`，此时缓存自然失效重生成，勿为「缓存稳定」把插页挪到 Rust 端
 10. 桌面/web 双分支：识别（ocr.js ↔ js/pdf-text.js）与预览布局（layout.js ↔ js/layout.js）逻辑保持一致，同步时机为 **桌面端 release 前**，日常修复不必即时同步
 11. 新增 http 请求一律走 `build_http_agent()`；裸建 `ureq::AgentBuilder` 会丢 TLS 后端（见「关键踩坑」）
 12. 自更新只换 exe（不跑安装器、不动 models）；下载必须过 URL 白名单 + digest/size 校验，替换失败必须回滚，退出用 `TerminateProcess`（见「应用内自更新」）
@@ -315,6 +321,7 @@ Rust generate_pdf_from_layout() — lopdf 直通管道 → 失败回退 printpdf
 - 分析任务绝对不可修改代码，必须先确认方案
 - **界面做减法**：删掉多余的标语、说明文字和次要标签。如果删完界面就看不懂，说明布局本身有问题，直接重新设计。
 - **三方受益**：每次修改都要兼顾用户体验、开发体验和 AI Agent 的使用体验，三者都要变好，且不得破坏现有功能。
+- **样本归档**：用户提供的所有有价值样本（真实发票 / OFD / XML / 异常截图等）一律复制到项目根目录 `sample/`（已 gitignore，不入库），作为本地回归复测基准
 
 ## Release 检查清单
 
