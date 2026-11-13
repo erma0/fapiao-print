@@ -39,6 +39,7 @@ screenshot_*.png
 dist/
 .claude/
 .trae/
+.trae-html-share-packages/
 portable-git.7z.exe
 
 # 测试样本（本地保留，不入库）
