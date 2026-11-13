@@ -379,6 +379,64 @@ async function run() {
   equal(multi.marqueePrimary, 0, '拖框后首张为主选中');
   equal(multi.grayOutsidePaper, true, '灰底起框用例起点在纸面外');
   equal(multi.grayMarquee, [0, 1], '纸张外灰底起框也能选中两张票');
+
+  // issue #64 复核：合成事件会绕过命中测试，这里用真实鼠标事件从纸张外灰底起框
+  await evaluate(() => {
+    var svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350"><rect width="250" height="350" fill="red"/></svg>');
+    S.feat.reimburse = false; S.feat.pasteMode = false; S.feat.photoMode = false;
+    S.layout = { cols: 1, rows: 2 };
+    S.files = ['A', 'B'].map(function(n) {
+      return createFileObj({ name: n + '.png', type: 'image', previewUrl: svg, ow: 250, oh: 350 });
+    });
+    S.currentPage = 0;
+    selectSlot(-1);
+    updatePreview();
+  });
+  const grayGeo = await evaluate(() => {
+    var w = document.getElementById('previewWrap').getBoundingClientRect();
+    var c = document.querySelector('.preview-container').getBoundingClientRect();
+    var sx = w.left + 4, sy = w.top + 4;
+    var target = document.elementFromPoint(sx, sy);
+    return { start: { x: sx, y: sy }, end: { x: c.right - 4, y: c.bottom - 4 },
+      outside: sx < c.left || sy < c.top, target: target ? target.id : target.tagName };
+  });
+  equal(grayGeo.outside, true, '真实鼠标用例起点在纸面外');
+  equal(grayGeo.target, 'previewWrap', '灰底落点命中预览容器而非票面');
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...grayGeo.start, button: 'left', buttons: 1, clickCount: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: (grayGeo.start.x + grayGeo.end.x) / 2, y: (grayGeo.start.y + grayGeo.end.y) / 2, button: 'left', buttons: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...grayGeo.end, button: 'left', buttons: 1 });
+  const marqueeBox = await evaluate(() => {
+    var el = document.querySelector('.slot-marquee');
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+  });
+  assert.ok(marqueeBox && marqueeBox.width > 100 && marqueeBox.height > 100, '拖框虚线框可见');
+  equal({ left: marqueeBox.left, top: marqueeBox.top },
+    { left: Math.round(grayGeo.start.x), top: Math.round(grayGeo.start.y) }, '虚线框与鼠标起点对齐');
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...grayGeo.end, button: 'left', buttons: 0, clickCount: 1 });
+  equal(await evaluate(() => getSelectedSlotIndices()), [0, 1], '真实鼠标灰底拖框选中两张票');
+
+  // 预览放大并滚动后起框：选框要补滚动偏移，仍贴住鼠标起点
+  await evaluate(() => { S.viewZoom = 200; updatePreview(); });
+  const scrollGeo = await evaluate(() => {
+    var w = document.getElementById('previewWrap');
+    w.scrollTop = 60; w.scrollLeft = 30;
+    var r = w.getBoundingClientRect();
+    return { start: { x: r.left + 4, y: r.top + 4 }, end: { x: r.left + 260, y: r.top + 260 },
+      scrolled: w.scrollTop > 0 || w.scrollLeft > 0 };
+  });
+  equal(scrollGeo.scrolled, true, '放大后预览可滚动');
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...scrollGeo.start, button: 'left', buttons: 1, clickCount: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...scrollGeo.end, button: 'left', buttons: 1 });
+  const scrolledBox = await evaluate(() => {
+    var el = document.querySelector('.slot-marquee');
+    var r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), top: Math.round(r.top) };
+  });
+  equal(scrolledBox, { left: Math.round(scrollGeo.start.x), top: Math.round(scrollGeo.start.y) }, '滚动后虚线框仍贴住鼠标起点');
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...scrollGeo.end, button: 'left', buttons: 0, clickCount: 1 });
+  await evaluate(() => { S.viewZoom = 0; updatePreview(); });
   equal([multi.afterDelete, multi.afterDeleteSel], [0, -1], '工具条删除批量移除选中票并清空选中');
 
   // 删除后按文件对象重定位选中：槽位序号会整体前移，沿用旧索引会指到别的票
