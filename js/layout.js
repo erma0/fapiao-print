@@ -412,26 +412,21 @@ function hitSlotToolbar(e) {
   return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
 }
 
-// 预览空白处拖框多选：未移动 = 原「点空白取消选中」；移动后按矩形与槽位相交选中（仅当前页）
+// 预览空白处拖框多选：未移动 = 原「点空白取消选中」；移动后按矩形与槽位相交选中（仅当前页）。
+// 起框点不限于纸面：纸张外的灰底同样算空白（用户直觉上的「预览空白处」），只有滚动条除外。
 function startMarqueeSelection(e) {
-  var container = document.querySelector('.preview-container');
   var wrap = document.getElementById('previewWrap');
-  if (!container || !wrap) { selectSlot(-1); return; }
+  if (!wrap) { selectSlot(-1); return; }
   var wr = wrap.getBoundingClientRect();
   // 落在滚动条上不当作框选
   if (e.clientX - wr.left >= wrap.clientWidth || e.clientY - wr.top >= wrap.clientHeight) return;
-  var cr = container.getBoundingClientRect();
-  if (e.clientX < cr.left || e.clientX > cr.right || e.clientY < cr.top || e.clientY > cr.bottom) {
-    selectSlot(-1);
-    return;
-  }
   e.preventDefault();
   var box = document.createElement('div');
   box.className = 'slot-marquee';
-  container.appendChild(box);
+  wrap.appendChild(box);
   _slotMarquee = {
     startX: e.clientX, startY: e.clientY,
-    cRect: cr, box: box, container: container, moved: false
+    wrap: wrap, box: box, moved: false
   };
   document.addEventListener('mousemove', onMarqueeMove);
   document.addEventListener('mouseup', onMarqueeUp);
@@ -442,8 +437,10 @@ function onMarqueeMove(e) {
   if (!m) return;
   if (!m.moved && Math.hypot(e.clientX - m.startX, e.clientY - m.startY) < DRAG_THRESHOLD_PX) return;
   m.moved = true;
-  m.box.style.left = (Math.min(m.startX, e.clientX) - m.cRect.left) + 'px';
-  m.box.style.top = (Math.min(m.startY, e.clientY) - m.cRect.top) + 'px';
+  // 选框挂在滚动容器内，要补上滚动偏移才能跟住鼠标
+  var wr = m.wrap.getBoundingClientRect();
+  m.box.style.left = (Math.min(m.startX, e.clientX) - wr.left + m.wrap.scrollLeft) + 'px';
+  m.box.style.top = (Math.min(m.startY, e.clientY) - wr.top + m.wrap.scrollTop) + 'px';
   m.box.style.width = Math.abs(e.clientX - m.startX) + 'px';
   m.box.style.height = Math.abs(e.clientY - m.startY) + 'px';
 }
@@ -466,7 +463,7 @@ function onMarqueeUp(e) {
   var pageStart = S.currentPage * perPage;
   var hits = [];
   // 拖框期间预览可能被刷新替换，按当前 DOM 计算槽位矩形
-  var live = document.querySelector('.preview-container') || m.container;
+  var live = document.querySelector('.preview-container') || m.wrap;
   live.querySelectorAll('.invoice-slot').forEach(function(el) {
     var r = el.getBoundingClientRect();
     if (r.right < left || r.left > right || r.bottom < top || r.top > bottom) return;
