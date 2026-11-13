@@ -353,6 +353,18 @@ async function run() {
     out.marquee = getSelectedSlotIndices();
     out.marqueePrimary = S.selectedSlot;
 
+    // 纸张外灰底起框：用户直觉上的「预览空白处」，起点在纸面之外也要能框选
+    setup();
+    var wrapEl = document.getElementById('previewWrap');
+    var wr = wrapEl.getBoundingClientRect();
+    var pc = document.querySelector('.preview-container').getBoundingClientRect();
+    var gStart = { clientX: wr.left + 2, clientY: wr.top + 2 };
+    out.grayOutsidePaper = gStart.clientX < pc.left || gStart.clientY < pc.top;
+    wrapEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: gStart.clientX, clientY: gStart.clientY }));
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: pc.right - 2, clientY: pc.bottom - 2 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: pc.right - 2, clientY: pc.bottom - 2 }));
+    out.grayMarquee = getSelectedSlotIndices();
+
     deleteSlotInvoice();
     out.afterDelete = S.files.length;
     out.afterDeleteSel = S.selectedSlot;
@@ -365,6 +377,8 @@ async function run() {
   equal(multi.copies, [2, 2], '工具条份数作用于全部选中票');
   equal(multi.marquee, [0, 1], '拖框选中当前页两张票');
   equal(multi.marqueePrimary, 0, '拖框后首张为主选中');
+  equal(multi.grayOutsidePaper, true, '灰底起框用例起点在纸面外');
+  equal(multi.grayMarquee, [0, 1], '纸张外灰底起框也能选中两张票');
   equal([multi.afterDelete, multi.afterDeleteSel], [0, -1], '工具条删除批量移除选中票并清空选中');
 
   // 删除后按文件对象重定位选中：槽位序号会整体前移，沿用旧索引会指到别的票
