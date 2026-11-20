@@ -140,10 +140,22 @@ function parseChineseNumeral(str) {
 }
 
 /**
+ * 航空运输电子客票行程单：标题关键词，或「民航发展基金 + 电子客票号 + 填开单位」
+ * 三重结构标记。只认「民航发展基金」会误伤把该费用列为明细的航空服务增值税发票。
+ */
+function _isAirItinerary(text) {
+  var t = String(text || '').replace(/\s/g, '');
+  return /航空运输电子客票行程单/.test(t) ||
+    (/民航发展基金/.test(t) && /电子客票号/.test(t) && /填开单位/.test(t));
+}
+
+/**
  * Get a descriptive label for ticket type (shown as sellerName for tickets)
  */
 function getTicketTypeLabel(text) {
   var t = text.substring(0, 500);
+  // 航空行程单含「电子客票号码」，必须排在铁路判定之前，且用全文而非票头片段
+  if (_isAirItinerary(text)) return '机票行程单';
   if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(t)) return '铁路电子客票';
   if (/(?:火\s*车|硬\s*座|软\s*座|卧\s*铺|铺\s*位)/.test(t)) return '火车票';
   if (/(?:出\s*租|打\s*车|的\s*士)/.test(t)) return '出租车票';
@@ -1844,12 +1856,18 @@ function _extractByText(fullText, words) {
     var noCrossMatch = text.match(/(?:发\s*票\s*号\s*码|票\s*据\s*号\s*码|票\s*据\s*号\s*码)[:：\s]*\n\s*(\d{8,20})/);
     if (noCrossMatch) result.invoiceNo = noCrossMatch[1];
   }
+  // 航空行程单：文字层常把右上角「发票号码」与值拆到不同文本块，宽松兜底会取到
+  // 页面中部的电子客票号码。先按坐标取标签右侧的号码，避免客票号顶替发票号码。
+  if (!result.invoiceNo && words && words.length > 0 && _isAirItinerary(text)) {
+    result.invoiceNo = _findValueByLabelCoords(words, /发\s*票\s*号\s*码/, /\d{8,20}/);
+  }
   // Pattern 3: Loose cross-line (label and value separated by multiple lines)
   // e.g., "发票号码：\n...\n25322000000337005189"
   // 文字层按内容流顺序产出时（数电票 PDF），号码可能远在标签之后，中间还夹着
   // 购销双方的信用代码。扫描标签之后的所有 8~20 位纯数字串，取最长的一个，并剔除：
   //   - 信用代码尾段：数字串紧邻字母（如 ...34916R / ...48368W）
   //   - 小数/长数字片段：数字串紧邻 "." 或数字（被 {8,20} 截断，如 61.06333333）
+  //   - 电子客票号码 / 验证码等相邻数字：行程单的「发票号码」不是客票号
   if (!result.invoiceNo) {
     var _noLabelPos = text.search(/(?:发\s*票\s*号\s*码|票\s*据\s*号\s*码|票\s*据\s*号\s*码)/);
     if (_noLabelPos >= 0) {
@@ -1861,6 +1879,8 @@ function _extractByText(fullText, words) {
         if (/[A-Za-z]/.test(_noTail.charAt(_noRunM.index + _noRun.length))) continue;
         var _noPrevCh = _noTail.charAt(_noRunM.index - 1);
         if (_noPrevCh === '.' || /\d/.test(_noPrevCh)) continue;
+        var _noBefore = _noTail.substring(Math.max(0, _noRunM.index - 20), _noRunM.index).replace(/\s/g, '');
+        if (/(?:电子客票号码?|验证码|保险费|销售网点代码)[:：]?$/.test(_noBefore)) continue;
         if (_noRun.length > bestNo.length) bestNo = _noRun;
       }
       // Only accept if >= 10 digits (credit code prefixes are typically 8 digits,
@@ -1875,7 +1895,8 @@ function _extractByText(fullText, words) {
 
   // --- Invoice date ---
   // Pattern 1: Same line (standard format: YYYY年MM月DD日)
-  var dateMatch = text.match(/开\s*票\s*日\s*期[:\s]*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  // 行程单用「填开日期」，与「开票日期」等价（客票生效/航班日期不是开票日期）
+  var dateMatch = text.match(/(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)[:\s]*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
   if (dateMatch) {
     result.invoiceDate = dateMatch[1] + '-' +
       dateMatch[2].padStart(2, '0') + '-' +
@@ -1883,7 +1904,7 @@ function _extractByText(fullText, words) {
   }
   // Pattern 1b: Same line, YYYY-MM-DD format (non-tax invoices: "开票日期：2026-04-28")
   if (!result.invoiceDate) {
-    var dateDashMatch = text.match(/开\s*票\s*日\s*期[:\s]*(\d{4})-(\d{1,2})-(\d{1,2})/);
+    var dateDashMatch = text.match(/(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)[:\s]*(\d{4})-(\d{1,2})-(\d{1,2})/);
     if (dateDashMatch) {
       result.invoiceDate = dateDashMatch[1] + '-' +
         dateDashMatch[2].padStart(2, '0') + '-' +
@@ -1893,7 +1914,7 @@ function _extractByText(fullText, words) {
   // Pattern 2: Cross-line (label and value on separate lines)
   // e.g., "开票日期：\n2025年07月22日"
   if (!result.invoiceDate) {
-    var dateCrossMatch = text.match(/开\s*票\s*日\s*期[:：\s]*\n\s*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+    var dateCrossMatch = text.match(/(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)[:：\s]*\n\s*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
     if (dateCrossMatch) {
       result.invoiceDate = dateCrossMatch[1] + '-' +
         dateCrossMatch[2].padStart(2, '0') + '-' +
@@ -1902,7 +1923,7 @@ function _extractByText(fullText, words) {
   }
   // Pattern 3: Coordinate-based (for PDFs with label/value in separate blocks)
   if (!result.invoiceDate && words && words.length > 0) {
-    var dateStr = _findValueByLabelCoords(words, /开\s*票\s*日\s*期/, /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/);
+    var dateStr = _findValueByLabelCoords(words, /(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)/, /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/);
     if (dateStr) {
       var dateParts = dateStr.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
       if (dateParts) {
@@ -1921,7 +1942,8 @@ function _extractByText(fullText, words) {
   // （标签区/票头区，ny < 0.35），值本身仍是完整词，不属猜测。
   if (!result.invoiceDate && words && words.length > 0) {
     var hasDateLabel = words.some(function(w) {
-      return /开\s*票\s*日\s*期/.test(w.text) || /开\s*票\s*日\s*期/.test(w.normText);
+      return /(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)/.test(w.text) ||
+             /(?:开\s*票\s*日\s*期|填\s*开\s*日\s*期)/.test(w.normText);
     });
     if (hasDateLabel) {
       for (var di = 0; di < words.length; di++) {
@@ -2989,6 +3011,102 @@ function _findNearbyAmount(words, kw, opts) {
   return candidates[0];
 }
 
+/**
+ * 行程单金额：找标签同一行右侧、或表头下方同列的 CNY 金额。
+ * 文字层内容流顺序不等于视觉顺序，不能用「标签后出现的第一个金额」猜。
+ */
+function _cnyAmountNearLabel(words, labelRe) {
+  if (!words || !words.length) return 0;
+  var labels = words.filter(function(w) { return labelRe.test(w.normText); });
+  var best = null;
+  for (var li = 0; li < labels.length; li++) {
+    var label = labels[li];
+    for (var wi = 0; wi < words.length; wi++) {
+      var w = words[wi];
+      if (w === label) continue;
+      var m = w.normText.replace(/[,，]/g, '').match(/^(?:CNY|¥)?\s*(\d+\.\d{2})$/i);
+      if (!m) continue;
+      var dx = w.cx - label.cx;
+      var dy = w.cy - label.cy;
+      // 同行右侧，或列名下一行的同列金额
+      var sameRow = Math.abs(dy) <= label.h && dx > -20 && dx < 400;
+      var nextRow = dy > 0 && dy <= Math.max(120, label.h * 4) && dx > -label.w && dx < label.w + 80;
+      if (!sameRow && !nextRow) continue;
+      var score = Math.abs(dy) * 2 + Math.abs(dx) * 0.5;
+      if (!best || score < best.score) best = { value: parseFloat(m[1]), score: score };
+    }
+  }
+  return best ? best.value : 0;
+}
+
+/**
+ * 行程单票价行兜底：按坐标收集带 CNY 前缀的金额行。
+ * 标准列序为 票价/燃油附加费/增值税税额/民航发展基金/其他税费/合计，
+ * 合计取该行最后一个金额，税额取第 3 个；再用「合计≈其余项之和」校验。
+ */
+function _airAmountsFromCnyRow(words) {
+  var amounts = [];
+  if (!words || !words.length) return { total: 0, tax: 0 };
+  // 合并词「CNY670.00」
+  words.forEach(function(w) {
+    var m = w.normText.replace(/[,，]/g, '').match(/^CNY\s*(\d+\.\d{2})$/i);
+    if (m) amounts.push({ value: parseFloat(m[1]), x: w.cx, y: w.cy, h: w.h });
+  });
+  // 独立词「CNY」+ 同行右侧金额
+  words.forEach(function(w) {
+    if (!/^CNY$/i.test(w.normText)) return;
+    var best = null;
+    for (var i = 0; i < words.length; i++) {
+      var a = words[i];
+      if (a === w) continue;
+      var m = a.normText.replace(/[,，]/g, '').match(/^(\d+\.\d{2})$/);
+      if (!m) continue;
+      var dx = a.cx - w.cx;
+      if (dx < -10 || dx > 150 || Math.abs(a.cy - w.cy) > w.h) continue;
+      if (!best || dx < best.dx) best = { value: parseFloat(m[1]), x: a.cx, y: a.cy, h: a.h, dx: dx };
+    }
+    if (best) amounts.push({ value: best.value, x: best.x, y: best.y, h: best.h });
+  });
+  if (amounts.length < 3) return { total: 0, tax: 0 };
+  // 按行聚类，取金额数量最多的一行
+  var bestRow = null;
+  for (var gi = 0; gi < amounts.length; gi++) {
+    var base = amounts[gi];
+    var row = amounts.filter(function(a) { return Math.abs(a.y - base.y) <= Math.max(base.h, a.h); });
+    if (!bestRow || row.length > bestRow.length) bestRow = row;
+  }
+  if (!bestRow || bestRow.length < 3) return { total: 0, tax: 0 };
+  bestRow.sort(function(a, b) { return a.x - b.x; });
+  var total = bestRow[bestRow.length - 1].value;
+  var tax = bestRow.length >= 4 ? bestRow[2].value : 0;
+  // 合计应≈其余项之和；不符时找「等于其余之和」的那一项
+  var restSum = bestRow.slice(0, -1).reduce(function(s, a) { return s + a.value; }, 0);
+  if (Math.abs(Math.round((restSum - total) * 100) / 100) > 0.02) {
+    for (var vi = 0; vi < bestRow.length; vi++) {
+      var others = bestRow.reduce(function(s, a, idx) { return idx === vi ? s : s + a.value; }, 0);
+      if (Math.abs(Math.round((others - bestRow[vi].value) * 100) / 100) <= 0.02) {
+        total = bestRow[vi].value;
+        break;
+      }
+    }
+  }
+  if (!(tax > 0 && tax < total)) tax = 0;
+  return { total: total, tax: tax };
+}
+
+/** 航空行程单金额：标签定位优先，票价行兜底 */
+function _parseAirItineraryAmounts(words) {
+  var total = _cnyAmountNearLabel(words, /^合\s*计$/) || 0;
+  var tax = _cnyAmountNearLabel(words, /^增\s*值\s*税\s*税\s*额$/) || 0;
+  if (!total || !tax) {
+    var row = _airAmountsFromCnyRow(words);
+    if (!total) total = row.total;
+    if (!tax) tax = row.tax;
+  }
+  if (!(tax > 0 && tax < total)) tax = 0;
+  return { total: total, tax: tax };
+}
+
 function _countTicketSignalGroups(text) {
   var groups = [
     '车次', '票价', '座位', '席别', '检票', '进站', '出站',
@@ -3009,6 +3127,9 @@ function _countTicketSignalGroups(text) {
 function _detectInvoiceType(words, imgW, imgH) {
   // Build full text from all words (not just top 60%) for more reliable detection
   var allText = words.map(function(w) { return w.normText; }).join('');
+  if (_isAirItinerary(allText)) {
+    return 'ticket';
+  }
   if (/(?:铁\s*路\s*电\s*子\s*客\s*票|电\s*子\s*客\s*票\s*号)/.test(allText)) {
     return 'ticket';
   }
@@ -3801,16 +3922,31 @@ function extractByCoordinates(ocrResult) {
   if (isTicket) {
     // Tickets don't have a traditional seller — override with ticket type label
     sellerName = getTicketTypeLabel(fullText);
+    var normFullText = _normTextForExtract(fullText);
+    var isAir = _isAirItinerary(normFullText);
+    var airTax = 0;
+
+    // 航空运输电子客票行程单：合计=含税、增值税税额=税额、不含税=合计-税额
+    if (isAir) {
+      var airAmts = _parseAirItineraryAmounts(words);
+      if (airAmts.total > 0) {
+        amountTax = airAmts.total;
+        airTax = airAmts.tax;
+        amountNoTax = Math.round((amountTax - airTax) * 100) / 100;
+        console.log('[行程单提取] 合计:', amountTax, '税额:', airTax, '不含税:', amountNoTax);
+      }
+    }
 
     // Method 0: Text-based ticket price extraction (most reliable for PDF text layer)
     // Pattern: "票价:94.00" or "票价：¥94.00" — label and value may be on same line
-    var normFullText = _normTextForExtract(fullText);
-    var ticketPriceTextMatch = normFullText.match(/票\s*价[：:]*\s*¥?\s*(\d+\.\d{2})/);
-    if (ticketPriceTextMatch) {
-      var tpv = parseFloat(ticketPriceTextMatch[1]);
-      if (tpv >= 1 && tpv <= 50000) {
-        amountTax = tpv;
-        console.log('[车票提取] 文本Pattern匹配票价:', tpv);
+    if (!amountTax) {
+      var ticketPriceTextMatch = normFullText.match(/票\s*价[：:]*\s*¥?\s*(\d+\.\d{2})/);
+      if (ticketPriceTextMatch) {
+        var tpv = parseFloat(ticketPriceTextMatch[1]);
+        if (tpv >= 1 && tpv <= 50000) {
+          amountTax = tpv;
+          console.log('[车票提取] 文本Pattern匹配票价:', tpv);
+        }
       }
     }
 
@@ -3898,7 +4034,7 @@ function extractByCoordinates(ocrResult) {
         }
       }
     }
-    if (amountTax > 0) amountNoTax = amountTax;
+    if (amountTax > 0 && !amountNoTax) amountNoTax = amountTax;
 
     console.log('[坐标提取] 车票金额:', amountTax);
     // Fix: For tickets, the sole credit code belongs to buyer (not seller).
@@ -3908,7 +4044,7 @@ function extractByCoordinates(ocrResult) {
       buyerCreditCode = sellerCreditCode;
       sellerCreditCode = '';
     }
-    return { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: 0,
+    return { amountTax: amountTax, amountNoTax: amountNoTax, taxAmount: airTax,
              sellerName: sellerName, sellerCreditCode: sellerCreditCode,
              invoiceNo: invoiceNo, invoiceDate: invoiceDate,
              buyerName: buyerName, buyerCreditCode: buyerCreditCode,
